@@ -138,15 +138,13 @@ export class Background {
     ctx.restore();
   }
 
-  // Crescent moon — single filled path (two arcs). Cannot use destination-out
-  // because the game canvas is created with alpha:false, which leaves black holes.
+  // Crescent moon — even-odd fill of two circles (works on alpha:false canvas;
+  // unlike destination-out, this never punches holes in the sky).
   private drawMoon(ctx: CanvasRenderingContext2D, sx: number, sy: number) {
     const r = 34;
-    const biteX = 15;
+    const biteX = 14;
     const biteY = -2;
-    const biteR = r * 0.9;
-    const limbStart = Math.PI * 0.56;
-    const limbEnd = Math.PI * 1.44;
+    const biteR = r * 0.88;
 
     ctx.save();
     const halo = ctx.createRadialGradient(sx, sy, r * 0.35, sx, sy, r * 2.8);
@@ -159,16 +157,15 @@ export class Background {
     ctx.fill();
     ctx.restore();
 
-    const crescentPath = () => {
+    const moonPath = () => {
       ctx.beginPath();
-      ctx.arc(sx, sy, r, limbStart, limbEnd);
-      ctx.arc(sx + biteX, sy + biteY, biteR, limbEnd - 0.04, limbStart + 0.04, true);
-      ctx.closePath();
+      ctx.arc(sx, sy, r, 0, TAU);
+      ctx.arc(sx + biteX, sy + biteY, biteR, 0, TAU);
     };
 
     ctx.fillStyle = hexA(theme.sun, 0.96);
-    crescentPath();
-    ctx.fill();
+    moonPath();
+    ctx.fill("evenodd");
 
     ctx.save();
     const sheen = ctx.createRadialGradient(
@@ -183,15 +180,15 @@ export class Background {
     sheen.addColorStop(0.55, hexA(theme.sun, 0.12));
     sheen.addColorStop(1, hexA(theme.sun, 0));
     ctx.fillStyle = sheen;
-    crescentPath();
-    ctx.fill();
+    moonPath();
+    ctx.fill("evenodd");
     ctx.restore();
 
     ctx.save();
     ctx.strokeStyle = hexA("#ffffff", 0.32);
     ctx.lineWidth = 1.4;
     ctx.beginPath();
-    ctx.arc(sx - 1, sy, r - 1.5, limbStart + 0.06, limbEnd - 0.06);
+    ctx.arc(sx - 1, sy, r - 1.5, Math.PI * 0.52, Math.PI * 1.48);
     ctx.stroke();
     ctx.restore();
   }
