@@ -145,13 +145,13 @@ function tick(n, dtMs = 16.6) {
 // 1) Menu frames.
 tick(20);
 assert(game.state === "menu", `expected menu state, got ${game.state}`);
-// 2) Start the run + hold to swing (pointerdown).
+// 2) Start the run, cruise through warmup, then hold to swing.
 dispatch("pointerdown", { clientX: 400, clientY: 300, pointerId: 1 });
-tick(8);
+tick(65); // ~1s run warmup before tether/scoring engage
 assert(game.state === "playing", `run did not start (state=${game.state})`);
 const startX = game.player.x;
 let sawSwing = false;
-for (let i = 0; i < 112; i++) {
+for (let i = 0; i < 90; i++) {
   tick(1);
   if (game.player.state === "swing") sawSwing = true;
 }

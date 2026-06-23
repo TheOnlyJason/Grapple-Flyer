@@ -1,6 +1,6 @@
 // Minimal local persistence (the seed of a future progression/save manager).
 
-import type { CharacterId } from "../characters/registry";
+import { isCharacterId, type CharacterId } from "../characters/registry";
 
 interface SaveData {
   bestScore: number;
@@ -35,7 +35,7 @@ export class Storage {
         this.data = {
           ...DEFAULT,
           ...parsed,
-          character: parsed.character === "monkey" ? "monkey" : "plane",
+          character: isCharacterId(parsed.character) ? parsed.character : "plane",
         };
       }
     } catch {

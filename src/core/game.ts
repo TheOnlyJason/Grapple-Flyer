@@ -52,6 +52,8 @@ export class Game {
   private wind = 0;
   private newBest = false;
   private hintTimer = 0;
+  /** Countdown while the player cruises before full gameplay engages. */
+  private runWarmup = 0;
 
   // True while a tap that began on the dash button is held (suppresses tether).
   private dashLatch = false;
@@ -113,6 +115,7 @@ export class Game {
       this.resetRunStats();
       this.state = "playing";
       this.timeInState = 0;
+      this.runWarmup = CONFIG.runWarmup;
       this.sound.resume();
       return;
     }
@@ -120,6 +123,7 @@ export class Game {
     this.seedAndReset();
     this.state = "playing";
     this.timeInState = 0;
+    this.runWarmup = CONFIG.runWarmup;
     this.sound.resume();
   }
 
@@ -334,6 +338,7 @@ export class Game {
 
   private tryDash() {
     if (this.state !== "playing") return;
+    if (this.runWarmup > 0) return;
     if (this.wind < CONFIG.wind.dashCost) return;
     if (this.player.startDash()) {
       this.wind = 0;
@@ -399,10 +404,21 @@ export class Game {
     }
 
     // --- Playing ---
-    this.hintTimer += dt;
+    const warmup = this.runWarmup > 0;
+    if (warmup) {
+      this.runWarmup = Math.max(0, this.runWarmup - dt);
+      if (this.runWarmup === 0) {
+        this.startX = this.player.x;
+        this.hintTimer = 0;
+      }
+    } else {
+      this.hintTimer += dt;
+    }
+
     this.world.ensure(this.camera.right);
 
-    const holdForTether = this.input.holding && !this.dashLatch;
+    const holdForTether =
+      !warmup && this.input.holding && !this.dashLatch;
     this.player.step(dt, holdForTether, this.world.anchors, this.time);
 
     const dashing = this.player.state === "dash";
@@ -419,32 +435,34 @@ export class Game {
         : undefined
     );
 
-    this.handlePlayerEvents();
-    this.handleSkim(dt);
-    this.handleCollectibles();
-    this.handleHazards();
+    if (!warmup) {
+      this.handlePlayerEvents();
+      this.handleSkim(dt);
+      this.handleCollectibles();
+      this.handleHazards();
 
-    // Cloud-sea death floor — skid to a stop before run over.
-    if (this.player.y >= this.world.seaLevel) {
-      this.startGroundCrash();
-      return;
+      // Cloud-sea death floor — skid to a stop before run over.
+      if (this.player.y >= this.world.seaLevel) {
+        this.startGroundCrash();
+        return;
+      }
+
+      // Scoring + objectives tied to distance.
+      this.distance = Math.max(
+        0,
+        (this.player.x - this.startX) * CONFIG.world.metersPerPixel
+      );
+      this.objectives.set("distance", this.distance);
+      this.objectives.set("skim", this.skimMeters);
+
+      this.wind = clamp(this.wind, 0, CONFIG.wind.max);
     }
-
-    // Scoring + objectives tied to distance.
-    this.distance = Math.max(
-      0,
-      (this.player.x - this.startX) * CONFIG.world.metersPerPixel
-    );
-    this.objectives.set("distance", this.distance);
-    this.objectives.set("skim", this.skimMeters);
-
-    this.wind = clamp(this.wind, 0, CONFIG.wind.max);
 
     this.camera.follow(this.player.x, this.player.y, this.player.speed, dt);
     this.world.cull(this.camera.left);
 
     // Highlight the nearest grab candidate so the route reads clearly.
-    if (this.player.state === "glide") {
+    if (!warmup && this.player.state === "glide") {
       const target = this.player.findGrabTarget(this.world.anchors);
       if (target) target.highlight = 1;
     }
@@ -689,7 +707,8 @@ export class Game {
       newBest: this.newBest,
       perfectCount: this.perfectCount,
       hint: "Hold to swing  ·  release to slingshot",
-      hintAlpha: this.state === "playing" ? hintAlpha : 0,
+      hintAlpha:
+        this.state === "playing" && this.runWarmup <= 0 ? hintAlpha : 0,
       character: this.storage.data.character,
       characterName: characterName(this.storage.data.character),
     };

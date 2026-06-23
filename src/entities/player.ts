@@ -2,6 +2,7 @@ import { CONFIG } from "../core/config";
 import { theme, mixColor } from "../render/theme";
 import { getPlayerSprite, isPlayerSpriteReady, PLAYER_SPRITE } from "../render/playerAsset";
 import { drawMonkey, computeLatchArmAngle, monkeyShoulder, type LatchArm } from "../render/drawMonkey";
+import { drawNyanCat, NYAN_RAINBOW } from "../render/drawNyanCat";
 import type { CharacterId } from "../characters/registry";
 import { angleDelta, clamp, rad, TAU } from "../core/math";
 import { Anchor, hexA } from "./anchor";
@@ -394,8 +395,10 @@ export class Player {
   draw(ctx: CanvasRenderingContext2D, time: number, menuPreview = false) {
     if (this.characterId === "plane") {
       this.drawMotionTrail(ctx, time);
-    } else {
+    } else if (this.characterId === "monkey") {
       this.drawNimbusTrail(ctx, time);
+    } else if (this.characterId === "nyan") {
+      this.drawRainbowTrail(ctx, time);
     }
     if (this.state === "swing" && this.anchor) this.drawTether(ctx, time);
     this.drawCharacter(ctx, time, menuPreview);
@@ -515,6 +518,50 @@ export class Player {
     ctx.restore();
   }
 
+  // Classic Nyan Cat rainbow streamer trail.
+  private drawRainbowTrail(ctx: CanvasRenderingContext2D, time: number) {
+    if (this.trail.length < 2 || this.speed < 50) return;
+
+    const n = this.trail.length;
+    const pts = this.trail;
+    const bandH = CONFIG.player.radius * 0.22;
+    const speedT = clamp(this.speed / 520, 0.25, 1);
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    for (let i = 1; i < n; i++) {
+      const t = i / n;
+      if (t < 0.2) continue;
+
+      const p0 = pts[i - 1];
+      const p1 = pts[i];
+      const dx = p1.x - p0.x;
+      const dy = p1.y - p0.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len;
+      const ny = dx / len;
+      const alpha = (1 - t) * 0.88 * speedT;
+
+      for (let b = 0; b < NYAN_RAINBOW.length; b++) {
+        const offset = (b - (NYAN_RAINBOW.length - 1) / 2) * bandH;
+        const ox = nx * offset;
+        const oy = ny * offset;
+        const scroll = (time * 2.4 + b * 0.15) % 1;
+        ctx.strokeStyle = hexA(NYAN_RAINBOW[b], alpha * (0.85 + scroll * 0.15));
+        ctx.lineWidth = bandH * 0.82;
+        ctx.beginPath();
+        ctx.moveTo(p0.x + ox, p0.y + oy);
+        ctx.lineTo(p1.x + ox, p1.y + oy);
+        ctx.stroke();
+      }
+    }
+
+    ctx.restore();
+  }
+
   private drawTether(ctx: CanvasRenderingContext2D, time: number) {
     const a = this.anchor!;
     const perfect = this.inPerfectWindow;
@@ -590,7 +637,41 @@ export class Player {
       this.drawMonkeyCharacter(ctx, time, menuPreview);
       return;
     }
+    if (this.characterId === "nyan") {
+      this.drawNyanCatCharacter(ctx, time);
+      return;
+    }
     this.drawAirplane(ctx);
+  }
+
+  private drawNyanCatCharacter(ctx: CanvasRenderingContext2D, time: number) {
+    const isDash = this.state === "dash";
+    const isPerfect = this.inPerfectWindow;
+    const glowCol = isDash
+      ? theme.collectible
+      : isPerfect
+      ? theme.anchorPerfect
+      : "#ff99cc";
+
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.angle);
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const r = CONFIG.player.radius;
+    const glowR = r * (isDash ? 3.4 : 2.2);
+    const g = ctx.createRadialGradient(0, 0, 1, 0, 0, glowR);
+    g.addColorStop(0, hexA(glowCol, isDash ? 0.38 : 0.16));
+    g.addColorStop(1, hexA(glowCol, 0));
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(0, 0, glowR, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+
+    drawNyanCat(ctx, time);
+    ctx.restore();
   }
 
   private drawMonkeyCharacter(

@@ -1,4 +1,4 @@
-export type CharacterId = "plane" | "monkey";
+export type CharacterId = "plane" | "monkey" | "nyan";
 
 export interface CharacterDef {
   id: CharacterId;
@@ -8,7 +8,12 @@ export interface CharacterDef {
 export const CHARACTERS: CharacterDef[] = [
   { id: "plane", name: "Paper Plane" },
   { id: "monkey", name: "Monkey" },
+  { id: "nyan", name: "Nyan Cat" },
 ];
+
+export function isCharacterId(value: unknown): value is CharacterId {
+  return CHARACTERS.some((c) => c.id === value);
+}
 
 export function cycleCharacterId(current: CharacterId, dir: 1 | -1): CharacterId {
   const i = CHARACTERS.findIndex((c) => c.id === current);
