@@ -1,0 +1,112 @@
+// Unified input: pointer (tap / hold / release) + keyboard.
+// Logic works in CSS pixels relative to the canvas top-left.
+
+export class Input {
+  readonly pointer = { x: 0, y: 0 };
+
+  // Continuous "hold" (pointer down OR hold-key). Drives the tether.
+  holding = false;
+  // Edges, refreshed once per frame by beginFrame().
+  pressed = false;
+  released = false;
+  pointerJustDown = false;
+
+  // Keys pressed this frame (key codes). Refreshed by beginFrame().
+  tapped: Set<string> = new Set();
+
+  private pointerDown = false;
+  private holdKey = false;
+  private prevHold = false;
+  private pendingPointerDown = false;
+  private pendingTaps = new Set<string>();
+
+  constructor(private el: HTMLElement) {
+    this.attach();
+  }
+
+  private attach() {
+    const el = this.el;
+
+    el.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      this.pointerDown = true;
+      this.pendingPointerDown = true;
+      this.setPointer(e);
+      try {
+        el.setPointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+    });
+
+    const up = (e: PointerEvent) => {
+      this.pointerDown = false;
+      this.setPointer(e);
+    };
+    el.addEventListener("pointerup", up);
+    el.addEventListener("pointercancel", up);
+    el.addEventListener("pointermove", (e) => this.setPointer(e));
+
+    window.addEventListener("blur", () => {
+      this.pointerDown = false;
+      this.holdKey = false;
+    });
+
+    window.addEventListener(
+      "keydown",
+      (e) => {
+        if (e.repeat) return;
+        this.pendingTaps.add(e.code);
+        if (
+          e.code === "Space" ||
+          e.code === "ArrowUp" ||
+          e.code === "KeyW"
+        ) {
+          this.holdKey = true;
+          e.preventDefault();
+        }
+      },
+      { passive: false }
+    );
+
+    window.addEventListener("keyup", (e) => {
+      if (e.code === "Space" || e.code === "ArrowUp" || e.code === "KeyW") {
+        this.holdKey = false;
+      }
+    });
+
+    el.addEventListener("contextmenu", (e) => e.preventDefault());
+  }
+
+  private setPointer(e: PointerEvent) {
+    const rect = this.el.getBoundingClientRect();
+    this.pointer.x = e.clientX - rect.left;
+    this.pointer.y = e.clientY - rect.top;
+  }
+
+  beginFrame() {
+    this.holding = this.pointerDown || this.holdKey;
+    this.pressed = this.holding && !this.prevHold;
+    this.released = !this.holding && this.prevHold;
+    this.prevHold = this.holding;
+
+    this.pointerJustDown = this.pendingPointerDown;
+    this.pendingPointerDown = false;
+
+    this.tapped = this.pendingTaps;
+    this.pendingTaps = new Set();
+  }
+
+  // True on any fresh interaction this frame (used to unlock audio / start runs).
+  get anyInteraction(): boolean {
+    return this.pressed || this.pointerJustDown || this.tapped.size > 0;
+  }
+
+  get dashTapped(): boolean {
+    return (
+      this.tapped.has("ShiftLeft") ||
+      this.tapped.has("ShiftRight") ||
+      this.tapped.has("KeyD")
+    );
+  }
+}

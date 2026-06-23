@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80" fill="none" aria-label="Paper airplane">
+  <path fill="#2d94c8" d="M112 40 14 74 -18 40 14 6 112 40Z"/>
+  <path fill="#4ab4e8" d="M112 40 14 6 -18 40 14 74 112 40Z"/>
+  <path stroke="#267aa8" stroke-width="1.2" d="M112 40 14 6M112 40 14 74M112 40 -18 40"/>
+  <path stroke="#b8e8ff" stroke-width="1.8" stroke-linecap="round" d="M108 38 18 8"/>
+  <circle cx="108" cy="40" r="1.5" fill="#ffffff"/>
+</svg>
