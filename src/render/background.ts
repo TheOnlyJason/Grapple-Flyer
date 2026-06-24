@@ -14,6 +14,14 @@ function hash01(i: number): number {
   return h / 4294967296;
 }
 
+// Distinct scenery biomes the run travels through, in the spirit of Alto's
+// Odyssey. Each region swaps the mid-ground silhouette features (the sky and
+// dunes keep re-grading with the time of day on top). Regions cycle by world
+// distance and cross-fade at their seams.
+const REGION_KINDS = ["sanctuary", "forest", "peaks", "monuments"] as const;
+type RegionKind = (typeof REGION_KINDS)[number];
+const REGION_LEN = 3000; // world units per region band
+
 // Flat, layered, fog-faded sky in the spirit of Alto's Adventure. All colours
 // come from the live time-of-day `theme`, so the whole scene re-grades together
 // through dawn / day / golden hour / dusk / night.
@@ -22,46 +30,60 @@ export class Background {
     const { w, h } = cam;
     const horizon = h * 0.72 - cam.y * 0.04;
     const daylight = 1 - theme.night;
-    const celestial = this.getCelestialPos(cam, horizon, time);
+    const sky = this.celestialPositions(cam, horizon, time);
 
-    const g = ctx.createLinearGradient(0, 0, 0, h);
-    g.addColorStop(0, theme.skyTop);
-    g.addColorStop(0.45, theme.skyMid);
-    g.addColorStop(clamp(horizon / h, 0.4, 0.95), theme.skyHorizon);
-    g.addColorStop(1, mixColor(theme.skyHorizon, theme.skyGlow, 0.6));
-    ctx.fillStyle = g;
+    ctx.fillStyle = this.skyGradient(ctx, cam, horizon);
     ctx.fillRect(0, 0, w, h);
 
-    if (daylight > 0.08) {
-      this.drawSkyLightWash(ctx, cam, celestial, daylight);
+    if (daylight > 0.08 && sky.sun.alt > 0) {
+      this.drawSkyLightWash(ctx, cam, sky.sun, daylight * sky.sun.alt);
     }
 
-    if (theme.night > 0.05) this.drawStars(ctx, cam, horizon);
-    this.drawSunMoon(ctx, cam, celestial);
+    if (theme.night > 0.05) this.drawStars(ctx, cam, horizon, time);
+
+    // The moon rises in the east as the sun sets in the west — both share the
+    // sky through dusk and dawn. Moon under the sun so a faint daytime moon
+    // reads softly behind the brighter disc.
+    this.drawMoon(ctx, sky.moon);
+    this.drawSun(ctx, sky.sun, daylight);
   }
 
-  // Sun / moon arc across the sky over the day-night cycle.
-  private getCelestialPos(cam: Camera, horizon: number, time: number) {
+  // Independent sun + moon arcs across the day-night cycle. Each rises from one
+  // side, sails over, and sets at the other — so as the sun goes down the moon
+  // is already climbing. `alt` is height above the horizon (0 = on the horizon).
+  private celestialPositions(cam: Camera, horizon: number, time: number) {
     const { w, h } = cam;
-    const phase = (time / CYCLE_SECONDS) % 1;
-    const isMoon = theme.night > 0.6;
-    const travel = isMoon
-      ? clamp((phase - 0.48) / 0.48, 0, 1)
-      : clamp(phase / 0.58, 0, 1);
-    const sx = w * (0.1 + travel * 0.8) - cam.x * 0.02;
-    const sy =
-      horizon - 24 - Math.sin(travel * Math.PI) * h * 0.36 - cam.y * 0.03;
-    return { sx, sy, travel, isMoon, phase };
+    const phase = (((time / CYCLE_SECONDS) % 1) + 1) % 1;
+    const arc = h * 0.4;
+    const baseY = horizon - 16 - cam.y * 0.03;
+    const xL = w * 0.06 - cam.x * 0.02;
+    const xR = w * 0.94 - cam.x * 0.02;
+
+    const body = (rise: number, set: number) => {
+      let p = (phase - rise) / (set - rise);
+      if (p < 0 || p > 1) {
+        const pw = (phase + 1 - rise) / (set - rise);
+        if (pw >= 0 && pw <= 1) p = pw;
+      }
+      const above = p >= 0 && p <= 1;
+      const alt = above ? Math.sin(p * Math.PI) : 0;
+      const cp = clamp(p, 0, 1);
+      return { x: xL + (xR - xL) * cp, y: baseY - alt * arc, alt };
+    };
+
+    // Sun: dawn -> dusk. Moon: dusk -> the next dawn (rises as the sun sets).
+    return { sun: body(0.0, 0.6), moon: body(0.52, 1.12) };
   }
 
   private drawSkyLightWash(
     ctx: CanvasRenderingContext2D,
     cam: Camera,
-    celestial: { sx: number; sy: number; travel: number },
+    sun: { x: number; y: number },
     daylight: number
   ) {
     const { w, h } = cam;
-    const { sx, sy } = celestial;
+    const sx = sun.x;
+    const sy = sun.y;
     const reach = Math.max(w, h) * 0.92;
 
     ctx.save();
@@ -76,9 +98,14 @@ export class Background {
     ctx.restore();
   }
 
-  private drawStars(ctx: CanvasRenderingContext2D, cam: Camera, horizon: number) {
+  private drawStars(
+    ctx: CanvasRenderingContext2D,
+    cam: Camera,
+    horizon: number,
+    time: number
+  ) {
     const { w } = cam;
-    const cell = Math.max(42, w / 26);
+    const cell = Math.max(32, w / 36); // denser grid = more stars
     const offX = cam.x * 0.05;
     const offY = cam.y * 0.05;
     const startI = Math.floor((offX - w) / cell);
@@ -86,111 +113,290 @@ export class Background {
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
     for (let i = startI; i <= endI; i++) {
-      for (let j = -2; j < 13; j++) {
+      for (let j = -2; j < 15; j++) {
         const r = hash01(i * 131 + j * 977 + 17);
-        if (r < 0.6) continue;
+        if (r < 0.45) continue; // lower threshold = many more stars
         const sx = i * cell - offX + ((hash01(i * 7 + j) * cell) | 0);
         const sy = j * cell - offY + hash01(i + j * 53) * cell;
-        if (sy > horizon - 24) continue;
-        const tw = 0.4 + 0.6 * hash01(i * 3 + j * 11);
+        if (sy > horizon - 18) continue;
+        // Each star twinkles on its own phase.
+        const phase = hash01(i * 17 + j * 5) * TAU;
+        const tw = 0.55 + 0.45 * Math.sin(time * 2.2 + phase);
         const fade = clamp((horizon - sy) / horizon, 0, 1);
-        ctx.fillStyle = hexA("#e6ecff", (r - 0.6) * 2 * tw * fade * theme.night);
-        ctx.fillRect(sx, sy, 1.7, 1.7);
+        const a = (r - 0.45) * 1.7 * tw * fade * theme.night;
+        if (a <= 0.01) continue;
+        const bright = r > 0.9; // a few standout stars get size + glow
+        const size = bright ? 2.4 : 1 + r * 0.9;
+        ctx.fillStyle = hexA("#eef2ff", clamp(a, 0, 1));
+        ctx.fillRect(sx, sy, size, size);
+        if (bright) {
+          const g = ctx.createRadialGradient(sx + 1, sy + 1, 0, sx + 1, sy + 1, 6);
+          g.addColorStop(0, hexA("#dce6ff", clamp(a * 0.9, 0, 1)));
+          g.addColorStop(1, hexA("#dce6ff", 0));
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.arc(sx + 1, sy + 1, 6, 0, TAU);
+          ctx.fill();
+        }
       }
     }
     ctx.restore();
   }
 
-  private drawSunMoon(
+  private drawSun(
     ctx: CanvasRenderingContext2D,
-    _cam: Camera,
-    celestial: { sx: number; sy: number; isMoon: boolean }
+    sun: { x: number; y: number; alt: number },
+    daylight: number
   ) {
-    const { sx, sy, isMoon } = celestial;
-
-    if (isMoon) {
-      this.drawMoon(ctx, sx, sy);
-      return;
-    }
+    if (sun.alt <= 0 || daylight <= 0.02) return;
+    const { x: sx, y: sy } = sun;
+    // Dim as it nears the horizon (low altitude = setting / rising).
+    const vis = daylight * clamp(sun.alt * 1.5, 0, 1);
+    const core = 0.4 + vis * 0.6;
 
     ctx.save();
-    const daylight = 1 - theme.night;
-
     const halo = ctx.createRadialGradient(sx, sy, 20, sx, sy, 300);
-    halo.addColorStop(0, hexA(theme.sun, 0.28 * daylight));
-    halo.addColorStop(0.35, hexA(theme.skyGlow, 0.12 * daylight));
-    halo.addColorStop(0.72, hexA(theme.skyHorizon, 0.04 * daylight));
+    halo.addColorStop(0, hexA(theme.sun, 0.28 * vis));
+    halo.addColorStop(0.35, hexA(theme.skyGlow, 0.12 * vis));
+    halo.addColorStop(0.72, hexA(theme.skyHorizon, 0.04 * vis));
     halo.addColorStop(1, hexA(theme.skyTop, 0));
     ctx.fillStyle = halo;
     ctx.beginPath();
     ctx.arc(sx, sy, 300, 0, TAU);
     ctx.fill();
 
-    const core = ctx.createRadialGradient(sx, sy - 8, 1, sx, sy, 54);
-    core.addColorStop(0, hexA("#ffffff", 0.72));
-    core.addColorStop(0.4, hexA(theme.sun, 0.55));
-    core.addColorStop(0.78, hexA(theme.skyGlow, 0.18));
-    core.addColorStop(1, hexA(theme.skyGlow, 0));
-    ctx.fillStyle = core;
+    const disc = ctx.createRadialGradient(sx, sy - 8, 1, sx, sy, 54);
+    disc.addColorStop(0, hexA("#ffffff", 0.72 * core));
+    disc.addColorStop(0.4, hexA(theme.sun, 0.6 * core));
+    disc.addColorStop(0.78, hexA(theme.skyGlow, 0.18 * vis));
+    disc.addColorStop(1, hexA(theme.skyGlow, 0));
+    ctx.fillStyle = disc;
     ctx.beginPath();
     ctx.arc(sx, sy, 54, 0, TAU);
     ctx.fill();
     ctx.restore();
   }
 
-  // Crescent moon — even-odd fill of two circles (works on alpha:false canvas;
-  // unlike destination-out, this never punches holes in the sky).
-  private drawMoon(ctx: CanvasRenderingContext2D, sx: number, sy: number) {
-    const r = 34;
-    const biteX = 14;
-    const biteY = -2;
-    const biteR = r * 0.88;
+  private skyGradient(
+    ctx: CanvasRenderingContext2D,
+    cam: Camera,
+    horizon: number
+  ): CanvasGradient {
+    const { h } = cam;
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, theme.skyTop);
+    g.addColorStop(0.45, theme.skyMid);
+    g.addColorStop(clamp(horizon / h, 0.4, 0.95), theme.skyHorizon);
+    g.addColorStop(1, mixColor(theme.skyHorizon, theme.skyGlow, 0.6));
+    return g;
+  }
+
+  // Full moon — a pale cratered disc with limb darkening and a soft glow.
+  // Bold at night, a faint ghost in daylight; fades in as it clears the horizon.
+  private drawMoon(
+    ctx: CanvasRenderingContext2D,
+    moon: { x: number; y: number; alt: number }
+  ) {
+    if (moon.alt <= 0) return;
+    const { x: sx, y: sy } = moon;
+    const vis = clamp(moon.alt * 1.7, 0, 1) * (0.26 + 0.74 * theme.night);
+    if (vis < 0.02) return;
+    const r = 30;
 
     ctx.save();
-    const halo = ctx.createRadialGradient(sx, sy, r * 0.35, sx, sy, r * 2.8);
-    halo.addColorStop(0, hexA(theme.sun, 0.22));
-    halo.addColorStop(0.55, hexA(theme.skyGlow, 0.08));
+
+    // Soft moonglow halo.
+    const halo = ctx.createRadialGradient(sx, sy, r * 0.4, sx, sy, r * 3.2);
+    halo.addColorStop(0, hexA(theme.sun, 0.5 * vis));
+    halo.addColorStop(0.5, hexA(theme.skyGlow, 0.16 * vis));
     halo.addColorStop(1, hexA(theme.skyGlow, 0));
     ctx.fillStyle = halo;
     ctx.beginPath();
-    ctx.arc(sx, sy, r * 2.8, 0, TAU);
+    ctx.arc(sx, sy, r * 3.2, 0, TAU);
     ctx.fill();
-    ctx.restore();
 
-    const moonPath = () => {
-      ctx.beginPath();
-      ctx.arc(sx, sy, r, 0, TAU);
-      ctx.arc(sx + biteX, sy + biteY, biteR, 0, TAU);
-    };
+    ctx.globalAlpha = vis;
 
-    ctx.fillStyle = hexA(theme.sun, 0.96);
-    moonPath();
-    ctx.fill("evenodd");
-
-    ctx.save();
-    const sheen = ctx.createRadialGradient(
-      sx - r * 0.25,
-      sy - r * 0.05,
-      r * 0.05,
+    // Disc with gentle limb darkening (lit from the upper-left).
+    const disc = ctx.createRadialGradient(
+      sx - r * 0.28,
+      sy - r * 0.3,
+      r * 0.15,
       sx,
       sy,
-      r * 1.05
+      r * 1.08
     );
-    sheen.addColorStop(0, hexA("#ffffff", 0.45));
-    sheen.addColorStop(0.55, hexA(theme.sun, 0.12));
-    sheen.addColorStop(1, hexA(theme.sun, 0));
-    ctx.fillStyle = sheen;
-    moonPath();
-    ctx.fill("evenodd");
+    disc.addColorStop(0, "#fdfdf6");
+    disc.addColorStop(0.55, "#e9edf6");
+    disc.addColorStop(0.85, "#cdd4e4");
+    disc.addColorStop(1, "#a7afc6");
+    ctx.fillStyle = disc;
+    ctx.beginPath();
+    ctx.arc(sx, sy, r, 0, TAU);
+    ctx.fill();
+
+    // Craters / maria — clipped to the disc so nothing spills past the rim.
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(sx, sy, r, 0, TAU);
+    ctx.clip();
+    const craters: [number, number, number][] = [
+      [-0.32, -0.2, 0.26],
+      [0.22, -0.32, 0.15],
+      [0.36, 0.16, 0.2],
+      [-0.06, 0.34, 0.16],
+      [-0.44, 0.24, 0.11],
+      [0.04, 0.0, 0.1],
+      [0.52, -0.12, 0.08],
+    ];
+    for (const [cx, cy, cr] of craters) {
+      const px = sx + cx * r;
+      const py = sy + cy * r;
+      const pr = cr * r;
+      const cg = ctx.createRadialGradient(
+        px - pr * 0.3,
+        py - pr * 0.3,
+        pr * 0.1,
+        px,
+        py,
+        pr
+      );
+      cg.addColorStop(0, hexA("#bcc4d8", 0.85));
+      cg.addColorStop(0.7, hexA("#a7afc8", 0.7));
+      cg.addColorStop(1, hexA("#a7afc8", 0));
+      ctx.fillStyle = cg;
+      ctx.beginPath();
+      ctx.arc(px, py, pr, 0, TAU);
+      ctx.fill();
+      // Bright sunlit rim along the lower-right of each crater.
+      ctx.strokeStyle = hexA("#ffffff", 0.3);
+      ctx.lineWidth = Math.max(0.6, pr * 0.16);
+      ctx.beginPath();
+      ctx.arc(px, py, pr * 0.9, Math.PI * 0.08, Math.PI * 0.92);
+      ctx.stroke();
+    }
     ctx.restore();
 
-    ctx.save();
-    ctx.strokeStyle = hexA("#ffffff", 0.32);
-    ctx.lineWidth = 1.4;
+    // Crisp highlight arc on the lit edge.
+    ctx.strokeStyle = hexA("#ffffff", 0.4);
+    ctx.lineWidth = 1.3;
     ctx.beginPath();
-    ctx.arc(sx - 1, sy, r - 1.5, Math.PI * 0.52, Math.PI * 1.48);
+    ctx.arc(sx, sy, r - 1.2, Math.PI * 0.95, Math.PI * 1.78);
     ctx.stroke();
+
     ctx.restore();
+  }
+
+  // Which region a world-X falls in, plus a 0..1 fade that dips to 0 at the
+  // seams so neighbouring biomes cross-dissolve as you scroll between them.
+  private regionAt(worldX: number): { kind: RegionKind; fade: number } {
+    const t = worldX / REGION_LEN;
+    const idx = Math.floor(t);
+    const frac = t - idx;
+    const FADE = 0.13;
+    let fade = 1;
+    if (frac < FADE) fade = frac / FADE;
+    else if (frac > 1 - FADE) fade = (1 - frac) / FADE;
+    const n = REGION_KINDS.length;
+    const kind = REGION_KINDS[((idx % n) + n) % n];
+    return { kind, fade: clamp(fade, 0, 1) };
+  }
+
+  // Deep, layered mountain ranges fading into haze behind everything — the
+  // single biggest "depth" cue from Alto. Three ridges at increasing parallax.
+  drawMountains(ctx: CanvasRenderingContext2D, cam: Camera) {
+    const { w, h } = cam;
+    const layers = [
+      { parallax: 0.035, baseY: 0.6, height: 130, cell: 240, mix: 0.72, alpha: 0.5 },
+      { parallax: 0.065, baseY: 0.65, height: 180, cell: 300, mix: 0.52, alpha: 0.66 },
+      { parallax: 0.1, baseY: 0.71, height: 240, cell: 360, mix: 0.32, alpha: 0.82 },
+    ];
+    layers.forEach((L, li) => {
+      const baseY = h * L.baseY - cam.y * L.parallax;
+      const offX = cam.x * L.parallax;
+      const color = mixColor(theme.far, theme.fog, L.mix);
+      const snow = mixColor(color, theme.cloud, 0.62);
+      const startI = Math.floor((offX - w) / L.cell) - 1;
+      const endI = Math.ceil((offX + w) / L.cell) + 1;
+
+      // Peak / valley vertices for this ridge (valley sits to a peak's right).
+      const pts: { x: number; apexY: number; ph: number; valX: number; valY: number }[] = [];
+      for (let i = startI; i <= endI; i++) {
+        const px = i * L.cell - offX + w * 0.5;
+        const ph = (0.45 + hash01(i * 131 + li * 17) * 0.55) * L.height;
+        const valX = px + L.cell * 0.5;
+        const valY = baseY - ph * (0.1 + hash01(i * 71 + li) * 0.18);
+        pts.push({ x: px, apexY: baseY - ph, ph, valX, valY });
+      }
+
+      ctx.save();
+      ctx.globalAlpha = L.alpha;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, h);
+      for (const p of pts) {
+        ctx.lineTo(p.x, p.apexY);
+        ctx.lineTo(p.valX, p.valY);
+      }
+      ctx.lineTo(pts[pts.length - 1].valX, h);
+      ctx.closePath();
+      ctx.fill();
+
+      // Snow caps that hug the peak: they ride down the real left/right slopes
+      // to a snow line, with a softly jagged lower edge (no sideways "brims").
+      if (li >= 1) {
+        ctx.globalAlpha = L.alpha * (li === 2 ? 0.6 : 0.4);
+        ctx.fillStyle = snow;
+        const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+        for (let j = 1; j < pts.length; j++) {
+          const p = pts[j];
+          if (p.ph < L.height * 0.55) continue;
+          const f = 0.26 + hash01(j * 53 + li) * 0.1; // snow line depth
+          // Left slope runs from the apex back to the previous valley.
+          const lvX = pts[j - 1].valX;
+          const lvY = pts[j - 1].valY;
+          const Lx = lerp(p.x, lvX, f);
+          const Ly = lerp(p.apexY, lvY, f);
+          const Rx = lerp(p.x, p.valX, f);
+          const Ry = lerp(p.apexY, p.valY, f);
+          const dip = p.ph * 0.05;
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.apexY);
+          ctx.lineTo(Lx, Ly);
+          ctx.lineTo(lerp(Lx, Rx, 0.3), lerp(Ly, Ry, 0.3) + dip);
+          ctx.lineTo(lerp(Lx, Rx, 0.52), lerp(Ly, Ry, 0.52) - dip * 0.4);
+          ctx.lineTo(lerp(Lx, Rx, 0.74), lerp(Ly, Ry, 0.74) + dip);
+          ctx.lineTo(Rx, Ry);
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    });
+  }
+
+  // Soft, slow-drifting cloud banks high in the sky, well behind the mountains.
+  // Low parallax keeps them feeling far away; they thin out at night.
+  drawSkyClouds(ctx: CanvasRenderingContext2D, cam: Camera, time: number) {
+    const { w, h } = cam;
+    const dayish = 1 - theme.night * 0.55;
+    const layers = [
+      { parallax: 0.05, y: 0.15, speed: 4, scale: 1.35, alpha: 0.1, spacing: 780, seed: 0 },
+      { parallax: 0.09, y: 0.29, speed: 8, scale: 1.0, alpha: 0.14, spacing: 600, seed: 64 },
+    ];
+    for (const L of layers) {
+      const offX = cam.x * L.parallax + time * L.speed;
+      const startI = Math.floor((offX - w) / L.spacing) - 1;
+      const endI = Math.ceil((offX + w) / L.spacing) + 1;
+      for (let i = startI; i <= endI; i++) {
+        const r = hash01(i * 13 + L.seed);
+        if (r < 0.38) continue;
+        const sx = i * L.spacing - offX + w * 0.5;
+        const sy = h * L.y - cam.y * L.parallax + (r - 0.5) * 70;
+        const width = (180 + r * 170) * L.scale;
+        this.drawCloudCluster(ctx, sx, sy, width, L.alpha * dayish);
+      }
+    }
   }
 
   drawFar(ctx: CanvasRenderingContext2D, cam: Camera, time: number) {
@@ -206,10 +412,12 @@ export class Background {
       const sx = i * spacing - offset + w * 0.5;
       const sy = h * (0.58 + r1 * 0.08) - cam.y * 0.1;
       const scale = 0.55 + r2 * 0.45;
-      this.drawFloatingIsland(ctx, sx, sy, scale, i, mixColor(theme.far, theme.fog, 0.55), r2 > 0.35);
+      this.drawFloatingIsland(ctx, sx, sy, scale, i, mixColor(theme.far, theme.fog, 0.55), r2 > 0.35, time);
     }
 
     this.drawBirds(ctx, cam, time);
+    this.drawBats(ctx, cam, time);
+    this.drawButterflies(ctx, cam, time);
 
     // Closer ridge — slightly larger islands, less fog.
     const spacing2 = 480;
@@ -223,7 +431,7 @@ export class Background {
       const sx = i * spacing2 - offset2 + w * 0.5;
       const sy = h * (0.66 + r1 * 0.06) - cam.y * 0.16;
       const scale = 0.7 + r2 * 0.55;
-      this.drawFloatingIsland(ctx, sx, sy, scale, i + 50, mixColor(theme.far, theme.fog, 0.28), r2 > 0.6);
+      this.drawFloatingIsland(ctx, sx, sy, scale, i + 50, mixColor(theme.far, theme.fog, 0.28), r2 > 0.6, time);
     }
   }
 
@@ -250,40 +458,182 @@ export class Background {
     const { w, h } = cam;
     const span = w * 3;
     ctx.fillStyle = hexA(theme.mid, 0.62 * daylight);
-    for (let k = 0; k < 2; k++) {
+    // A few loose flocks drifting at different heights and speeds.
+    const flocks = [
+      { y: 0.2, speed: 26, count: 5, size: 6.2, drift: 12 },
+      { y: 0.3, speed: 19, count: 4, size: 5.2, drift: 9 },
+      { y: 0.14, speed: 33, count: 6, size: 4.6, drift: 7 },
+    ];
+    for (let k = 0; k < flocks.length; k++) {
+      const F = flocks[k];
       const fx =
-        (((time * 26 + k * 760 - cam.x * 0.18) % span) + span) % span - w * 0.4;
-      const fy = h * 0.24 + k * 46 - cam.y * 0.07 + Math.sin(time * 0.4 + k) * 12;
-      for (let b = 0; b < 4; b++) {
-        const bx = fx + b * 26 - (b % 2) * 6;
-        const by = fy + (b % 2) * 10 + Math.sin(time * 6 + b) * 1.5;
-        const s = 5.5 + (b % 3) * 0.8;
+        (((time * F.speed + k * 760 - cam.x * 0.18) % span) + span) % span -
+        w * 0.4;
+      const fy =
+        h * F.y - cam.y * 0.07 + Math.sin(time * 0.4 + k) * F.drift;
+      for (let b = 0; b < F.count; b++) {
+        // V-formation: birds fan back and down from the leader.
+        const bx = fx + b * 24 - (b % 2) * 6;
+        const by = fy + b * 7 + (b % 2) * 4 + Math.sin(time * 6 + b) * 1.5;
+        const s = F.size + (b % 3) * 0.7;
         const flap = 0.5 + Math.sin(time * 7 + b * 1.7 + k) * 0.5;
         this.drawBirdGlyph(ctx, bx, by, s, flap);
       }
     }
   }
 
+  // Nocturnal flyers — small bat silhouettes that come out once it's dark, so
+  // the night sky isn't empty after the birds turn in.
+  private drawBats(ctx: CanvasRenderingContext2D, cam: Camera, time: number) {
+    if (theme.night < 0.45) return;
+    const { w, h } = cam;
+    const span = w * 3.2;
+    ctx.save();
+    ctx.fillStyle = hexA(theme.mid, 0.85 * theme.night);
+    for (let k = 0; k < 6; k++) {
+      const seed = k * 97 + 13;
+      const speed = 18 + (k % 3) * 10;
+      const x =
+        (((time * speed + seed * 31 - cam.x * 0.16) % span) + span) % span -
+        w * 0.5;
+      const y =
+        h * (0.14 + hash01(seed) * 0.26) -
+        cam.y * 0.06 +
+        Math.sin(time * (0.9 + (k % 2) * 0.5) + k) * 26;
+      const s = 5 + hash01(seed * 3) * 4;
+      const flap = Math.sin(time * 11 + k * 1.3);
+      this.drawBatGlyph(ctx, x, y, s, flap);
+    }
+    ctx.restore();
+  }
+
+  private drawBatGlyph(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    s: number,
+    flap: number
+  ) {
+    const up = s * (0.35 + (flap * 0.5 + 0.5) * 0.65);
+    ctx.beginPath();
+    ctx.moveTo(x, y - s * 0.1);
+    // Left scalloped wing.
+    ctx.quadraticCurveTo(x - s * 0.7, y - up, x - s * 1.6, y - up * 0.15);
+    ctx.quadraticCurveTo(x - s * 1.05, y + s * 0.05, x - s * 0.72, y + s * 0.1);
+    ctx.quadraticCurveTo(x - s * 0.5, y + s * 0.05, x - s * 0.28, y + s * 0.22);
+    // Little body dip.
+    ctx.quadraticCurveTo(x, y + s * 0.42, x + s * 0.28, y + s * 0.22);
+    // Right scalloped wing (mirror).
+    ctx.quadraticCurveTo(x + s * 0.5, y + s * 0.05, x + s * 0.72, y + s * 0.1);
+    ctx.quadraticCurveTo(x + s * 1.05, y + s * 0.05, x + s * 1.6, y - up * 0.15);
+    ctx.quadraticCurveTo(x + s * 0.7, y - up, x, y - s * 0.1);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Daytime butterflies — small flecks of colour that flutter past closer to
+  // the player than the birds, bobbing and beating their wings.
+  private drawButterflies(
+    ctx: CanvasRenderingContext2D,
+    cam: Camera,
+    time: number
+  ) {
+    const daylight = 1 - theme.night;
+    if (daylight < 0.4) return;
+    const { w, h } = cam;
+    const cols = ["#ff7eb3", "#ffd166", "#7ec8ff", "#c89bff", "#ff9f6b"];
+    const span = w * 2.4;
+    ctx.save();
+    for (let k = 0; k < 7; k++) {
+      const seed = k * 53 + 7;
+      const col = cols[k % cols.length];
+      const speed = 16 + (k % 3) * 9;
+      const x =
+        (((time * speed + seed * 40 - cam.x * 0.5) % span) + span) % span -
+        w * 0.3;
+      const y =
+        h * (0.3 + hash01(seed) * 0.22) -
+        cam.y * 0.22 +
+        Math.sin(time * 1.7 + k) * 26;
+      const s = 4 + hash01(seed * 5) * 3;
+      const flap = Math.abs(Math.sin(time * 9 + k));
+      this.drawButterflyGlyph(ctx, x, y, s, flap, col, daylight);
+    }
+    ctx.restore();
+  }
+
+  private drawButterflyGlyph(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    s: number,
+    flap: number,
+    col: string,
+    daylight: number
+  ) {
+    const wingW = s * (0.35 + flap * 0.7);
+    ctx.globalAlpha = 0.85 * daylight;
+    ctx.fillStyle = col;
+    for (const sgn of [-1, 1]) {
+      ctx.beginPath();
+      ctx.ellipse(x + sgn * wingW, y - s * 0.32, wingW, s * 0.72, sgn * 0.5, 0, TAU);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(x + sgn * wingW * 0.78, y + s * 0.4, wingW * 0.7, s * 0.5, sgn * -0.4, 0, TAU);
+      ctx.fill();
+    }
+    ctx.fillStyle = hexA("#2a1d12", daylight);
+    ctx.fillRect(x - s * 0.09, y - s * 0.5, s * 0.18, s);
+    ctx.globalAlpha = 1;
+  }
+
+  // Mid-ground biome features. The active region (by world distance) decides
+  // what stands here — drifting ruins, fir forests, snow peaks or monoliths —
+  // cross-fading at the seams between regions.
   drawMid(ctx: CanvasRenderingContext2D, cam: Camera) {
     const { w, h } = cam;
     const factor = 0.28;
-    const spacing = 440;
+    const spacing = 300;
     const baseY = h * 0.84 - cam.y * factor;
     const offset = cam.x * factor;
     const startIdx = Math.floor((offset - w) / spacing);
     const endIdx = Math.ceil((offset + w) / spacing);
-    const col = mixColor(theme.mid, theme.fog, 0.15);
+    const base = mixColor(theme.mid, theme.fog, 0.15);
     const accent = mixColor(theme.mid, theme.skyHorizon, 0.2);
 
     for (let i = startIdx; i <= endIdx; i++) {
       const r1 = hash01(i * 5 + 3);
       const r2 = hash01(i * 5 + 11);
-      if (r1 < 0.28) continue;
+      if (r1 < 0.32) continue; // gaps between features
+      const worldX = i * spacing;
+      const { kind, fade } = this.regionAt(worldX);
+      if (fade <= 0.02) continue;
+
       const sx = i * spacing - offset + w * 0.5;
       const sy = baseY + (r1 - 0.5) * 40;
       const scale = 0.85 + r2 * 0.5;
-      const kind = r2 > 0.55 ? "arch" : r2 > 0.3 ? "temple" : "pillars";
-      this.drawRuin(ctx, sx, sy, scale, i, kind, col, accent);
+
+      ctx.save();
+      ctx.globalAlpha = fade;
+      if (kind === "forest") {
+        const col = mixColor(base, "#1f4d3e", 0.4); // teal-green pines
+        const lit = mixColor(col, theme.skyGlow, 0.25);
+        this.drawPineCluster(ctx, sx, sy, scale, i, col, lit);
+      } else if (kind === "peaks") {
+        const col = mixColor(base, theme.far, 0.4);
+        const lit = mixColor(col, theme.cloud, 0.55);
+        this.drawPeak(ctx, sx, sy, scale * 1.1, i, col, lit);
+      } else if (kind === "monuments") {
+        // Warm, dark stone — deliberately off the cool blue of the ranges so
+        // the monoliths read clearly against the mountains behind them.
+        const col = mixColor(theme.mid, "#4a3a3e", 0.55);
+        const lit = mixColor(col, theme.skyGlow, 0.32);
+        this.drawMonolith(ctx, sx, sy, scale, i, col, lit);
+      } else {
+        const kr = r2 > 0.55 ? "arch" : r2 > 0.3 ? "temple" : "pillars";
+        this.drawRuin(ctx, sx, sy, scale, i, kr, base, accent);
+      }
+      ctx.restore();
     }
   }
 
@@ -699,7 +1049,8 @@ export class Background {
     scale: number,
     seed: number,
     color: string,
-    withTrees: boolean
+    withTrees: boolean,
+    time: number
   ) {
     const rw = (90 + hash01(seed * 7) * 70) * scale;
     const rh = (24 + hash01(seed * 13) * 18) * scale;
@@ -740,6 +1091,129 @@ export class Background {
         const th = (18 + hash01(seed * 41 + t) * 24) * scale;
         this.drawCypressTree(ctx, tx, surfaceY, th, treeCol, trunkCol);
       }
+    }
+
+    // A little critter grazing on the plateau every so often.
+    if (scale > 0.62 && hash01(seed * 37) > 0.5) {
+      const cx = (hash01(seed * 43) - 0.5) * rw * 0.9;
+      const surfaceY = this.plateauTopY(cx, rw, rh, 1.2);
+      const critterCol = hexA(mixColor(color, theme.mid, 0.62), 0.95);
+      this.drawIslandCritter(ctx, cx, surfaceY + 1, scale, seed, critterCol, time);
+    }
+
+    ctx.restore();
+  }
+
+  // Tiny grazing silhouettes (deer / rabbit / perched bird) that give the
+  // floating islands a sense of life. Procedurally chosen and seed-stable.
+  private drawIslandCritter(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    scale: number,
+    seed: number,
+    col: string,
+    time: number
+  ) {
+    const pick = hash01(seed * 47);
+    const ph = hash01(seed * 59) * TAU; // per-critter phase so they're out of sync
+    const L = (a: number, b: number, t: number) => a + (b - a) * t;
+
+    ctx.save();
+    ctx.fillStyle = col;
+    ctx.strokeStyle = col;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    if (pick > 0.66) {
+      // Deer — lowers its head to graze, then lifts it again.
+      const s = (12 + hash01(seed * 53) * 6) * scale;
+      const dip = Math.sin(time * 0.8 + ph) * 0.5 + 0.5; // 0 = head up, 1 = grazing
+      ctx.lineWidth = Math.max(1, s * 0.1);
+      for (const lx of [-0.3, -0.12, 0.12, 0.3]) {
+        ctx.beginPath();
+        ctx.moveTo(x + lx * s, y - s * 0.42);
+        ctx.lineTo(x + lx * s, y);
+        ctx.stroke();
+      }
+      ctx.beginPath();
+      ctx.ellipse(x, y - s * 0.58, s * 0.42, s * 0.2, 0, 0, TAU);
+      ctx.fill();
+      // Neck swings down toward the ground as it grazes.
+      const tipX = L(x + s * 0.5, x + s * 0.62, dip);
+      const tipY = L(y - s * 1.04, y - s * 0.46, dip);
+      ctx.lineWidth = s * 0.15;
+      ctx.beginPath();
+      ctx.moveTo(x + s * 0.32, y - s * 0.62);
+      ctx.lineTo(tipX, tipY);
+      ctx.stroke();
+      const headX = L(x + s * 0.55, x + s * 0.68, dip);
+      const headY = L(y - s * 1.12, y - s * 0.34, dip);
+      ctx.beginPath();
+      ctx.ellipse(headX, headY, s * 0.16, s * 0.1, 0.4 + dip * 0.5, 0, TAU);
+      ctx.fill();
+      ctx.lineWidth = Math.max(0.8, s * 0.05);
+      ctx.beginPath();
+      ctx.moveTo(headX - s * 0.05, headY - s * 0.08);
+      ctx.lineTo(headX - s * 0.11, headY - s * 0.3);
+      ctx.moveTo(headX + s * 0.03, headY - s * 0.08);
+      ctx.lineTo(headX + s * 0.09, headY - s * 0.32);
+      ctx.stroke();
+    } else if (pick > 0.33) {
+      // Rabbit — bobs up and down with little ear twitches.
+      const s = (8 + hash01(seed * 53) * 4) * scale;
+      const bob = -Math.abs(Math.sin(time * 2 + ph)) * s * 0.14;
+      const tw = Math.sin(time * 3 + ph * 1.3) * 0.14; // ear flick
+      ctx.save();
+      ctx.translate(0, bob);
+      ctx.beginPath();
+      ctx.ellipse(x, y - s * 0.4, s * 0.5, s * 0.4, 0, 0, TAU);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(x + s * 0.45, y - s * 0.62, s * 0.27, 0, TAU);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(x + s * 0.4, y - s * 1.05, s * 0.09, s * 0.32, -0.15 + tw, 0, TAU);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(x + s * 0.56, y - s * 1.02, s * 0.09, s * 0.3, 0.2 + tw, 0, TAU);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(x - s * 0.52, y - s * 0.36, s * 0.14, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+    } else {
+      // Perched bird — pecks the ground, tail flicking up as the head dips.
+      const s = (6 + hash01(seed * 53) * 3) * scale;
+      const peck = Math.pow(Math.sin(time * 1.6 + ph) * 0.5 + 0.5, 3);
+      ctx.beginPath();
+      ctx.ellipse(x, y - s * 0.5, s * 0.5, s * 0.33, -0.2, 0, TAU);
+      ctx.fill();
+      const hX = L(x + s * 0.46, x + s * 0.6, peck);
+      const hY = L(y - s * 0.82, y - s * 0.52, peck);
+      ctx.beginPath();
+      ctx.arc(hX, hY, s * 0.23, 0, TAU);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(hX + s * 0.18, hY - s * 0.03);
+      ctx.lineTo(hX + s * 0.46, hY + s * 0.02);
+      ctx.lineTo(hX + s * 0.18, hY + s * 0.09);
+      ctx.closePath();
+      ctx.fill();
+      const tailUp = peck * s * 0.14;
+      ctx.beginPath();
+      ctx.moveTo(x - s * 0.46, y - s * 0.52);
+      ctx.lineTo(x - s * 0.95, y - s * 0.78 - tailUp);
+      ctx.lineTo(x - s * 0.5, y - s * 0.32);
+      ctx.closePath();
+      ctx.fill();
+      ctx.lineWidth = Math.max(0.6, s * 0.09);
+      ctx.beginPath();
+      ctx.moveTo(x - s * 0.05, y - s * 0.2);
+      ctx.lineTo(x - s * 0.05, y);
+      ctx.moveTo(x + s * 0.14, y - s * 0.2);
+      ctx.lineTo(x + s * 0.14, y);
+      ctx.stroke();
     }
 
     ctx.restore();
@@ -959,78 +1433,440 @@ export class Background {
     ctx.fill();
 
     const seam = 1.5 * scale;
+    const lit = mixColor(color, theme.skyGlow, 0.22); // catches the sky on top edges
 
-    if (kind === "pillars" || kind === "temple") {
-      const cols = kind === "temple" ? 3 : 2;
-      for (let c = 0; c < cols; c++) {
-        const cx = (c - (cols - 1) / 2) * 28 * scale;
-        const surfaceY = this.plateauTopY(cx, pw, ph, 1.3);
-        const colW = (10 + hash01(seed + c * 3) * 6) * scale;
-        const fullH = (80 + hash01(seed + c * 7) * 120) * scale;
-        const broken = hash01(seed + c * 11) > 0.45;
-        const colH = broken ? fullH * (0.35 + hash01(seed + c * 13) * 0.35) : fullH;
+    if (kind === "arch") {
+      this.drawRuinArch(ctx, seed, scale, pw, ph, seam, color, lit);
+    } else {
+      this.drawRuinColumns(ctx, seed, scale, pw, ph, seam, color, accent, lit, kind === "temple");
+    }
 
-        ctx.fillStyle = hexA(color, 0.95);
+    ctx.restore();
+  }
+
+  // Stone gateway — two piers carrying a semicircular arch with a keystone.
+  // Sometimes ruined: one side crumbled, the span broken mid-air.
+  private drawRuinArch(
+    ctx: CanvasRenderingContext2D,
+    seed: number,
+    scale: number,
+    pw: number,
+    ph: number,
+    seam: number,
+    color: string,
+    lit: string
+  ) {
+    const pierW = (8 + hash01(seed * 3) * 4) * scale;
+    const openW = (24 + hash01(seed * 7) * 16) * scale;
+    const R = openW / 2 + pierW / 2; // arch radius (pier center to centre)
+    const legH = (30 + hash01(seed * 5) * 40) * scale;
+    const baseS = this.plateauTopY(0, pw, ph, 1.3) + seam;
+    const springY = baseS - legH;
+    const broken = hash01(seed * 43) > 0.45;
+
+    const fill = hexA(color, 0.95);
+    const litFill = hexA(lit, 0.95);
+
+    // Piers (slight base flare). Right pier is a low stub when broken.
+    const drawPier = (cx: number, top: number) => {
+      ctx.fillStyle = fill;
+      ctx.beginPath();
+      ctx.moveTo(cx - pierW * 0.6, baseS);
+      ctx.lineTo(cx - pierW * 0.5, top);
+      ctx.lineTo(cx + pierW * 0.5, top);
+      ctx.lineTo(cx + pierW * 0.6, baseS);
+      ctx.closePath();
+      ctx.fill();
+    };
+    drawPier(-R, springY);
+    drawPier(R, broken ? baseS - legH * 0.32 : springY);
+
+    // Arch band riding on the piers.
+    ctx.strokeStyle = fill;
+    ctx.lineWidth = pierW;
+    ctx.lineCap = "butt";
+    ctx.beginPath();
+    if (broken) {
+      ctx.arc(0, springY, R, Math.PI, Math.PI * 1.46); // springs from left, snaps off
+    } else {
+      ctx.arc(0, springY, R, Math.PI, TAU);
+    }
+    ctx.stroke();
+
+    if (!broken) {
+      // Keystone wedge at the apex.
+      const ksW = pierW * 1.4;
+      const ksH = pierW * 1.1;
+      const apexY = springY - R - pierW * 0.5;
+      ctx.fillStyle = litFill;
+      ctx.beginPath();
+      ctx.moveTo(-ksW * 0.5, apexY + ksH);
+      ctx.lineTo(-ksW * 0.32, apexY);
+      ctx.lineTo(ksW * 0.32, apexY);
+      ctx.lineTo(ksW * 0.5, apexY + ksH);
+      ctx.closePath();
+      ctx.fill();
+      // Thin sky-lit rim across the pier tops.
+      ctx.fillStyle = litFill;
+      ctx.fillRect(-R - pierW * 0.5, springY - 1.5 * scale, pierW, 1.5 * scale);
+      ctx.fillRect(R - pierW * 0.5, springY - 1.5 * scale, pierW, 1.5 * scale);
+    } else {
+      // A little fallen rubble at the foot of the broken side.
+      ctx.fillStyle = fill;
+      ctx.beginPath();
+      ctx.arc(R + pierW * 0.4, baseS - 2 * scale, pierW * 0.5, 0, TAU);
+      ctx.fill();
+    }
+  }
+
+  // A row of columns on a stylobate. Temples keep an architrave + pediment
+  // across the intact columns; loose "pillars" are mostly weathered stumps.
+  private drawRuinColumns(
+    ctx: CanvasRenderingContext2D,
+    seed: number,
+    scale: number,
+    pw: number,
+    ph: number,
+    seam: number,
+    color: string,
+    accent: string,
+    lit: string,
+    temple: boolean
+  ) {
+    const cols = temple ? 4 : 3;
+    const gap = (temple ? 19 : 26) * scale;
+    const fullH = (temple ? 70 : 64) * scale;
+    const fill = hexA(color, 0.95);
+    const litFill = hexA(lit, 0.95);
+
+    // Stylobate (base platform).
+    const platW = ((cols - 1) * gap) / 2 + 11 * scale;
+    const baseS = this.plateauTopY(0, pw, ph, 1.3) + seam;
+    ctx.fillStyle = fill;
+    ctx.fillRect(-platW, baseS - 3.5 * scale, platW * 2, 5 * scale);
+    ctx.fillStyle = litFill;
+    ctx.fillRect(-platW, baseS - 4 * scale, platW * 2, 1.2 * scale);
+
+    const tops: { cx: number; topY: number; broken: boolean }[] = [];
+    for (let c = 0; c < cols; c++) {
+      const cx = (c - (cols - 1) / 2) * gap;
+      const colW = (7 + hash01(seed + c * 3) * 4) * scale;
+      const broken = hash01(seed + c * 11) > (temple ? 0.62 : 0.4);
+      const colH = broken
+        ? fullH * (0.28 + hash01(seed + c * 13) * 0.4)
+        : fullH;
+      const surfaceY = baseS - 3.5 * scale;
+      const topY = surfaceY - colH;
+
+      // Fluted shaft with a touch of entasis (mid bulge via tapered trapezoid).
+      ctx.fillStyle = fill;
+      ctx.beginPath();
+      ctx.moveTo(cx - colW * 0.5, surfaceY);
+      ctx.lineTo(cx - colW * 0.42, topY);
+      ctx.lineTo(cx + colW * 0.42, topY);
+      ctx.lineTo(cx + colW * 0.5, surfaceY);
+      ctx.closePath();
+      ctx.fill();
+
+      if (broken) {
+        // Jagged snapped top.
         ctx.beginPath();
-        ctx.moveTo(cx - colW * 0.5, surfaceY + seam);
-        ctx.lineTo(cx - colW * 0.38, surfaceY - colH);
-        ctx.lineTo(cx + colW * 0.38, surfaceY - colH);
-        ctx.lineTo(cx + colW * 0.5, surfaceY + seam);
+        ctx.moveTo(cx - colW * 0.42, topY);
+        ctx.lineTo(cx - colW * 0.16, topY - 5 * scale);
+        ctx.lineTo(cx + colW * 0.1, topY - 1.5 * scale);
+        ctx.lineTo(cx + colW * 0.42, topY - 4 * scale);
+        ctx.lineTo(cx + colW * 0.42, topY);
         ctx.closePath();
         ctx.fill();
-
-        if (!broken) {
-          ctx.fillRect(
-            cx - colW * 0.65,
-            surfaceY - colH - 8 * scale,
-            colW * 1.3,
-            8 * scale
-          );
-        } else {
-          ctx.beginPath();
-          ctx.moveTo(cx - colW * 0.38, surfaceY - colH);
-          ctx.lineTo(cx - colW * 0.2, surfaceY - colH - 6 * scale);
-          ctx.lineTo(cx + colW * 0.1, surfaceY - colH - 3 * scale);
-          ctx.lineTo(cx + colW * 0.38, surfaceY - colH);
-          ctx.closePath();
-          ctx.fill();
-        }
-
-        if (broken) {
-          ctx.fillStyle = hexA(accent, 0.5);
-          ctx.fillRect(cx - colW, surfaceY + seam - 4 * scale, colW * 2.1, 4 * scale);
-        }
-      }
-    }
-
-    if (kind === "arch" || kind === "temple") {
-      const archW = (kind === "arch" ? 70 : 55) * scale;
-      const ax = kind === "arch" ? 0 : 28 * scale;
-      const archR = archW * 0.55;
-      const footLx = ax - archR;
-      const footRx = ax + archR;
-      const footY =
-        (this.plateauTopY(footLx, pw, ph, 1.3) +
-          this.plateauTopY(footRx, pw, ph, 1.3)) *
-        0.5;
-      ctx.strokeStyle = hexA(color, 0.95);
-      ctx.lineWidth = (kind === "arch" ? 12 : 9) * scale;
-      ctx.lineCap = "butt";
-      const broken = kind === "arch" && hash01(seed * 43) > 0.4;
-      if (broken) {
-        ctx.beginPath();
-        ctx.arc(ax, footY, archR, Math.PI, Math.PI * 1.35);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(ax, footY, archR, Math.PI * 1.55, TAU);
-        ctx.stroke();
       } else {
-        ctx.beginPath();
-        ctx.arc(ax, footY, archR, Math.PI, TAU);
-        ctx.stroke();
+        // Capital block + sky-lit top.
+        ctx.fillStyle = fill;
+        ctx.fillRect(cx - colW * 0.7, topY - 4.5 * scale, colW * 1.4, 4.5 * scale);
+        ctx.fillStyle = litFill;
+        ctx.fillRect(cx - colW * 0.7, topY - 5 * scale, colW * 1.4, 1.4 * scale);
       }
+
+      tops.push({ cx, topY, broken });
     }
 
+    if (temple) {
+      const intact = tops.filter((t) => !t.broken);
+      if (intact.length >= 2) {
+        const beamTop = baseS - 3.5 * scale - fullH - 5 * scale;
+        const lx = Math.min(...intact.map((t) => t.cx)) - 9 * scale;
+        const rx = Math.max(...intact.map((t) => t.cx)) + 9 * scale;
+        const beamH = 8 * scale;
+        // Architrave beam.
+        ctx.fillStyle = fill;
+        ctx.fillRect(lx, beamTop, rx - lx, beamH);
+        ctx.fillStyle = litFill;
+        ctx.fillRect(lx, beamTop, rx - lx, 1.5 * scale);
+        // Low pediment triangle resting on the beam.
+        ctx.fillStyle = fill;
+        ctx.beginPath();
+        ctx.moveTo(lx, beamTop);
+        ctx.lineTo((lx + rx) / 2, beamTop - 13 * scale);
+        ctx.lineTo(rx, beamTop);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = litFill;
+        ctx.lineWidth = 1.3 * scale;
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        ctx.moveTo(lx, beamTop);
+        ctx.lineTo((lx + rx) / 2, beamTop - 13 * scale);
+        ctx.lineTo(rx, beamTop);
+        ctx.stroke();
+      }
+    } else {
+      // Loose pillars: a low fallen block among the stumps.
+      ctx.fillStyle = hexA(accent, 0.6);
+      ctx.fillRect(-platW * 0.3, baseS - 6 * scale, 14 * scale, 4 * scale);
+    }
+  }
+
+  // --- Forest region: a knoll crowned with layered fir trees. ---
+
+  private drawFir(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    baseY: number,
+    height: number,
+    color: string,
+    lit: string
+  ) {
+    const halfW = height * 0.26;
+    // Trunk.
+    ctx.fillStyle = color;
+    ctx.fillRect(x - height * 0.035, baseY - height * 0.12, height * 0.07, height * 0.13);
+    // Stacked conical tiers, widest at the bottom.
+    const tiers = 4;
+    for (let t = 0; t < tiers; t++) {
+      const f = t / tiers;
+      const ty = baseY - height * 0.08 - height * 0.8 * f;
+      const tw = halfW * (1 - f * 0.78);
+      const th = height * 0.3;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(x, ty - th);
+      ctx.lineTo(x - tw, ty);
+      ctx.lineTo(x + tw, ty);
+      ctx.closePath();
+      ctx.fill();
+      // Thin sky-lit left edge for a touch of form.
+      ctx.fillStyle = lit;
+      ctx.beginPath();
+      ctx.moveTo(x, ty - th);
+      ctx.lineTo(x - tw, ty);
+      ctx.lineTo(x - tw * 0.6, ty);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  private drawPineCluster(
+    ctx: CanvasRenderingContext2D,
+    sx: number,
+    baseY: number,
+    scale: number,
+    seed: number,
+    color: string,
+    lit: string
+  ) {
+    ctx.save();
+    ctx.translate(sx, baseY);
+    const mw = 64 * scale;
+
+    // Low ground knoll the trees grow from.
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(-mw, 8 * scale);
+    ctx.quadraticCurveTo(-mw * 0.4, -10 * scale, 0, -9 * scale);
+    ctx.quadraticCurveTo(mw * 0.45, -7 * scale, mw, 8 * scale);
+    ctx.lineTo(mw, 60 * scale);
+    ctx.lineTo(-mw, 60 * scale);
+    ctx.closePath();
+    ctx.fill();
+
+    const n = 3 + ((hash01(seed * 7) * 4) | 0);
+    // Draw back-to-front (taller, centred trees behind) for overlap depth.
+    const trees: { fx: number; fh: number }[] = [];
+    for (let t = 0; t < n; t++) {
+      const fx = (hash01(seed * 11 + t * 3) - 0.5) * mw * 1.7;
+      const fh = (46 + hash01(seed * 13 + t) * 62) * scale;
+      trees.push({ fx, fh });
+    }
+    trees.sort((a, b) => b.fh - a.fh);
+    for (const tr of trees) {
+      this.drawFir(ctx, tr.fx, -4 * scale, tr.fh, color, lit);
+    }
+    ctx.restore();
+  }
+
+  // --- Peaks region: a faceted, snow-capped mountain. ---
+
+  private drawPeak(
+    ctx: CanvasRenderingContext2D,
+    sx: number,
+    baseY: number,
+    scale: number,
+    seed: number,
+    color: string,
+    lit: string
+  ) {
+    ctx.save();
+    ctx.translate(sx, baseY);
+    const pw = (84 + hash01(seed * 7) * 60) * scale;
+    const ph = (150 + hash01(seed * 13) * 130) * scale;
+    const apex = (hash01(seed * 17) - 0.5) * pw * 0.5;
+    const footY = 70 * scale;
+
+    // Main mass.
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(-pw, footY);
+    ctx.lineTo(apex, -ph);
+    ctx.lineTo(pw, footY);
+    ctx.closePath();
+    ctx.fill();
+
+    // Shaded right face (low-poly look) — a darker wedge from apex down.
+    ctx.fillStyle = mixColor(color, theme.mid, 0.4);
+    ctx.beginPath();
+    ctx.moveTo(apex, -ph);
+    ctx.lineTo(pw, footY);
+    ctx.lineTo(apex + pw * 0.18, footY);
+    ctx.closePath();
+    ctx.fill();
+
+    // Snow cap with a jagged lower edge.
+    const capH = ph * 0.34;
+    const capW = pw * (capH / (ph + footY)) * 1.05;
+    ctx.fillStyle = lit;
+    ctx.beginPath();
+    ctx.moveTo(apex, -ph);
+    ctx.lineTo(apex - capW, -ph + capH);
+    ctx.lineTo(apex - capW * 0.45, -ph + capH * 0.7);
+    ctx.lineTo(apex - capW * 0.1, -ph + capH * 1.05);
+    ctx.lineTo(apex + capW * 0.35, -ph + capH * 0.72);
+    ctx.lineTo(apex + capW * 0.7, -ph + capH * 1.0);
+    ctx.lineTo(apex + capW, -ph + capH * 0.6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // --- Monuments region: towering weathered standing stones. ---
+
+  private drawMonolith(
+    ctx: CanvasRenderingContext2D,
+    sx: number,
+    baseY: number,
+    scale: number,
+    seed: number,
+    color: string,
+    lit: string
+  ) {
+    ctx.save();
+    ctx.translate(sx, baseY);
+
+    // Low rocky mound the stones are planted in (kept short, not a slab).
+    const mw = 40 * scale;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(-mw, 4 * scale);
+    ctx.quadraticCurveTo(0, -6 * scale, mw, 4 * scale);
+    ctx.lineTo(mw, 30 * scale);
+    ctx.lineTo(-mw, 30 * scale);
+    ctx.closePath();
+    ctx.fill();
+
+    const type = (hash01(seed * 3) * 3) | 0;
+
+    if (type === 0) {
+      // Trilithon — two uprights carrying a heavy lintel (Stonehenge-style).
+      const ph = (96 + hash01(seed * 13) * 70) * scale;
+      const pw = (13 + hash01(seed * 7) * 6) * scale;
+      const gap = (24 + hash01(seed * 17) * 16) * scale;
+      const over = pw * 0.55;
+      const linH = pw * 0.95;
+      const lx = -gap * 0.5 - pw;
+      const rx = gap * 0.5;
+      ctx.fillStyle = color;
+      ctx.fillRect(lx, -ph, pw, ph);
+      ctx.fillRect(rx, -ph, pw, ph);
+      ctx.fillRect(lx - over, -ph - linH, gap + pw * 2 + over * 2, linH);
+      ctx.fillStyle = lit;
+      ctx.fillRect(lx, -ph, pw * 0.24, ph);
+      ctx.fillRect(rx, -ph, pw * 0.24, ph);
+      ctx.fillRect(lx - over, -ph - linH, gap + pw * 2 + over * 2, linH * 0.32);
+    } else if (type === 1) {
+      // Menhir — a single tall tapered standing stone with a gentle lean, plus
+      // a smaller companion stone beside it.
+      const sh = (120 + hash01(seed * 13) * 90) * scale;
+      const wb = (20 + hash01(seed * 7) * 10) * scale;
+      const wt = wb * 0.58;
+      const lean = (hash01(seed * 19) - 0.5) * 0.14;
+      ctx.save();
+      ctx.rotate(lean);
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(-wb * 0.5, 2 * scale);
+      ctx.lineTo(-wt * 0.5, -sh);
+      ctx.lineTo(wt * 0.5, -sh * 0.97);
+      ctx.lineTo(wb * 0.5, 2 * scale);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = lit;
+      ctx.beginPath();
+      ctx.moveTo(-wb * 0.5, 2 * scale);
+      ctx.lineTo(-wt * 0.5, -sh);
+      ctx.lineTo(-wt * 0.22, -sh);
+      ctx.lineTo(-wb * 0.2, 2 * scale);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+      const ch = sh * (0.42 + hash01(seed * 29) * 0.2);
+      const cw = wb * 0.7;
+      const cx = (wb * 0.7 + 14 * scale) * (hash01(seed * 31) > 0.5 ? 1 : -1);
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(cx - cw * 0.5, 2 * scale);
+      ctx.lineTo(cx - cw * 0.34, -ch);
+      ctx.lineTo(cx + cw * 0.34, -ch);
+      ctx.lineTo(cx + cw * 0.5, 2 * scale);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      // Obelisk — tapered shaft topped by a small pyramidion.
+      const sh = (130 + hash01(seed * 13) * 96) * scale;
+      const wb = (16 + hash01(seed * 7) * 7) * scale;
+      const wt = wb * 0.52;
+      const shaftTop = -sh * 0.86;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(-wb * 0.5, 0);
+      ctx.lineTo(-wt * 0.5, shaftTop);
+      ctx.lineTo(wt * 0.5, shaftTop);
+      ctx.lineTo(wb * 0.5, 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(-wt * 0.5, shaftTop);
+      ctx.lineTo(0, -sh);
+      ctx.lineTo(wt * 0.5, shaftTop);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = lit;
+      ctx.beginPath();
+      ctx.moveTo(-wb * 0.5, 0);
+      ctx.lineTo(-wt * 0.5, shaftTop);
+      ctx.lineTo(0, -sh);
+      ctx.lineTo(-wt * 0.18, shaftTop);
+      ctx.lineTo(-wb * 0.2, 0);
+      ctx.closePath();
+      ctx.fill();
+    }
     ctx.restore();
   }
 

@@ -45,6 +45,10 @@ export class Game {
 
   /** Distance scoring origin; resets to 200 on menu, handoff X when play starts. */
   private startX = 200;
+  /** Preview glide origin on menu / game-over attract screens. */
+  private attractGlideX = 200;
+  /** Time origin for attract-screen preview glide. */
+  private attractGlideStartTime = 0;
   private distance = 0;
   private bonus = 0;
   private perfectCount = 0;
@@ -52,8 +56,6 @@ export class Game {
   private wind = 0;
   private newBest = false;
   private hintTimer = 0;
-  /** Countdown while the player cruises before full gameplay engages. */
-  private runWarmup = 0;
 
   // True while a tap that began on the dash button is held (suppresses tether).
   private dashLatch = false;
@@ -101,21 +103,23 @@ export class Game {
     this.seedAndReset();
     this.state = "menu";
     this.timeInState = 0;
-    this.player.animateMenuGlide(0, 0, this.startX);
+    this.attractGlideX = this.startX;
+    this.attractGlideStartTime = 0;
+    this.player.animateMenuGlide(0, 0, this.attractGlideX);
     this.camera.snapTo(this.player.x, this.player.y);
     this.sound.setWind(0);
   }
 
   private startRun() {
-    if (this.state === "menu") {
-      // Sync to the exact menu preview pose for this moment, then continue in place.
-      this.player.animateMenuGlide(0, this.time, 200);
+    if (this.state === "menu" || this.state === "gameover") {
+      // Sync to the exact preview pose, then continue in place — no world reset.
+      const glideTime = this.time - this.attractGlideStartTime;
+      this.player.animateMenuGlide(0, glideTime, this.attractGlideX);
       this.startX = this.player.x;
       this.player.beginRun();
       this.resetRunStats();
       this.state = "playing";
       this.timeInState = 0;
-      this.runWarmup = CONFIG.runWarmup;
       this.sound.resume();
       return;
     }
@@ -123,7 +127,6 @@ export class Game {
     this.seedAndReset();
     this.state = "playing";
     this.timeInState = 0;
-    this.runWarmup = CONFIG.runWarmup;
     this.sound.resume();
   }
 
@@ -144,10 +147,10 @@ export class Game {
     this.storage.setCharacter(next);
     this.player.characterId = next;
     this.player.trail.length = 0;
-    if (this.state === "menu") {
+    if (this.isAttractScreen()) {
       this.player.trail.length = 0;
-      this.player.x = this.startX;
-      this.player.animateMenuGlide(0, this.time, this.startX);
+      this.player.x = this.attractGlideX;
+      this.player.animateMenuGlide(0, this.time - this.attractGlideStartTime, this.attractGlideX);
     }
   }
 
@@ -202,6 +205,41 @@ export class Game {
         gravity: 300,
         additive: false,
       });
+    }
+    this.player.trail.length = 0;
+    this.attractGlideX = this.player.x;
+    this.attractGlideStartTime = this.time;
+    this.player.animateMenuGlide(0, 0, this.attractGlideX);
+  }
+
+  private isAttractScreen(): boolean {
+    return this.state === "menu" || this.state === "gameover";
+  }
+
+  private handleAttractInput() {
+    if (
+      this.input.tapped.has("KeyC") ||
+      this.input.tapped.has("ArrowRight")
+    ) {
+      this.cycleCharacter(1);
+      return;
+    }
+    if (this.input.tapped.has("ArrowLeft")) {
+      this.cycleCharacter(-1);
+      return;
+    }
+    if (this.input.pointerJustDown) {
+      if (this.hitCharacterCycle(-1)) {
+        this.cycleCharacter(-1);
+        return;
+      }
+      if (this.hitCharacterCycle(1)) {
+        this.cycleCharacter(1);
+        return;
+      }
+      if (this.hitPlayButton() || this.input.pressed) {
+        this.startRun();
+      }
     }
   }
 
@@ -266,37 +304,11 @@ export class Game {
 
   private handleStateInput() {
     if (this.state === "menu") {
-      if (
-        this.input.tapped.has("KeyC") ||
-        this.input.tapped.has("ArrowRight")
-      ) {
-        this.cycleCharacter(1);
-        return;
-      }
-      if (this.input.tapped.has("ArrowLeft")) {
-        this.cycleCharacter(-1);
-        return;
-      }
-      if (this.input.pointerJustDown) {
-        if (this.hitCharacterCycle(-1)) {
-          this.cycleCharacter(-1);
-          return;
-        }
-        if (this.hitCharacterCycle(1)) {
-          this.cycleCharacter(1);
-          return;
-        }
-        if (this.hitPlayButton() || this.input.pressed) {
-          this.startRun();
-        }
-        return;
-      }
+      this.handleAttractInput();
       return;
     }
     if (this.state === "gameover") {
-      if (this.timeInState > 0.6 && (this.input.pressed || this.input.pointerJustDown)) {
-        this.startRun();
-      }
+      this.handleAttractInput();
       return;
     }
 
@@ -338,7 +350,6 @@ export class Game {
 
   private tryDash() {
     if (this.state !== "playing") return;
-    if (this.runWarmup > 0) return;
     if (this.wind < CONFIG.wind.dashCost) return;
     if (this.player.startDash()) {
       this.wind = 0;
@@ -350,18 +361,13 @@ export class Game {
 
     this.time += dt;
 
-    if (this.state === "menu") {
-      this.player.animateMenuGlide(dt, this.time, this.startX);
+    if (this.state === "menu" || this.state === "gameover") {
+      const glideTime = this.time - this.attractGlideStartTime;
+      this.player.animateMenuGlide(dt, glideTime, this.attractGlideX);
       this.camera.follow(this.player.x, this.player.y, 280, dt);
       this.world.ensure(this.camera.right);
       this.world.cull(this.camera.left);
       this.world.update(dt, this.time);
-      return;
-    }
-
-    if (this.state === "gameover") {
-      this.world.update(dt, this.time);
-      this.camera.follow(this.player.x, this.player.y, this.player.speed * 0.2, dt);
       return;
     }
 
@@ -404,21 +410,10 @@ export class Game {
     }
 
     // --- Playing ---
-    const warmup = this.runWarmup > 0;
-    if (warmup) {
-      this.runWarmup = Math.max(0, this.runWarmup - dt);
-      if (this.runWarmup === 0) {
-        this.startX = this.player.x;
-        this.hintTimer = 0;
-      }
-    } else {
-      this.hintTimer += dt;
-    }
-
+    this.hintTimer += dt;
     this.world.ensure(this.camera.right);
 
-    const holdForTether =
-      !warmup && this.input.holding && !this.dashLatch;
+    const holdForTether = this.input.holding && !this.dashLatch;
     this.player.step(dt, holdForTether, this.world.anchors, this.time);
 
     const dashing = this.player.state === "dash";
@@ -435,34 +430,32 @@ export class Game {
         : undefined
     );
 
-    if (!warmup) {
-      this.handlePlayerEvents();
-      this.handleSkim(dt);
-      this.handleCollectibles();
-      this.handleHazards();
+    this.handlePlayerEvents();
+    this.handleSkim(dt);
+    this.handleCollectibles();
+    this.handleHazards();
 
-      // Cloud-sea death floor — skid to a stop before run over.
-      if (this.player.y >= this.world.seaLevel) {
-        this.startGroundCrash();
-        return;
-      }
-
-      // Scoring + objectives tied to distance.
-      this.distance = Math.max(
-        0,
-        (this.player.x - this.startX) * CONFIG.world.metersPerPixel
-      );
-      this.objectives.set("distance", this.distance);
-      this.objectives.set("skim", this.skimMeters);
-
-      this.wind = clamp(this.wind, 0, CONFIG.wind.max);
+    // Cloud-sea death floor — skid to a stop before run over.
+    if (this.player.y >= this.world.seaLevel) {
+      this.startGroundCrash();
+      return;
     }
+
+    // Scoring + objectives tied to distance.
+    this.distance = Math.max(
+      0,
+      (this.player.x - this.startX) * CONFIG.world.metersPerPixel
+    );
+    this.objectives.set("distance", this.distance);
+    this.objectives.set("skim", this.skimMeters);
+
+    this.wind = clamp(this.wind, 0, CONFIG.wind.max);
 
     this.camera.follow(this.player.x, this.player.y, this.player.speed, dt);
     this.world.cull(this.camera.left);
 
     // Highlight the nearest grab candidate so the route reads clearly.
-    if (!warmup && this.player.state === "glide") {
+    if (this.player.state === "glide") {
       const target = this.player.findGrabTarget(this.world.anchors);
       if (target) target.highlight = 1;
     }
@@ -636,6 +629,8 @@ export class Game {
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
 
     this.background.drawSky(ctx, cam, this.time);
+    this.background.drawSkyClouds(ctx, cam, this.time);
+    this.background.drawMountains(ctx, cam);
     this.background.drawFar(ctx, cam, this.time);
     this.background.drawMid(ctx, cam);
     this.background.drawSea(ctx, cam, this.time);
@@ -650,9 +645,10 @@ export class Game {
       this.state === "menu" ||
       this.state === "playing" ||
       this.state === "paused" ||
-      this.state === "crashing"
+      this.state === "crashing" ||
+      this.state === "gameover"
     ) {
-      this.player.draw(ctx, this.time, this.state === "menu");
+      this.player.draw(ctx, this.time, this.isAttractScreen());
     }
     this.particles.draw(ctx);
     this.hud.drawWorldPopups(ctx);
@@ -668,7 +664,7 @@ export class Game {
   // and HUD legibility.
   private drawVignette(ctx: CanvasRenderingContext2D, cam: Camera) {
     const { w, h } = cam;
-    const onMenu = this.state === "menu";
+    const onMenu = this.isAttractScreen();
     const edge = onMenu ? 0.18 : 0.42 - theme.night * 0.14;
     const g = ctx.createRadialGradient(
       w * 0.5,
@@ -707,8 +703,7 @@ export class Game {
       newBest: this.newBest,
       perfectCount: this.perfectCount,
       hint: "Hold to swing  ·  release to slingshot",
-      hintAlpha:
-        this.state === "playing" && this.runWarmup <= 0 ? hintAlpha : 0,
+      hintAlpha: this.state === "playing" ? hintAlpha : 0,
       character: this.storage.data.character,
       characterName: characterName(this.storage.data.character),
     };

@@ -75,9 +75,6 @@ export const CONFIG = {
     collectPoints: 60,
     skimPointsPerSec: 40,
   },
-
-  /** Seconds of free glide at run start before tether, hazards, and scoring engage. */
-  runWarmup: 1,
 } as const;
 
 // Minimalist dawn-biome palette. One biome for the MVP.

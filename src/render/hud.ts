@@ -105,8 +105,8 @@ export class Hud {
       ctx.fillRect(0, 0, cam.w, cam.h);
     }
 
-    if (d.state === "menu") return this.drawMenu(ctx, cam, d);
-    if (d.state === "gameover") return this.drawGameOver(ctx, cam, d);
+    if (d.state === "menu") return this.drawAttractScreen(ctx, cam, d, "menu");
+    if (d.state === "gameover") return this.drawAttractScreen(ctx, cam, d, "gameover");
     if (d.state === "crashing") return;
 
     const paused = d.state === "paused";
@@ -315,7 +315,12 @@ export class Hud {
     ctx.textBaseline = "top";
   }
 
-  private drawMenu(ctx: CanvasRenderingContext2D, cam: Camera, d: HudData) {
+  private drawAttractScreen(
+    ctx: CanvasRenderingContext2D,
+    cam: Camera,
+    d: HudData,
+    mode: "menu" | "gameover"
+  ) {
     const { w, h } = cam;
     const pulse = 0.82 + Math.sin(performance.now() / 420) * 0.18;
 
@@ -338,16 +343,56 @@ export class Hud {
     ctx.textBaseline = "top";
     const titleSize = clamp(w * 0.105, 54, 82);
     this.text(ctx, "GALE", w / 2, h * 0.09, titleSize, "900", PALETTE.text, true);
-    this.text(
-      ctx,
-      "SKY-SAILING",
-      w / 2,
-      h * 0.09 + titleSize * 0.78,
-      12,
-      "700",
-      hexA(PALETTE.anchorPerfect, 0.88),
-      true
-    );
+
+    const subtitleY = h * 0.09 + titleSize * 0.78;
+    if (mode === "menu") {
+      this.text(
+        ctx,
+        "SKY-SAILING",
+        w / 2,
+        subtitleY,
+        12,
+        "700",
+        hexA(PALETTE.anchorPerfect, 0.88),
+        true
+      );
+    } else {
+      const scoreSize = clamp(w * 0.055, 32, 48);
+      const statsY = subtitleY + scoreSize * 1.05;
+      if (d.newBest) {
+        const bestPulse = 0.6 + Math.sin(performance.now() / 200) * 0.4;
+        this.text(
+          ctx,
+          "★ NEW BEST ★",
+          w / 2,
+          subtitleY - scoreSize * 0.55,
+          13,
+          "800",
+          hexA(PALETTE.anchorPerfect, bestPulse),
+          true
+        );
+      }
+      this.text(
+        ctx,
+        `${Math.floor(d.score)} pts  ·  ${Math.floor(d.distance)} m`,
+        w / 2,
+        subtitleY,
+        scoreSize,
+        "800",
+        hexA(PALETTE.anchor, 0.98),
+        true
+      );
+      this.text(
+        ctx,
+        `${d.perfectCount} perfect  ·  ${d.objectivesDone}/${d.objectives.length} objectives`,
+        w / 2,
+        statsY,
+        clamp(w * 0.022, 15, 18),
+        "700",
+        PALETTE.text,
+        true
+      );
+    }
 
     // Character picker — above the play button.
     const pickY = h * 0.68;
@@ -447,58 +492,6 @@ export class Hud {
       11,
       "600",
       hexA(PALETTE.textDim, 0.75)
-    );
-  }
-
-  private drawGameOver(ctx: CanvasRenderingContext2D, cam: Camera, d: HudData) {
-    const cx = cam.w / 2;
-    const cy = cam.h * 0.3;
-    ctx.textAlign = "center";
-
-    ctx.fillStyle = hexA("#0a0d24", 0.45);
-    ctx.fillRect(0, 0, cam.w, cam.h);
-
-    this.text(ctx, "RUN OVER", cx, cy, 52, "900", PALETTE.text, true);
-    if (d.newBest) {
-      const pulse = 0.6 + Math.sin(performance.now() / 200) * 0.4;
-      this.text(
-        ctx,
-        "★ NEW BEST ★",
-        cx,
-        cy + 58,
-        20,
-        "800",
-        hexA(PALETTE.anchorPerfect, pulse),
-        true
-      );
-    }
-
-    const sy = cy + 110;
-    this.text(ctx, `${Math.floor(d.score)}`, cx, sy, 60, "900", PALETTE.anchor, true);
-    this.text(ctx, "SCORE", cx, sy + 64, 13, "700", PALETTE.textDim, true);
-
-    const statY = sy + 104;
-    this.text(
-      ctx,
-      `${Math.floor(d.distance)} m flown   ·   ${d.perfectCount} perfect   ·   ${d.objectivesDone}/${d.objectives.length} objectives`,
-      cx,
-      statY,
-      15,
-      "600",
-      PALETTE.textDim,
-      true
-    );
-
-    const pulse = 0.6 + Math.sin(performance.now() / 320) * 0.4;
-    this.text(
-      ctx,
-      "tap / hold to fly again",
-      cx,
-      cam.h * 0.82,
-      22,
-      "700",
-      hexA(PALETTE.text, pulse),
-      true
     );
   }
 
