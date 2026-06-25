@@ -18,7 +18,7 @@ function hash01(i: number): number {
 // Odyssey. Each region swaps the mid-ground silhouette features (the sky and
 // dunes keep re-grading with the time of day on top). Regions cycle by world
 // distance and cross-fade at their seams.
-const REGION_KINDS = ["sanctuary", "forest", "peaks", "monuments"] as const;
+const REGION_KINDS = ["sanctuary", "forest", "village", "peaks", "monuments"] as const;
 type RegionKind = (typeof REGION_KINDS)[number];
 const REGION_LEN = 3000; // world units per region band
 
@@ -596,29 +596,70 @@ export class Background {
     const spacing = 300;
     const baseY = h * 0.84 - cam.y * factor;
     const offset = cam.x * factor;
-    const startIdx = Math.floor((offset - w) / spacing);
-    const endIdx = Math.ceil((offset + w) / spacing);
+    const startIdx = Math.floor((offset - w) / spacing) - 1;
+    const endIdx = Math.ceil((offset + w) / spacing) + 1;
     const base = mixColor(theme.mid, theme.fog, 0.15);
     const accent = mixColor(theme.mid, theme.skyHorizon, 0.2);
+
+    // One continuous, gently rolling ground line shared by every feature, as a
+    // smooth function of world X so neighbouring cells line up seamlessly.
+    const roll = (wx: number) =>
+      Math.sin(wx * 0.0017) * 15 +
+      Math.sin(wx * 0.0043 + 1.3) * 8 +
+      Math.sin(wx * 0.0111 + 0.7) * 3;
+    const screenX = (wx: number) => wx - offset + w * 0.5;
+    const crestY = (wx: number) => baseY + roll(wx);
+
+    // Fill the ground far below the crest so it always runs into the dune sea —
+    // features stand on solid land instead of floating on cut-off platforms.
+    const left = startIdx * spacing;
+    const right = endIdx * spacing;
+    const grad = ctx.createLinearGradient(0, baseY - 40, 0, h);
+    grad.addColorStop(0, mixColor(base, theme.skyGlow, 0.12));
+    grad.addColorStop(0.22, base);
+    grad.addColorStop(1, mixColor(base, theme.fog, 0.4));
+    ctx.save();
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(screenX(left), h * 3);
+    for (let wx = left; wx <= right; wx += 36) ctx.lineTo(screenX(wx), crestY(wx));
+    ctx.lineTo(screenX(right), h * 3);
+    ctx.closePath();
+    ctx.fill();
+    // Soft sky-lit rim along the crest.
+    ctx.strokeStyle = mixColor(base, theme.skyGlow, 0.24);
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    for (let wx = left; wx <= right; wx += 36) {
+      const x = screenX(wx);
+      const y = crestY(wx);
+      if (wx === left) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.restore();
 
     for (let i = startIdx; i <= endIdx; i++) {
       const r1 = hash01(i * 5 + 3);
       const r2 = hash01(i * 5 + 11);
-      if (r1 < 0.32) continue; // gaps between features
       const worldX = i * spacing;
       const { kind, fade } = this.regionAt(worldX);
       if (fade <= 0.02) continue;
+      // Forest is a continuous treeline (every cell); other biomes leave gaps.
+      if (kind !== "forest" && r1 < 0.32) continue;
 
-      const sx = i * spacing - offset + w * 0.5;
-      const sy = baseY + (r1 - 0.5) * 40;
+      const sx = screenX(worldX);
+      const sy = crestY(worldX); // sit on the shared ground line
       const scale = 0.85 + r2 * 0.5;
+      // Local rolling ground level, relative to this feature's origin.
+      const groundY = (lx: number) => crestY(worldX + lx) - sy;
 
       ctx.save();
       ctx.globalAlpha = fade;
       if (kind === "forest") {
         const col = mixColor(base, "#1f4d3e", 0.4); // teal-green pines
         const lit = mixColor(col, theme.skyGlow, 0.25);
-        this.drawPineCluster(ctx, sx, sy, scale, i, col, lit);
+        this.drawPineCluster(ctx, sx, sy, scale, i, col, lit, groundY);
       } else if (kind === "peaks") {
         const col = mixColor(base, theme.far, 0.4);
         const lit = mixColor(col, theme.cloud, 0.55);
@@ -628,7 +669,9 @@ export class Background {
         // the monoliths read clearly against the mountains behind them.
         const col = mixColor(theme.mid, "#4a3a3e", 0.55);
         const lit = mixColor(col, theme.skyGlow, 0.32);
-        this.drawMonolith(ctx, sx, sy, scale, i, col, lit);
+        this.drawMonolith(ctx, sx, sy, scale, i, col, lit, groundY);
+      } else if (kind === "village") {
+        this.drawVillage(ctx, sx, sy, scale, i, base, accent);
       } else {
         const kr = r2 > 0.55 ? "arch" : r2 > 0.3 ? "temple" : "pillars";
         this.drawRuin(ctx, sx, sy, scale, i, kr, base, accent);
@@ -1625,6 +1668,132 @@ export class Background {
     }
   }
 
+  // --- Village region: a cluster of little pitched-roof houses on a floating
+  // rock. Roof ridges catch the sky like the ruins, and the windows warm up
+  // after dark so the hamlet feels lived-in. ---
+  private drawVillage(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    scale: number,
+    seed: number,
+    color: string,
+    accent: string
+  ) {
+    ctx.save();
+    ctx.translate(x, y);
+
+    // Floating rock pedestal — same silhouette as the ruins for cohesion.
+    const pw = 55 * scale;
+    const ph = 14 * scale;
+    ctx.fillStyle = hexA(color, 0.9);
+    ctx.beginPath();
+    ctx.moveTo(-pw, 0);
+    ctx.quadraticCurveTo(-pw * 0.4, -ph * 1.3, 0, -ph);
+    ctx.quadraticCurveTo(pw * 0.4, -ph * 1.3, pw, 0);
+    ctx.quadraticCurveTo(pw * 0.3, ph * 1.8, 0, ph * 2.2);
+    ctx.quadraticCurveTo(-pw * 0.3, ph * 1.8, -pw, 0);
+    ctx.closePath();
+    ctx.fill();
+
+    const seam = 1.5 * scale;
+    // Walls pick up the cool stone; roofs lean warm toward the horizon glow.
+    const wallCol = mixColor(color, theme.skyGlow, 0.06);
+    const wallLit = mixColor(wallCol, theme.skyGlow, 0.22);
+    const roofCol = mixColor(color, theme.skyHorizon, 0.22);
+    const roofLit = mixColor(roofCol, theme.skyGlow, 0.3);
+
+    // Two or three houses staggered across the plateau top, drawn outermost
+    // first so neighbours overlap toward the centre.
+    const three = hash01(seed * 17) > 0.45;
+    const slots = three ? [-1, 1, 0] : [-0.65, 0.65];
+    for (let k = 0; k < slots.length; k++) {
+      const t = slots[k];
+      const hx = t * 19 * scale;
+      const hs = (0.82 + hash01(seed * 7 + k * 5) * 0.5) * scale;
+      const surfaceY = this.plateauTopY(hx, pw, ph, 1.3) + seam;
+      this.drawHouse(
+        ctx,
+        hx,
+        surfaceY,
+        hs,
+        seed * 31 + k * 13,
+        wallCol,
+        wallLit,
+        roofCol,
+        roofLit,
+        accent
+      );
+    }
+
+    ctx.restore();
+  }
+
+  private drawHouse(
+    ctx: CanvasRenderingContext2D,
+    cx: number,
+    baseY: number,
+    s: number,
+    seed: number,
+    wallCol: string,
+    wallLit: string,
+    roofCol: string,
+    roofLit: string,
+    accent: string
+  ) {
+    const hw = (8 + hash01(seed * 3) * 3) * s; // half wall width
+    const wallH = (13 + hash01(seed * 5) * 8) * s;
+    const roofH = (9 + hash01(seed * 7) * 5) * s;
+    const eave = hw * 0.3;
+    const wallTop = baseY - wallH;
+
+    // Wall, with a thin sky-lit cap along its upper edge.
+    ctx.fillStyle = hexA(wallCol, 0.96);
+    ctx.fillRect(cx - hw, wallTop, hw * 2, wallH);
+    ctx.fillStyle = hexA(wallLit, 0.9);
+    ctx.fillRect(cx - hw, wallTop, hw * 2, 1.1 * s);
+
+    // Pitched roof with eaves.
+    ctx.fillStyle = hexA(roofCol, 0.97);
+    ctx.beginPath();
+    ctx.moveTo(cx - hw - eave, wallTop);
+    ctx.lineTo(cx, wallTop - roofH);
+    ctx.lineTo(cx + hw + eave, wallTop);
+    ctx.closePath();
+    ctx.fill();
+    // Lit ridge on the sun side (upper-left), echoing the rest of the scene.
+    ctx.strokeStyle = hexA(roofLit, 0.95);
+    ctx.lineWidth = 1.3 * s;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(cx - hw - eave, wallTop);
+    ctx.lineTo(cx, wallTop - roofH);
+    ctx.stroke();
+
+    // Door, tucked to one side.
+    const dw = hw * 0.5;
+    const dh = wallH * 0.52;
+    const doorX = cx - hw * 0.42;
+    ctx.fillStyle = hexA(mixColor(wallCol, theme.mid, 0.5), 0.92);
+    ctx.fillRect(doorX - dw * 0.5, baseY - dh, dw, dh);
+
+    // Window — a quiet sky-lit pane by day, a warm glow after dark.
+    if (hw > 6.5 * s) {
+      const warm = 0.16 + theme.night * 0.72;
+      const winCol = mixColor("#ffce8a", theme.skyGlow, 0.2);
+      const ww = hw * 0.4;
+      const winX = cx + hw * 0.4 - ww * 0.5;
+      const winY = wallTop + wallH * 0.26;
+      ctx.fillStyle = hexA(mixColor(accent, theme.mid, 0.4), 0.6);
+      ctx.fillRect(winX - 0.8 * s, winY - 0.8 * s, ww + 1.6 * s, ww + 1.6 * s);
+      ctx.fillStyle = hexA(winCol, warm);
+      ctx.fillRect(winX, winY, ww, ww);
+    }
+
+    ctx.lineCap = "butt";
+  }
+
   // --- Forest region: a knoll crowned with layered fir trees. ---
 
   private drawFir(
@@ -1671,34 +1840,37 @@ export class Background {
     scale: number,
     seed: number,
     color: string,
-    lit: string
+    lit: string,
+    groundY: (localX: number) => number
   ) {
     ctx.save();
     ctx.translate(sx, baseY);
-    const mw = 64 * scale;
+    // Spread firs across a wide span; with every cell planted they overlap
+    // into one continuous treeline. They stand on the shared ground line, so
+    // no per-cluster platform can float free of the land.
+    const mw = 180 * scale;
 
-    // Low ground knoll the trees grow from.
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(-mw, 8 * scale);
-    ctx.quadraticCurveTo(-mw * 0.4, -10 * scale, 0, -9 * scale);
-    ctx.quadraticCurveTo(mw * 0.45, -7 * scale, mw, 8 * scale);
-    ctx.lineTo(mw, 60 * scale);
-    ctx.lineTo(-mw, 60 * scale);
-    ctx.closePath();
-    ctx.fill();
+    // Back row — smaller, hazier firs receding toward the fog for depth.
+    const back = mixColor(color, theme.fog, 0.34);
+    const backLit = mixColor(back, theme.skyGlow, 0.2);
+    const nb = 6 + ((hash01(seed * 7) * 5) | 0);
+    for (let t = 0; t < nb; t++) {
+      const fx = (hash01(seed * 11 + t * 3) - 0.5) * mw * 1.95;
+      const fh = (32 + hash01(seed * 17 + t) * 30) * scale;
+      this.drawFir(ctx, fx, groundY(fx) + 2 * scale, fh, back, backLit);
+    }
 
-    const n = 3 + ((hash01(seed * 7) * 4) | 0);
-    // Draw back-to-front (taller, centred trees behind) for overlap depth.
+    // Front row — taller, denser firs whose canopies overlap (tall-to-short).
+    const nf = 7 + ((hash01(seed * 13) * 5) | 0);
     const trees: { fx: number; fh: number }[] = [];
-    for (let t = 0; t < n; t++) {
-      const fx = (hash01(seed * 11 + t * 3) - 0.5) * mw * 1.7;
-      const fh = (46 + hash01(seed * 13 + t) * 62) * scale;
+    for (let t = 0; t < nf; t++) {
+      const fx = (hash01(seed * 23 + t * 5) - 0.5) * mw * 1.85;
+      const fh = (50 + hash01(seed * 29 + t) * 66) * scale;
       trees.push({ fx, fh });
     }
     trees.sort((a, b) => b.fh - a.fh);
     for (const tr of trees) {
-      this.drawFir(ctx, tr.fx, -4 * scale, tr.fh, color, lit);
+      this.drawFir(ctx, tr.fx, groundY(tr.fx) + 2 * scale, tr.fh, color, lit);
     }
     ctx.restore();
   }
@@ -1765,21 +1937,13 @@ export class Background {
     scale: number,
     seed: number,
     color: string,
-    lit: string
+    lit: string,
+    groundY: (localX: number) => number
   ) {
     ctx.save();
-    ctx.translate(sx, baseY);
-
-    // Low rocky mound the stones are planted in (kept short, not a slab).
-    const mw = 40 * scale;
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(-mw, 4 * scale);
-    ctx.quadraticCurveTo(0, -6 * scale, mw, 4 * scale);
-    ctx.lineTo(mw, 30 * scale);
-    ctx.lineTo(-mw, 30 * scale);
-    ctx.closePath();
-    ctx.fill();
+    // Plant the stones on the shared ground line (no separate base slab, so
+    // nothing floats when the camera drops).
+    ctx.translate(sx, baseY + groundY(0));
 
     const type = (hash01(seed * 3) * 3) | 0;
 
