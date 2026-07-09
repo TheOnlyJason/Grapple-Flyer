@@ -11,15 +11,47 @@
       name="description"
       content="GALE — a kinetic sky-sailing endless runner. Glide, swing from anchors, and slingshot through a broken sky-world."
     />
+
+    <!-- Installable / standalone on phones (Add to Home Screen) -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="GALE" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+
     <title>GALE — Sky-Sailing Runner</title>
-    <script
-      async
-      src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7229610250001171"
-      crossorigin="anonymous"
-    ></script>
+    <script>
+      // Web-only ads. AdSense is a website product and is not permitted inside
+      // a native app wrapper, so the iOS (Capacitor) build skips it. Use Google
+      // AdMob for in-app ads instead. See RELEASE-iOS.md.
+      (function () {
+        var cap = window.Capacitor;
+        var isNative = !!(
+          cap &&
+          (typeof cap.isNativePlatform === "function"
+            ? cap.isNativePlatform()
+            : cap.platform && cap.platform !== "web")
+        );
+        if (isNative) return;
+        var s = document.createElement("script");
+        s.async = true;
+        s.src =
+          "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7229610250001171";
+        s.crossOrigin = "anonymous";
+        document.head.appendChild(s);
+      })();
+    </script>
     <style>
       :root {
         color-scheme: dark;
+        /* Expose the notch / home-indicator insets so main.ts can read them
+           back and keep the HUD out from under the hardware. */
+        --sat: env(safe-area-inset-top, 0px);
+        --sar: env(safe-area-inset-right, 0px);
+        --sab: env(safe-area-inset-bottom, 0px);
+        --sal: env(safe-area-inset-left, 0px);
       }
       * {
         margin: 0;
@@ -66,11 +98,75 @@
         opacity: 0;
         pointer-events: none;
       }
+
+      /* GALE is a horizontal runner — nudge phones into landscape. Shown only
+         on touch devices held in portrait; auto-hides the moment they turn. */
+      #rotate {
+        display: none;
+      }
+      @media (orientation: portrait) and (pointer: coarse) {
+        #rotate {
+          position: fixed;
+          inset: 0;
+          z-index: 20;
+          display: grid;
+          place-items: center;
+          padding: 24px;
+          text-align: center;
+          background: linear-gradient(180deg, #1a2150 0%, #0a0d24 100%);
+          color: #cdd6ff;
+        }
+      }
+      .rotate-inner {
+        display: grid;
+        justify-items: center;
+        gap: 22px;
+      }
+      .rotate-phone {
+        width: 46px;
+        height: 82px;
+        border: 3px solid #cdd6ff;
+        border-radius: 12px;
+        transform-origin: center;
+        animation: rotate-hint 2s ease-in-out infinite;
+      }
+      .rotate-phone::after {
+        content: "";
+        position: absolute;
+      }
+      @keyframes rotate-hint {
+        0%,
+        25% {
+          transform: rotate(0deg);
+        }
+        55%,
+        100% {
+          transform: rotate(-90deg);
+        }
+      }
+      .rotate-title {
+        letter-spacing: 0.32em;
+        font-size: 13px;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+      .rotate-sub {
+        font-size: 12px;
+        letter-spacing: 0.05em;
+        color: #8f9bd0;
+      }
     </style>
   </head>
   <body>
     <canvas id="game"></canvas>
     <div id="boot">GALE</div>
+    <div id="rotate">
+      <div class="rotate-inner">
+        <div class="rotate-phone"></div>
+        <div class="rotate-title">Rotate your device</div>
+        <div class="rotate-sub">GALE plays best in landscape</div>
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

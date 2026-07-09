@@ -1,5 +1,6 @@
-import { theme } from "../render/theme";
+import { theme, parseColor } from "../render/theme";
 import { TAU } from "../core/math";
+import { makeScratch } from "../render/rcache";
 
 export type AnchorKind = "normal" | "moving";
 
@@ -58,15 +59,18 @@ export class Anchor {
     // night so anchors read like lanterns; brighter when a grab candidate.
     const aura = 22 + emphasis * 30 + this.pulse * 28;
     const baseGlow = 0.26 + theme.night * 0.18 + emphasis * 0.4;
+    if (!auraCyan) auraCyan = bakeGlowSprite(theme.anchor, AURA_R);
+    if (!auraGold) auraGold = bakeGlowSprite(theme.anchorPerfect, AURA_R);
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
-    const g = ctx.createRadialGradient(this.x, this.y, 2, this.x, this.y, aura);
-    g.addColorStop(0, hexA(core, baseGlow));
-    g.addColorStop(1, hexA(core, 0));
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, aura, 0, TAU);
-    ctx.fill();
+    ctx.globalAlpha = baseGlow;
+    ctx.drawImage(
+      perfect ? auraGold : auraCyan,
+      this.x - aura,
+      this.y - aura,
+      aura * 2,
+      aura * 2
+    );
     ctx.restore();
 
     // Rotating ring (gives anchors a living, mechanical feel).
@@ -113,18 +117,34 @@ export class Anchor {
 
 // Colour + alpha -> rgba() string. Handles both "#rrggbb" and "rgb()/rgba()"
 // inputs so it works with static palettes and the live (interpolated) theme.
+// Called from nearly every draw routine, so it parses without regexes or
+// intermediate allocations (this is a measured hot path on mobile WebKit).
 export function hexA(color: string, a: number): string {
-  let r: number, g: number, b: number;
-  if (color[0] === "#") {
-    const h = color.slice(1);
-    r = parseInt(h.slice(0, 2), 16);
-    g = parseInt(h.slice(2, 4), 16);
-    b = parseInt(h.slice(4, 6), 16);
-  } else {
-    const m = color.match(/[\d.]+/g);
-    r = m ? +m[0] : 0;
-    g = m ? +m[1] : 0;
-    b = m ? +m[2] : 0;
-  }
+  const [r, g, b] = parseColor(color);
   return `rgba(${r},${g},${b},${a})`;
 }
+
+// --- Glow sprites ------------------------------------------------------------
+// The aura colours (theme.anchor / theme.anchorPerfect / theme.collectible)
+// are PALETTE constants — never theme-cycled — so the radial 1->0 falloff is
+// baked once per colour instead of allocating a createRadialGradient every
+// frame. drawImage scaled to the live radius + globalAlpha for intensity
+// composites identically under 'lighter'. Also used by collectible.ts.
+export function bakeGlowSprite(color: string, r: number): HTMLCanvasElement {
+  const { canvas, ctx } = makeScratch(r * 2, r * 2);
+  const g = ctx.createRadialGradient(r, r, 0, r, r, r);
+  g.addColorStop(0, hexA(color, 1));
+  g.addColorStop(1, hexA(color, 0));
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(r, r, r, 0, TAU);
+  ctx.fill();
+  return canvas;
+}
+
+// Baked at 2x the max on-screen aura radius (~80 CSS px; DPR is clamped to 2)
+// so the bloom stays crisp. Lazy — baked on the first draw call, never at
+// import time (the headless harnesses mock document before the Game exists).
+const AURA_R = 160;
+let auraCyan: HTMLCanvasElement | null = null;
+let auraGold: HTMLCanvasElement | null = null;

@@ -162,13 +162,41 @@ export class World {
     }
   }
 
+  // In-place compaction (single write-index pass per array) — culling runs
+  // every frame, so it must not allocate the way Array.filter does.
   cull(cameraLeft: number) {
     const limit = cameraLeft - CULL_BUFFER;
-    this.anchors = this.anchors.filter((a) => a.x > limit);
-    this.clouds = this.clouds.filter((c) => c.x + c.rx > limit);
-    this.collectibles = this.collectibles.filter(
-      (c) => c.baseX > limit && !c.collected
-    );
-    this.hazards = this.hazards.filter((h) => h.x + h.rx > limit && !h.gone);
+
+    const anchors = this.anchors;
+    let w = 0;
+    for (let i = 0; i < anchors.length; i++) {
+      const a = anchors[i];
+      if (a.x > limit) anchors[w++] = a;
+    }
+    anchors.length = w;
+
+    const clouds = this.clouds;
+    w = 0;
+    for (let i = 0; i < clouds.length; i++) {
+      const c = clouds[i];
+      if (c.x + c.rx > limit) clouds[w++] = c;
+    }
+    clouds.length = w;
+
+    const collectibles = this.collectibles;
+    w = 0;
+    for (let i = 0; i < collectibles.length; i++) {
+      const c = collectibles[i];
+      if (c.baseX > limit && !c.collected) collectibles[w++] = c;
+    }
+    collectibles.length = w;
+
+    const hazards = this.hazards;
+    w = 0;
+    for (let i = 0; i < hazards.length; i++) {
+      const h = hazards[i];
+      if (h.x + h.rx > limit && !h.gone) hazards[w++] = h;
+    }
+    hazards.length = w;
   }
 }

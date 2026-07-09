@@ -1,5 +1,4 @@
 import { TAU } from "../core/math";
-import { hexA } from "../entities/anchor";
 
 interface Particle {
   x: number;
@@ -100,11 +99,19 @@ export class Particles {
   }
 
   draw(ctx: CanvasRenderingContext2D) {
+    // fillStyle is set per colour-run and the fade rides globalAlpha (a
+    // number) — no per-particle rgba string building. Bursts share a colour,
+    // so the style rarely changes mid-loop.
+    let lastColor = "";
     // Non-additive pass (debris, spray).
     for (const p of this.pool) {
       if (!p.active || p.additive) continue;
       const t = p.life / p.maxLife;
-      ctx.fillStyle = hexA(p.color, t);
+      if (p.color !== lastColor) {
+        lastColor = p.color;
+        ctx.fillStyle = p.color;
+      }
+      ctx.globalAlpha = t;
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.size * (0.4 + t * 0.6), 0, TAU);
       ctx.fill();
@@ -112,15 +119,21 @@ export class Particles {
     // Additive bloom pass (energy, sparks).
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
+    lastColor = "";
     for (const p of this.pool) {
       if (!p.active || !p.additive) continue;
       const t = p.life / p.maxLife;
-      ctx.fillStyle = hexA(p.color, t * 0.9);
+      if (p.color !== lastColor) {
+        lastColor = p.color;
+        ctx.fillStyle = p.color;
+      }
+      ctx.globalAlpha = t * 0.9;
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.size * (0.4 + t * 0.6), 0, TAU);
       ctx.fill();
     }
     ctx.restore();
+    ctx.globalAlpha = 1;
   }
 
   clear() {

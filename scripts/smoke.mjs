@@ -91,8 +91,10 @@ globalThis.window = {
 };
 globalThis.document = {
   getElementById: (id) => (id === "game" ? canvas : boot),
-  // Satisfy Vite's modulepreload polyfill so it short-circuits.
-  createElement: () => ({ relList: { supports: () => true } }),
+  // Canvas-ish element for offscreen sprite caches; link stub satisfies
+  // Vite's modulepreload polyfill so it short-circuits.
+  createElement: (tag) =>
+    tag === "canvas" ? makeEl() : { relList: { supports: () => true } },
   querySelectorAll: () => [],
   addEventListener() {},
 };

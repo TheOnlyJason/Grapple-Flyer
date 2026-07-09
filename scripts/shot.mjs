@@ -59,7 +59,10 @@ globalThis.window = {
 };
 globalThis.document = {
   getElementById: (id) => (id === "game" ? gameCanvas : boot),
-  createElement: () => ({ relList: { supports: () => true } }),
+  createElement: (tag) =>
+    tag === "canvas"
+      ? createCanvas(300, 150)
+      : { relList: { supports: () => true } },
   querySelectorAll: () => [],
   addEventListener() {},
 };

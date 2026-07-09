@@ -7,6 +7,20 @@ import type { CharacterId } from "../characters/registry";
 
 const PALETTE = theme; // HUD reads the live theme for cohesive colour grading
 
+// Assigning ctx.font triggers a CSS shorthand parse + font-cache lookup in
+// WebKit, so compose each string once. HUD sizes are a small fixed set;
+// animated popup sizes are quantized to 0.5px so keys repeat.
+const fontCache = new Map<string, string>();
+function fontFor(weight: string, size: number): string {
+  const key = `${weight}|${size}`;
+  let font = fontCache.get(key);
+  if (!font) {
+    font = `${weight} ${size}px ui-sans-serif, system-ui, -apple-system, sans-serif`;
+    fontCache.set(key, font);
+  }
+  return font;
+}
+
 export interface HudData {
   state: "menu" | "playing" | "paused" | "crashing" | "gameover";
   score: number;
@@ -40,6 +54,13 @@ interface Popup {
 export class Hud {
   private popups: Popup[] = [];
   flash = 0; // screen-wide flash on perfect / big moments
+  // Last font set on ctx *within the current HUD pass*. Other draw code can
+  // change ctx.font between passes, so each entry point resets this.
+  private lastFont = "";
+  // Attract-screen edge gradients — fixed colours, rebuilt only on resize.
+  private attractTop: CanvasGradient | null = null;
+  private attractBottom: CanvasGradient | null = null;
+  private attractGradH = 0;
 
   popup(x: number, y: number, text: string, color: string, scale = 1) {
     this.popups.push({ x, y, text, color, life: 1.1, maxLife: 1.1, scale });
@@ -59,16 +80,21 @@ export class Hud {
     if (this.flash > 0) this.flash = Math.max(0, this.flash - dt * 2.2);
   }
 
-  // Drawn INSIDE the world transform so popups track world positions.
-  drawWorldPopups(ctx: CanvasRenderingContext2D) {
+  // Drawn INSIDE the world transform so popups track world positions. `zoom`
+  // is the camera's world scale — text is counter-scaled so popups stay the
+  // same on-screen size when the camera zooms out.
+  drawWorldPopups(ctx: CanvasRenderingContext2D, zoom = 1) {
+    this.lastFont = ""; // new pass — ctx.font may have changed since the last one
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
+    const inv = 1 / zoom;
     for (const p of this.popups) {
       const t = p.life / p.maxLife;
-      const size = 18 * p.scale * (1.2 - t * 0.2);
-      ctx.font = `700 ${size}px ui-sans-serif, system-ui, sans-serif`;
+      // Quantize the animated size to 0.5px so font-cache keys repeat.
+      const size = Math.round(18 * inv * p.scale * (1.2 - t * 0.2) * 2) / 2;
+      this.setFont(ctx, "700", size);
       ctx.fillStyle = hexA("#0a0d24", 0.5 * t);
-      ctx.fillText(p.text, p.x + 2, p.y + 2);
+      ctx.fillText(p.text, p.x + 2 * inv, p.y + 2 * inv);
       ctx.fillStyle = hexA(p.color, t);
       ctx.fillText(p.text, p.x, p.y);
     }
@@ -76,12 +102,18 @@ export class Hud {
 
   dashButton(cam: Camera): { x: number; y: number; r: number } {
     const r = clamp(cam.w * 0.06, 40, 56);
-    return { x: cam.w - r - 26, y: cam.h - r - 30, r };
+    const ins = cam.insets;
+    return {
+      x: cam.w - ins.right - r - 26,
+      y: cam.h - ins.bottom - r - 30,
+      r,
+    };
   }
 
   pauseButton(cam: Camera): { x: number; y: number; r: number } {
     const r = clamp(cam.w * 0.026, 18, 23);
-    return { x: cam.w - r - 20, y: r + 20, r };
+    const ins = cam.insets;
+    return { x: cam.w - ins.right - r - 20, y: ins.top + r + 20, r };
   }
 
   playButton(cam: Camera): { x: number; y: number; r: number } {
@@ -100,6 +132,7 @@ export class Hud {
 
   // Screen-space HUD during a run.
   drawScreen(ctx: CanvasRenderingContext2D, cam: Camera, d: HudData) {
+    this.lastFont = ""; // new pass — ctx.font may have changed since the last one
     if (this.flash > 0) {
       ctx.fillStyle = hexA(PALETTE.anchorPerfect, this.flash * 0.18);
       ctx.fillRect(0, 0, cam.w, cam.h);
@@ -110,16 +143,17 @@ export class Hud {
     if (d.state === "crashing") return;
 
     const paused = d.state === "paused";
+    const ins = cam.insets;
 
     // --- Score (top-left) ---
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
-    this.text(ctx, `${Math.floor(d.score)}`, 24, 20, 38, "800", PALETTE.text);
+    this.text(ctx, `${Math.floor(d.score)}`, 24 + ins.left, 20 + ins.top, 38, "800", PALETTE.text);
     this.text(
       ctx,
       `${Math.floor(d.distance)} m`,
-      26,
-      62,
+      26 + ins.left,
+      62 + ins.top,
       16,
       "600",
       PALETTE.textDim
@@ -127,8 +161,8 @@ export class Hud {
     this.text(
       ctx,
       `BEST ${Math.floor(d.best)}`,
-      26,
-      84,
+      26 + ins.left,
+      84 + ins.top,
       12,
       "600",
       hexA(PALETTE.anchorPerfect, 0.85)
@@ -148,18 +182,20 @@ export class Hud {
     // --- Speed pips (bottom-left) ---
     const spd = clamp(d.speed / 1200, 0, 1);
     const barW = 120;
+    const spX = 26 + ins.left;
+    const spY = cam.h - 36 - ins.bottom;
     ctx.fillStyle = hexA(PALETTE.text, 0.12);
-    this.roundRect(ctx, 26, cam.h - 36, barW, 8, 4);
+    this.roundRect(ctx, spX, spY, barW, 8, 4);
     ctx.fill();
     ctx.fillStyle = hexA(PALETTE.tether, 0.9);
-    this.roundRect(ctx, 26, cam.h - 36, barW * spd, 8, 4);
+    this.roundRect(ctx, spX, spY, barW * spd, 8, 4);
     ctx.fill();
-    this.text(ctx, "SPEED", 26, cam.h - 54, 10, "700", PALETTE.textDim);
+    this.text(ctx, "SPEED", spX, spY - 18, 10, "700", PALETTE.textDim);
 
     // --- Centered fading hint ---
     if (d.hintAlpha > 0.01 && d.hint) {
       ctx.textAlign = "center";
-      ctx.font = `600 18px ui-sans-serif, system-ui, sans-serif`;
+      this.setFont(ctx, "600", 18);
       ctx.fillStyle = hexA(PALETTE.text, d.hintAlpha * 0.9);
       ctx.fillText(d.hint, cam.w / 2, cam.h * 0.2);
     }
@@ -168,8 +204,8 @@ export class Hud {
     this.text(
       ctx,
       d.muted ? "♪ off (M)" : "♪ on (M)",
-      cam.w - 96,
-      cam.h - 22,
+      cam.w - 96 - ins.right,
+      cam.h - 22 - ins.bottom,
       11,
       "600",
       hexA(PALETTE.textDim, 0.7)
@@ -237,8 +273,9 @@ export class Hud {
   }
 
   private drawObjectives(ctx: CanvasRenderingContext2D, cam: Camera, d: HudData) {
-    const x = cam.w - 250;
-    let y = 54;
+    const ins = cam.insets;
+    const x = cam.w - 250 - ins.right;
+    let y = 54 + ins.top;
     ctx.textAlign = "left";
     this.text(
       ctx,
@@ -309,7 +346,7 @@ export class Hud {
 
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.font = `800 13px ui-sans-serif, system-ui, sans-serif`;
+    this.setFont(ctx, "800", 13);
     ctx.fillStyle = d.dashReady ? "#06241a" : PALETTE.textDim;
     ctx.fillText("DASH", b.x, b.y);
     ctx.textBaseline = "top";
@@ -322,20 +359,26 @@ export class Hud {
     mode: "menu" | "gameover"
   ) {
     const { w, h } = cam;
+    const ins = cam.insets;
     const pulse = 0.82 + Math.sin(performance.now() / 420) * 0.18;
 
-    // Light edge gradients — scene stays visible (Alto-style).
-    const top = ctx.createLinearGradient(0, 0, 0, h * 0.32);
-    top.addColorStop(0, hexA("#0a0d24", 0.28));
-    top.addColorStop(1, hexA("#0a0d24", 0));
-    ctx.fillStyle = top;
+    // Light edge gradients — scene stays visible (Alto-style). Fixed colours,
+    // so they only rebuild when the viewport size changes.
+    if (!this.attractTop || this.attractGradH !== h) {
+      this.attractGradH = h;
+      const top = ctx.createLinearGradient(0, 0, 0, h * 0.32);
+      top.addColorStop(0, hexA("#0a0d24", 0.28));
+      top.addColorStop(1, hexA("#0a0d24", 0));
+      this.attractTop = top;
+      const bottom = ctx.createLinearGradient(0, h * 0.5, 0, h);
+      bottom.addColorStop(0, hexA("#0a0d24", 0));
+      bottom.addColorStop(0.5, hexA("#0a0d24", 0.1));
+      bottom.addColorStop(1, hexA("#0a0d24", 0.42));
+      this.attractBottom = bottom;
+    }
+    ctx.fillStyle = this.attractTop;
     ctx.fillRect(0, 0, w, h * 0.32);
-
-    const bottom = ctx.createLinearGradient(0, h * 0.5, 0, h);
-    bottom.addColorStop(0, hexA("#0a0d24", 0));
-    bottom.addColorStop(0.5, hexA("#0a0d24", 0.1));
-    bottom.addColorStop(1, hexA("#0a0d24", 0.42));
-    ctx.fillStyle = bottom;
+    ctx.fillStyle = this.attractBottom!;
     ctx.fillRect(0, h * 0.5, w, h * 0.5);
 
     // Title — stacked, upper center.
@@ -408,7 +451,7 @@ export class Hud {
       ctx.fillStyle = hexA(PALETTE.text, 0.9);
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.font = `700 ${b.r * 0.95}px ui-sans-serif, system-ui, sans-serif`;
+      this.setFont(ctx, "700", b.r * 0.95);
       ctx.fillText(dir < 0 ? "‹" : "›", b.x, b.y + 1);
     }
     ctx.textBaseline = "top";
@@ -470,16 +513,16 @@ export class Hud {
       this.text(
         ctx,
         `${Math.floor(d.bestDistance)} m`,
-        28,
-        h - 82,
+        28 + ins.left,
+        h - 82 - ins.bottom,
         30,
         "800",
         PALETTE.text,
         true
       );
-      this.text(ctx, "BEST RUN", 28, h - 48, 11, "700", PALETTE.textDim);
+      this.text(ctx, "BEST RUN", 28 + ins.left, h - 48 - ins.bottom, 11, "700", PALETTE.textDim);
     } else {
-      this.text(ctx, "FIRST FLIGHT", 28, h - 58, 11, "700", PALETTE.textDim);
+      this.text(ctx, "FIRST FLIGHT", 28 + ins.left, h - 58 - ins.bottom, 11, "700", PALETTE.textDim);
     }
 
     // Mute — bottom right.
@@ -487,12 +530,20 @@ export class Hud {
     this.text(
       ctx,
       d.muted ? "♪ off   M" : "♪ on   M",
-      w - 28,
-      h - 48,
+      w - 28 - ins.right,
+      h - 48 - ins.bottom,
       11,
       "600",
       hexA(PALETTE.textDim, 0.75)
     );
+  }
+
+  private setFont(ctx: CanvasRenderingContext2D, weight: string, size: number) {
+    const font = fontFor(weight, size);
+    if (font !== this.lastFont) {
+      ctx.font = font;
+      this.lastFont = font;
+    }
   }
 
   private text(
@@ -505,7 +556,7 @@ export class Hud {
     color: string,
     shadow = false
   ) {
-    ctx.font = `${weight} ${size}px ui-sans-serif, system-ui, -apple-system, sans-serif`;
+    this.setFont(ctx, weight, size);
     if (shadow) {
       ctx.fillStyle = hexA("#0a0d24", 0.5);
       ctx.fillText(s, x + 2, y + 2);

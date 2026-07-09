@@ -1,8 +1,9 @@
 import { CONFIG } from "../core/config";
 import { Camera } from "../core/camera";
-import { clamp, TAU } from "../core/math";
+import { clamp, lerp, TAU } from "../core/math";
 import { hexA } from "../entities/anchor";
 import { theme, mixColor, CYCLE_SECONDS } from "./theme";
+import { makeScratch, Scratch, VersionCache } from "./rcache";
 
 // Deterministic [0,1) value from an integer cell index — keeps procedural
 // silhouettes stable as they scroll (no popping).
@@ -13,6 +14,418 @@ function hash01(i: number): number {
   h = (h ^ (h >>> 16)) >>> 0;
   return h / 4294967296;
 }
+
+// Dune-surface height cache — screen-space surface y per HEIGHT_STEP px
+// column, refilled per dune layer each frame (see sampleDuneHeights) and
+// shared by the clip / fill / grain / ripple / crest passes. waveHeight runs
+// once per column instead of once per vertex per pass (~170-200k Math.sin a
+// frame down to ~5k). Grows to fit the widest canvas seen; reused across
+// frames so it never churns the GC.
+const HEIGHT_STEP = 4;
+let heightScratch = new Float32Array(0);
+
+// Pre-rendered glow for the bright stars — stands in for a per-star radial
+// gradient + arc fill. Colours are constant literals, so it's baked once,
+// lazily, at 2x (DPR is clamped to 2) so it stays crisp at its 12px CSS size.
+const STAR_GLOW_CSS = 12;
+let starGlowCanvas: HTMLCanvasElement | null = null;
+function starGlow(): HTMLCanvasElement {
+  if (!starGlowCanvas) {
+    const px = STAR_GLOW_CSS * 2;
+    const { canvas, ctx } = makeScratch(px, px);
+    const g = ctx.createRadialGradient(px / 2, px / 2, 0, px / 2, px / 2, px / 2);
+    g.addColorStop(0, "#dce6ff");
+    g.addColorStop(1, hexA("#dce6ff", 0));
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, px, px);
+    starGlowCanvas = canvas;
+  }
+  return starGlowCanvas;
+}
+
+// The moon's disc / craters / rim highlight are completely static imagery —
+// bake them once (at 2x for retina) and drawImage per frame with globalAlpha
+// carrying the visibility. Only the palette-tracking halo stays a gradient.
+const MOON_R = 30;
+const MOON_SPRITE_CSS = 70; // disc + margin
+let moonCanvas: HTMLCanvasElement | null = null;
+function moonSprite(): HTMLCanvasElement {
+  if (moonCanvas) return moonCanvas;
+  const { canvas, ctx } = makeScratch(MOON_SPRITE_CSS * 2, MOON_SPRITE_CSS * 2);
+  ctx.scale(2, 2);
+  const c = MOON_SPRITE_CSS / 2;
+  const r = MOON_R;
+
+  // Disc with gentle limb darkening (lit from the upper-left).
+  const disc = ctx.createRadialGradient(
+    c - r * 0.28,
+    c - r * 0.3,
+    r * 0.15,
+    c,
+    c,
+    r * 1.08
+  );
+  disc.addColorStop(0, "#fdfdf6");
+  disc.addColorStop(0.55, "#e9edf6");
+  disc.addColorStop(0.85, "#cdd4e4");
+  disc.addColorStop(1, "#a7afc6");
+  ctx.fillStyle = disc;
+  ctx.beginPath();
+  ctx.arc(c, c, r, 0, TAU);
+  ctx.fill();
+
+  // Craters / maria — clipped to the disc so nothing spills past the rim.
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(c, c, r, 0, TAU);
+  ctx.clip();
+  const craters: [number, number, number][] = [
+    [-0.32, -0.2, 0.26],
+    [0.22, -0.32, 0.15],
+    [0.36, 0.16, 0.2],
+    [-0.06, 0.34, 0.16],
+    [-0.44, 0.24, 0.11],
+    [0.04, 0.0, 0.1],
+    [0.52, -0.12, 0.08],
+  ];
+  for (const [cx, cy, cr] of craters) {
+    const px = c + cx * r;
+    const py = c + cy * r;
+    const pr = cr * r;
+    const cg = ctx.createRadialGradient(
+      px - pr * 0.3,
+      py - pr * 0.3,
+      pr * 0.1,
+      px,
+      py,
+      pr
+    );
+    cg.addColorStop(0, hexA("#bcc4d8", 0.85));
+    cg.addColorStop(0.7, hexA("#a7afc8", 0.7));
+    cg.addColorStop(1, hexA("#a7afc8", 0));
+    ctx.fillStyle = cg;
+    ctx.beginPath();
+    ctx.arc(px, py, pr, 0, TAU);
+    ctx.fill();
+    // Bright sunlit rim along the lower-right of each crater.
+    ctx.strokeStyle = hexA("#ffffff", 0.3);
+    ctx.lineWidth = Math.max(0.6, pr * 0.16);
+    ctx.beginPath();
+    ctx.arc(px, py, pr * 0.9, Math.PI * 0.08, Math.PI * 0.92);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Crisp highlight arc on the lit edge.
+  ctx.strokeStyle = hexA("#ffffff", 0.4);
+  ctx.lineWidth = 1.3;
+  ctx.beginPath();
+  ctx.arc(c, c, r - 1.2, Math.PI * 0.95, Math.PI * 1.78);
+  ctx.stroke();
+
+  moonCanvas = canvas;
+  return canvas;
+}
+
+// Constant per-frame config, hoisted to module scope so the draw methods
+// allocate nothing rebuilding byte-identical structures every frame.
+
+// Mountain ridge layers (drawMountains).
+const MOUNTAIN_LAYERS = [
+  { parallax: 0.035, baseY: 0.6, height: 130, cell: 240, mix: 0.72, alpha: 0.5 },
+  { parallax: 0.065, baseY: 0.65, height: 180, cell: 300, mix: 0.52, alpha: 0.66 },
+  { parallax: 0.1, baseY: 0.71, height: 240, cell: 360, mix: 0.32, alpha: 0.82 },
+];
+
+// Reused peak / valley scratch for drawMountains — grown on demand and
+// refilled per ridge each frame instead of allocating ~14 point objects per
+// layer per frame.
+interface MountainPt {
+  x: number;
+  apexY: number;
+  ph: number;
+  valX: number;
+  valY: number;
+}
+const mountainPts: MountainPt[] = [];
+
+// Slow high cloud banks (drawSkyClouds).
+const SKY_CLOUD_LAYERS = [
+  { parallax: 0.05, y: 0.15, speed: 4, scale: 1.35, alpha: 0.1, spacing: 780, seed: 0 },
+  { parallax: 0.09, y: 0.29, speed: 8, scale: 1.0, alpha: 0.14, spacing: 600, seed: 64 },
+];
+
+// A few loose flocks drifting at different heights and speeds (drawBirds).
+const BIRD_FLOCKS = [
+  { y: 0.2, speed: 26, count: 5, size: 6.2, drift: 12 },
+  { y: 0.3, speed: 19, count: 4, size: 5.2, drift: 9 },
+  { y: 0.14, speed: 33, count: 6, size: 4.6, drift: 7 },
+];
+
+// Parallax dune layers — back to front, Alto-style rolling sand hills. The
+// structure is constant; only the theme-derived colours change, and only when
+// the quantized palette does, so they refresh in place per theme.version.
+const SEA_LAYERS = [
+  {
+    offset: -72,
+    parallax: 0.14,
+    layer: 0,
+    color: "",
+    dark: "",
+    alpha: 0.48,
+    ripples: { spacing: 5.5, depth: 32, alpha: 0.07 },
+  },
+  {
+    offset: -42,
+    parallax: 0.3,
+    layer: 1,
+    color: "",
+    dark: "",
+    alpha: 0.68,
+    ripples: { spacing: 4.2, depth: 48, alpha: 0.1 },
+  },
+  {
+    offset: -14,
+    parallax: 0.56,
+    layer: 2,
+    color: "",
+    dark: "",
+    alpha: 0.86,
+    ripples: { spacing: 3.2, depth: 68, alpha: 0.13 },
+  },
+  {
+    offset: 0,
+    parallax: 0.9,
+    layer: 3,
+    color: "",
+    dark: "",
+    alpha: 1.0,
+    ripples: { spacing: 2.4, depth: 92, alpha: 0.17 },
+  },
+];
+let seaLayersVersion = -1;
+function refreshSeaLayers() {
+  if (seaLayersVersion === theme.version) return;
+  seaLayersVersion = theme.version;
+  SEA_LAYERS[0].color = mixColor(theme.sea, theme.fog, 0.62);
+  SEA_LAYERS[0].dark = mixColor(theme.seaDeep, theme.fog, 0.5);
+  SEA_LAYERS[1].color = mixColor(theme.sea, theme.fog, 0.35);
+  SEA_LAYERS[1].dark = mixColor(theme.seaDeep, theme.fog, 0.25);
+  SEA_LAYERS[2].color = mixColor(theme.sea, theme.seaDeep, 0.18);
+  SEA_LAYERS[2].dark = mixColor(theme.seaDeep, theme.fog, 0.08);
+  SEA_LAYERS[3].color = theme.sea;
+  SEA_LAYERS[3].dark = theme.seaDeep;
+}
+
+// --- Grain stipple tiles --------------------------------------------------
+// The sand stipple is hash-static in scroll space and its colours drift under
+// 5 RGB units between palette steps, so instead of issuing ~2-3k one-pixel
+// fillRects per frame (WebKit's single biggest per-call cost in the sea /
+// death scene) each stipple band bakes into a scroll-anchored offscreen tile
+// and blits as ONE drawImage. Tiles re-bake only when the camera scrolls past
+// their margin, the viewport resizes, or the palette has drifted a few steps
+// — staggered per layer so rebakes never share a frame.
+const GRAIN_MARGIN = 512;
+const DUNE_TILE_PAD = 40; // headroom above baseY for negative wave heights
+const DUNE_TILE_H = 224; // pad + wave amplitude + 14 grain rows for layer 3
+interface GrainTile {
+  s: Scratch | null;
+  u0: number; // scroll-space x of the tile's left edge
+  w: number;
+  h: number;
+  version: number; // theme.version at bake time
+}
+function makeGrainTile(): GrainTile {
+  return { s: null, u0: 0, w: 0, h: 0, version: -99 };
+}
+const seaGrainTile = makeGrainTile();
+const duneGrainTiles: GrainTile[] = [];
+
+// (Re)allocate a tile's scratch canvas when its size changes.
+function grainScratch(tile: GrainTile, w: number, h: number): Scratch {
+  if (!tile.s || tile.w !== w || tile.h !== h) {
+    tile.s = makeScratch(w, h);
+    tile.w = w;
+    tile.h = h;
+  }
+  return tile.s;
+}
+
+function grainTileStale(
+  tile: GrainTile,
+  tw: number,
+  th: number,
+  offX: number,
+  screenW: number,
+  versionSlack: number
+): boolean {
+  return (
+    !tile.s ||
+    tile.w !== tw ||
+    tile.h !== th ||
+    offX < tile.u0 ||
+    offX + screenW > tile.u0 + tw ||
+    theme.version - tile.version >= versionSlack
+  );
+}
+
+// One continuous, gently rolling mid-ground line shared by every feature, as
+// a smooth function of world X so neighbouring cells line up seamlessly.
+// Module-level so drawMid allocates no per-frame closures for it.
+function midRoll(wx: number): number {
+  return (
+    Math.sin(wx * 0.0017) * 15 +
+    Math.sin(wx * 0.0043 + 1.3) * 8 +
+    Math.sin(wx * 0.0111 + 0.7) * 3
+  );
+}
+
+// Deterministic scenery layouts (pine clusters, floating islands) are pure
+// functions of their integer seed — cache them so the per-frame path is draw
+// calls only: no array allocation, no sort, no hash01, no bezier root solves.
+// Regeneration after eviction is deterministic, so capping the maps can never
+// cause popping.
+const LAYOUT_CAP = 64;
+function evictOldest<K, V>(map: Map<K, V>) {
+  const oldest = map.keys().next(); // Maps iterate in insertion order
+  if (!oldest.done) map.delete(oldest.value);
+}
+
+// Forest cluster layout — tree positions / heights (and the tall-to-short
+// draw order of the front row) in unit space; the cluster scale is applied at
+// draw time. See drawPineCluster.
+interface PineLayout {
+  backX: number[];
+  backH: number[];
+  frontX: number[]; // sorted with frontH, tallest first
+  frontH: number[];
+}
+const pineLayouts = new Map<number, PineLayout>();
+
+function pineLayout(seed: number): PineLayout {
+  let L = pineLayouts.get(seed);
+  if (L) return L;
+  const nb = 6 + ((hash01(seed * 7) * 5) | 0);
+  const backX: number[] = [];
+  const backH: number[] = [];
+  for (let t = 0; t < nb; t++) {
+    backX.push((hash01(seed * 11 + t * 3) - 0.5) * 180 * 1.95);
+    backH.push(32 + hash01(seed * 17 + t) * 30);
+  }
+  const nf = 7 + ((hash01(seed * 13) * 5) | 0);
+  const trees: { fx: number; fh: number }[] = [];
+  for (let t = 0; t < nf; t++) {
+    trees.push({
+      fx: (hash01(seed * 23 + t * 5) - 0.5) * 180 * 1.85,
+      fh: 50 + hash01(seed * 29 + t) * 66,
+    });
+  }
+  trees.sort((a, b) => b.fh - a.fh);
+  L = {
+    backX,
+    backH,
+    frontX: trees.map((t) => t.fx),
+    frontH: trees.map((t) => t.fh),
+  };
+  if (pineLayouts.size >= LAYOUT_CAP) evictOldest(pineLayouts);
+  pineLayouts.set(seed, L);
+  return L;
+}
+
+// Floating-island layout — silhouette metrics, vine anchors (the quad-bezier
+// root solves live here), tree spots and the critter pick, all in unit space
+// with the island scale applied at draw time. The per-island theme-derived
+// styling (body gradient + tinted colour strings) rebuilds only when the
+// quantized palette changes. See Background.islandLayout.
+interface IslandStyle {
+  grad: CanvasGradient;
+  treeCol: string;
+  trunkCol: string;
+  vineCol: string;
+  leafCol: string;
+  critterCol: string;
+}
+interface IslandLayout {
+  rw: number;
+  rh: number;
+  hang: number;
+  skew: number;
+  vineX: number[];
+  vineY: number[];
+  vineLen: number[];
+  vineSway: number[];
+  vineCurl: number[];
+  treeX: number[];
+  treeY: number[];
+  treeH: number[];
+  hasCritter: boolean;
+  critterX: number;
+  critterY: number;
+  critterPick: number;
+  critterPh: number;
+  critterSize: number;
+  style: VersionCache<IslandStyle>;
+}
+const islandLayouts = new Map<number, IslandLayout>();
+
+// Shared soft puff sprite for the sky / foreground cloud clusters — the
+// radial falloff (same profile as the old per-puff gradient) bakes once in
+// white at 2x (DPR is clamped to 2), then re-tints to theme.cloud via
+// 'source-in' when the quantized palette changes. Per puff, a drawImage
+// replaces a fresh 3-stop createRadialGradient + shader-filled arc.
+const PUFF_CSS = 128;
+let puffBaseCanvas: HTMLCanvasElement | null = null;
+let puffTintCanvas: HTMLCanvasElement | null = null;
+let puffTintCtx: CanvasRenderingContext2D | null = null;
+let puffTintVersion = -1;
+function puffSprite(): HTMLCanvasElement {
+  const px = PUFF_CSS * 2;
+  let base = puffBaseCanvas;
+  if (!base) {
+    const { canvas, ctx } = makeScratch(px, px);
+    const c = px / 2;
+    const r = px / 2;
+    const g = ctx.createRadialGradient(c, c - r * 0.3, r * 0.1, c, c + r * 0.15, r);
+    g.addColorStop(0, "rgba(255,255,255,0.95)");
+    g.addColorStop(0.55, "rgba(255,255,255,0.55)");
+    g.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(c, c, r, 0, TAU);
+    ctx.fill();
+    base = puffBaseCanvas = canvas;
+  }
+  let tint = puffTintCanvas;
+  let tctx = puffTintCtx;
+  if (!tint || !tctx) {
+    const t = makeScratch(px, px);
+    tint = puffTintCanvas = t.canvas;
+    tctx = puffTintCtx = t.ctx;
+    puffTintVersion = -1;
+  }
+  if (puffTintVersion !== theme.version) {
+    puffTintVersion = theme.version;
+    tctx.globalCompositeOperation = "source-over";
+    tctx.clearRect(0, 0, px, px);
+    tctx.drawImage(base, 0, 0);
+    // 'source-in' keeps the baked alpha falloff and swaps in the cloud colour.
+    tctx.globalCompositeOperation = "source-in";
+    tctx.fillStyle = theme.cloud;
+    tctx.fillRect(0, 0, px, px);
+  }
+  return tint;
+}
+
+// Puff offsets / radii as fractions of the cluster width (drawCloudCluster).
+const CLUSTER_PUFFS = [
+  { dx: 0, dy: 0, r: 0.28 },
+  { dx: -0.22, dy: 0.04, r: 0.22 },
+  { dx: 0.24, dy: 0.02, r: 0.24 },
+  { dx: -0.08, dy: -0.1, r: 0.26 },
+  { dx: 0.1, dy: -0.08, r: 0.2 },
+  { dx: 0.38, dy: 0.06, r: 0.16 },
+  { dx: -0.35, dy: 0.05, r: 0.15 },
+];
 
 // Distinct scenery biomes the run travels through, in the spirit of Alto's
 // Odyssey. Each region swaps the mid-ground silhouette features (the sky and
@@ -26,6 +439,39 @@ const REGION_LEN = 3000; // world units per region band
 // come from the live time-of-day `theme`, so the whole scene re-grades together
 // through dawn / day / golden hour / dusk / night.
 export class Background {
+  // Screen-static gradients, rebuilt only when the quantized palette changes
+  // (theme.version) or their anchoring geometry moves a few px (quantized
+  // keys). Gradients tied to a moving point — sun halo/disc, moon halo, the
+  // sky light wash — are built once per version in local space at full
+  // strength and drawn translated, with globalAlpha carrying the visibility.
+  private skyGrad = new VersionCache<CanvasGradient>();
+  private washGrad = new VersionCache<CanvasGradient>();
+  private sunHaloGrad = new VersionCache<CanvasGradient>();
+  private sunDiscGrad = new VersionCache<CanvasGradient>();
+  private moonHaloGrad = new VersionCache<CanvasGradient>();
+  private seaBodyGrad = new VersionCache<CanvasGradient>();
+  private hazeGrad = new VersionCache<CanvasGradient>();
+  private duneGrads = [
+    new VersionCache<CanvasGradient>(),
+    new VersionCache<CanvasGradient>(),
+    new VersionCache<CanvasGradient>(),
+    new VersionCache<CanvasGradient>(),
+  ];
+  // Mid-ground biome colours — pure functions of the palette, so one bundle
+  // per theme.version replaces 2-4 mixColor parses per feature cell per frame.
+  private midCols = new VersionCache<{
+    base: string;
+    accent: string;
+    forest: string;
+    forestLit: string;
+    forestBack: string;
+    forestBackLit: string;
+    peak: string;
+    peakLit: string;
+    monolith: string;
+    monolithLit: string;
+  }>();
+
   drawSky(ctx: CanvasRenderingContext2D, cam: Camera, time: number) {
     const { w, h } = cam;
     const horizon = h * 0.72 - cam.y * 0.04;
@@ -36,7 +482,7 @@ export class Background {
     ctx.fillRect(0, 0, w, h);
 
     if (daylight > 0.08 && sky.sun.alt > 0) {
-      this.drawSkyLightWash(ctx, cam, sky.sun, daylight * sky.sun.alt);
+      this.drawSkyLightWash(ctx, sky.sun, daylight * sky.sun.alt);
     }
 
     if (theme.night > 0.05) this.drawStars(ctx, cam, horizon, time);
@@ -75,26 +521,36 @@ export class Background {
     return { sun: body(0.0, 0.6), moon: body(0.52, 1.12) };
   }
 
+  // `daylight` here is daylight * sun altitude (see drawSky).
   private drawSkyLightWash(
     ctx: CanvasRenderingContext2D,
-    cam: Camera,
     sun: { x: number; y: number },
     daylight: number
   ) {
-    const { w, h } = cam;
-    const sx = sun.x;
-    const sy = sun.y;
-    const reach = Math.max(w, h) * 0.92;
+    // Below ~0.15 the strongest stop is under ~0.02 alpha — invisible; skip
+    // the whole pass instead of paying for a near-fullscreen fill.
+    if (daylight < 0.15) return;
+    // ~2.5x the sun halo radius; the stops beyond are <= 0.035 alpha, so the
+    // old max(w,h)-reaching fill bought nothing but overdraw.
+    const reach = 750;
+
+    // Built in sun-local space at full strength; the sun moves < 1px/frame,
+    // so translating a version-cached gradient is exact and free.
+    const wash = this.washGrad.get(theme.version, 0, () => {
+      const g = ctx.createRadialGradient(0, 0, 24, 0, 0, reach);
+      g.addColorStop(0, hexA(theme.sun, 0.14));
+      g.addColorStop(0.2, hexA(theme.skyGlow, 0.08));
+      g.addColorStop(0.45, hexA(theme.skyHorizon, 0.035));
+      g.addColorStop(0.7, hexA(theme.skyMid, 0.012));
+      g.addColorStop(1, hexA(theme.skyTop, 0));
+      return g;
+    });
 
     ctx.save();
-    const wash = ctx.createRadialGradient(sx, sy, 24, sx, sy, reach);
-    wash.addColorStop(0, hexA(theme.sun, 0.14 * daylight));
-    wash.addColorStop(0.2, hexA(theme.skyGlow, 0.08 * daylight));
-    wash.addColorStop(0.45, hexA(theme.skyHorizon, 0.035 * daylight));
-    wash.addColorStop(0.7, hexA(theme.skyMid, 0.012 * daylight));
-    wash.addColorStop(1, hexA(theme.skyTop, 0));
+    ctx.translate(sun.x, sun.y);
+    ctx.globalAlpha = daylight;
     ctx.fillStyle = wash;
-    ctx.fillRect(0, 0, w, h);
+    ctx.fillRect(-reach, -reach, reach * 2, reach * 2);
     ctx.restore();
   }
 
@@ -110,10 +566,18 @@ export class Background {
     const offY = cam.y * 0.05;
     const startI = Math.floor((offX - w) / cell);
     const endI = Math.ceil((offX + w) / cell);
+    // Rows whose topmost possible star already sits below the horizon can
+    // never draw — clamp the loop instead of rejecting cell by cell.
+    const endJ = Math.min(15, Math.floor((horizon - 18 + offY) / cell) + 1);
+    const glow = starGlow();
+    const half = STAR_GLOW_CSS / 2;
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
+    // One fillStyle for every star; the per-star twinkle rides on
+    // ctx.globalAlpha (a plain number — no rgba string per star).
+    ctx.fillStyle = "#eef2ff";
     for (let i = startI; i <= endI; i++) {
-      for (let j = -2; j < 15; j++) {
+      for (let j = -2; j < endJ; j++) {
         const r = hash01(i * 131 + j * 977 + 17);
         if (r < 0.45) continue; // lower threshold = many more stars
         const sx = i * cell - offX + ((hash01(i * 7 + j) * cell) | 0);
@@ -127,16 +591,11 @@ export class Background {
         if (a <= 0.01) continue;
         const bright = r > 0.9; // a few standout stars get size + glow
         const size = bright ? 2.4 : 1 + r * 0.9;
-        ctx.fillStyle = hexA("#eef2ff", clamp(a, 0, 1));
+        ctx.globalAlpha = clamp(a, 0, 1);
         ctx.fillRect(sx, sy, size, size);
         if (bright) {
-          const g = ctx.createRadialGradient(sx + 1, sy + 1, 0, sx + 1, sy + 1, 6);
-          g.addColorStop(0, hexA("#dce6ff", clamp(a * 0.9, 0, 1)));
-          g.addColorStop(1, hexA("#dce6ff", 0));
-          ctx.fillStyle = g;
-          ctx.beginPath();
-          ctx.arc(sx + 1, sy + 1, 6, 0, TAU);
-          ctx.fill();
+          ctx.globalAlpha = clamp(a * 0.9, 0, 1);
+          ctx.drawImage(glow, sx + 1 - half, sy + 1 - half, STAR_GLOW_CSS, STAR_GLOW_CSS);
         }
       }
     }
@@ -149,30 +608,44 @@ export class Background {
     daylight: number
   ) {
     if (sun.alt <= 0 || daylight <= 0.02) return;
-    const { x: sx, y: sy } = sun;
     // Dim as it nears the horizon (low altitude = setting / rising).
     const vis = daylight * clamp(sun.alt * 1.5, 0, 1);
-    const core = 0.4 + vis * 0.6;
 
     ctx.save();
-    const halo = ctx.createRadialGradient(sx, sy, 20, sx, sy, 300);
-    halo.addColorStop(0, hexA(theme.sun, 0.28 * vis));
-    halo.addColorStop(0.35, hexA(theme.skyGlow, 0.12 * vis));
-    halo.addColorStop(0.72, hexA(theme.skyHorizon, 0.04 * vis));
-    halo.addColorStop(1, hexA(theme.skyTop, 0));
+    ctx.translate(sun.x, sun.y);
+
+    // Halo stop alphas are all linear in vis, so it bakes at full strength
+    // per palette change and vis rides on globalAlpha — exact modulo rounding.
+    const halo = this.sunHaloGrad.get(theme.version, 0, () => {
+      const g = ctx.createRadialGradient(0, 0, 20, 0, 0, 300);
+      g.addColorStop(0, hexA(theme.sun, 0.28));
+      g.addColorStop(0.35, hexA(theme.skyGlow, 0.12));
+      g.addColorStop(0.72, hexA(theme.skyHorizon, 0.04));
+      g.addColorStop(1, hexA(theme.skyTop, 0));
+      return g;
+    });
+    ctx.globalAlpha = vis;
     ctx.fillStyle = halo;
     ctx.beginPath();
-    ctx.arc(sx, sy, 300, 0, TAU);
+    ctx.arc(0, 0, 300, 0, TAU);
     ctx.fill();
 
-    const disc = ctx.createRadialGradient(sx, sy - 8, 1, sx, sy, 54);
-    disc.addColorStop(0, hexA("#ffffff", 0.72 * core));
-    disc.addColorStop(0.4, hexA(theme.sun, 0.6 * core));
-    disc.addColorStop(0.78, hexA(theme.skyGlow, 0.18 * vis));
-    disc.addColorStop(1, hexA(theme.skyGlow, 0));
+    // The disc mixes two ramps of vis, so it can't ride on globalAlpha —
+    // quantize vis to 1/64 steps (stop deltas < 2/255) and key on it instead.
+    const qvis = Math.round(vis * 64) / 64;
+    const disc = this.sunDiscGrad.get(theme.version, qvis, () => {
+      const core = 0.4 + qvis * 0.6;
+      const g = ctx.createRadialGradient(0, -8, 1, 0, 0, 54);
+      g.addColorStop(0, hexA("#ffffff", 0.72 * core));
+      g.addColorStop(0.4, hexA(theme.sun, 0.6 * core));
+      g.addColorStop(0.78, hexA(theme.skyGlow, 0.18 * qvis));
+      g.addColorStop(1, hexA(theme.skyGlow, 0));
+      return g;
+    });
+    ctx.globalAlpha = 1;
     ctx.fillStyle = disc;
     ctx.beginPath();
-    ctx.arc(sx, sy, 54, 0, TAU);
+    ctx.arc(0, 0, 54, 0, TAU);
     ctx.fill();
     ctx.restore();
   }
@@ -183,12 +656,17 @@ export class Background {
     horizon: number
   ): CanvasGradient {
     const { h } = cam;
-    const g = ctx.createLinearGradient(0, 0, 0, h);
-    g.addColorStop(0, theme.skyTop);
-    g.addColorStop(0.45, theme.skyMid);
-    g.addColorStop(clamp(horizon / h, 0.4, 0.95), theme.skyHorizon);
-    g.addColorStop(1, mixColor(theme.skyHorizon, theme.skyGlow, 0.6));
-    return g;
+    // Rebuilt only on palette change / resize / a few px of horizon drift —
+    // a 4px-quantized stop on a smooth gradient is sub-RGB-unit noise.
+    const qh = Math.round(horizon / 4) * 4;
+    return this.skyGrad.get(theme.version, `${h}|${qh}`, () => {
+      const g = ctx.createLinearGradient(0, 0, 0, h);
+      g.addColorStop(0, theme.skyTop);
+      g.addColorStop(0.45, theme.skyMid);
+      g.addColorStop(clamp(qh / h, 0.4, 0.95), theme.skyHorizon);
+      g.addColorStop(1, mixColor(theme.skyHorizon, theme.skyGlow, 0.6));
+      return g;
+    });
   }
 
   // Full moon — a pale cratered disc with limb darkening and a soft glow.
@@ -198,91 +676,31 @@ export class Background {
     moon: { x: number; y: number; alt: number }
   ) {
     if (moon.alt <= 0) return;
-    const { x: sx, y: sy } = moon;
     const vis = clamp(moon.alt * 1.7, 0, 1) * (0.26 + 0.74 * theme.night);
     if (vis < 0.02) return;
-    const r = 30;
+    const r = MOON_R;
 
     ctx.save();
-
-    // Soft moonglow halo.
-    const halo = ctx.createRadialGradient(sx, sy, r * 0.4, sx, sy, r * 3.2);
-    halo.addColorStop(0, hexA(theme.sun, 0.5 * vis));
-    halo.addColorStop(0.5, hexA(theme.skyGlow, 0.16 * vis));
-    halo.addColorStop(1, hexA(theme.skyGlow, 0));
-    ctx.fillStyle = halo;
-    ctx.beginPath();
-    ctx.arc(sx, sy, r * 3.2, 0, TAU);
-    ctx.fill();
-
+    ctx.translate(moon.x, moon.y);
     ctx.globalAlpha = vis;
 
-    // Disc with gentle limb darkening (lit from the upper-left).
-    const disc = ctx.createRadialGradient(
-      sx - r * 0.28,
-      sy - r * 0.3,
-      r * 0.15,
-      sx,
-      sy,
-      r * 1.08
-    );
-    disc.addColorStop(0, "#fdfdf6");
-    disc.addColorStop(0.55, "#e9edf6");
-    disc.addColorStop(0.85, "#cdd4e4");
-    disc.addColorStop(1, "#a7afc6");
-    ctx.fillStyle = disc;
+    // Soft moonglow halo — its stop alphas are linear in vis, so it bakes at
+    // full strength per palette change and vis rides on globalAlpha.
+    const halo = this.moonHaloGrad.get(theme.version, 0, () => {
+      const g = ctx.createRadialGradient(0, 0, r * 0.4, 0, 0, r * 3.2);
+      g.addColorStop(0, hexA(theme.sun, 0.5));
+      g.addColorStop(0.5, hexA(theme.skyGlow, 0.16));
+      g.addColorStop(1, hexA(theme.skyGlow, 0));
+      return g;
+    });
+    ctx.fillStyle = halo;
     ctx.beginPath();
-    ctx.arc(sx, sy, r, 0, TAU);
+    ctx.arc(0, 0, r * 3.2, 0, TAU);
     ctx.fill();
 
-    // Craters / maria — clipped to the disc so nothing spills past the rim.
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(sx, sy, r, 0, TAU);
-    ctx.clip();
-    const craters: [number, number, number][] = [
-      [-0.32, -0.2, 0.26],
-      [0.22, -0.32, 0.15],
-      [0.36, 0.16, 0.2],
-      [-0.06, 0.34, 0.16],
-      [-0.44, 0.24, 0.11],
-      [0.04, 0.0, 0.1],
-      [0.52, -0.12, 0.08],
-    ];
-    for (const [cx, cy, cr] of craters) {
-      const px = sx + cx * r;
-      const py = sy + cy * r;
-      const pr = cr * r;
-      const cg = ctx.createRadialGradient(
-        px - pr * 0.3,
-        py - pr * 0.3,
-        pr * 0.1,
-        px,
-        py,
-        pr
-      );
-      cg.addColorStop(0, hexA("#bcc4d8", 0.85));
-      cg.addColorStop(0.7, hexA("#a7afc8", 0.7));
-      cg.addColorStop(1, hexA("#a7afc8", 0));
-      ctx.fillStyle = cg;
-      ctx.beginPath();
-      ctx.arc(px, py, pr, 0, TAU);
-      ctx.fill();
-      // Bright sunlit rim along the lower-right of each crater.
-      ctx.strokeStyle = hexA("#ffffff", 0.3);
-      ctx.lineWidth = Math.max(0.6, pr * 0.16);
-      ctx.beginPath();
-      ctx.arc(px, py, pr * 0.9, Math.PI * 0.08, Math.PI * 0.92);
-      ctx.stroke();
-    }
-    ctx.restore();
-
-    // Crisp highlight arc on the lit edge.
-    ctx.strokeStyle = hexA("#ffffff", 0.4);
-    ctx.lineWidth = 1.3;
-    ctx.beginPath();
-    ctx.arc(sx, sy, r - 1.2, Math.PI * 0.95, Math.PI * 1.78);
-    ctx.stroke();
+    // Static disc + craters + rim highlight, baked once (see moonSprite).
+    const half = MOON_SPRITE_CSS / 2;
+    ctx.drawImage(moonSprite(), -half, -half, MOON_SPRITE_CSS, MOON_SPRITE_CSS);
 
     ctx.restore();
   }
@@ -306,12 +724,8 @@ export class Background {
   // single biggest "depth" cue from Alto. Three ridges at increasing parallax.
   drawMountains(ctx: CanvasRenderingContext2D, cam: Camera) {
     const { w, h } = cam;
-    const layers = [
-      { parallax: 0.035, baseY: 0.6, height: 130, cell: 240, mix: 0.72, alpha: 0.5 },
-      { parallax: 0.065, baseY: 0.65, height: 180, cell: 300, mix: 0.52, alpha: 0.66 },
-      { parallax: 0.1, baseY: 0.71, height: 240, cell: 360, mix: 0.32, alpha: 0.82 },
-    ];
-    layers.forEach((L, li) => {
+    for (let li = 0; li < MOUNTAIN_LAYERS.length; li++) {
+      const L = MOUNTAIN_LAYERS[li];
       const baseY = h * L.baseY - cam.y * L.parallax;
       const offX = cam.x * L.parallax;
       const color = mixColor(theme.far, theme.fog, L.mix);
@@ -319,26 +733,33 @@ export class Background {
       const startI = Math.floor((offX - w) / L.cell) - 1;
       const endI = Math.ceil((offX + w) / L.cell) + 1;
 
-      // Peak / valley vertices for this ridge (valley sits to a peak's right).
-      const pts: { x: number; apexY: number; ph: number; valX: number; valY: number }[] = [];
+      // Peak / valley vertices for this ridge (valley sits to a peak's right),
+      // filled into the reused module-level scratch.
+      let n = 0;
       for (let i = startI; i <= endI; i++) {
         const px = i * L.cell - offX + w * 0.5;
         const ph = (0.45 + hash01(i * 131 + li * 17) * 0.55) * L.height;
-        const valX = px + L.cell * 0.5;
-        const valY = baseY - ph * (0.1 + hash01(i * 71 + li) * 0.18);
-        pts.push({ x: px, apexY: baseY - ph, ph, valX, valY });
+        let p = mountainPts[n];
+        if (!p) p = mountainPts[n] = { x: 0, apexY: 0, ph: 0, valX: 0, valY: 0 };
+        p.x = px;
+        p.apexY = baseY - ph;
+        p.ph = ph;
+        p.valX = px + L.cell * 0.5;
+        p.valY = baseY - ph * (0.1 + hash01(i * 71 + li) * 0.18);
+        n++;
       }
 
       ctx.save();
       ctx.globalAlpha = L.alpha;
       ctx.fillStyle = color;
       ctx.beginPath();
-      ctx.moveTo(pts[0].x, h);
-      for (const p of pts) {
+      ctx.moveTo(mountainPts[0].x, h);
+      for (let k = 0; k < n; k++) {
+        const p = mountainPts[k];
         ctx.lineTo(p.x, p.apexY);
         ctx.lineTo(p.valX, p.valY);
       }
-      ctx.lineTo(pts[pts.length - 1].valX, h);
+      ctx.lineTo(mountainPts[n - 1].valX, h);
       ctx.closePath();
       ctx.fill();
 
@@ -347,14 +768,13 @@ export class Background {
       if (li >= 1) {
         ctx.globalAlpha = L.alpha * (li === 2 ? 0.6 : 0.4);
         ctx.fillStyle = snow;
-        const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
-        for (let j = 1; j < pts.length; j++) {
-          const p = pts[j];
+        for (let j = 1; j < n; j++) {
+          const p = mountainPts[j];
           if (p.ph < L.height * 0.55) continue;
           const f = 0.26 + hash01(j * 53 + li) * 0.1; // snow line depth
           // Left slope runs from the apex back to the previous valley.
-          const lvX = pts[j - 1].valX;
-          const lvY = pts[j - 1].valY;
+          const lvX = mountainPts[j - 1].valX;
+          const lvY = mountainPts[j - 1].valY;
           const Lx = lerp(p.x, lvX, f);
           const Ly = lerp(p.apexY, lvY, f);
           const Rx = lerp(p.x, p.valX, f);
@@ -372,7 +792,7 @@ export class Background {
         }
       }
       ctx.restore();
-    });
+    }
   }
 
   // Soft, slow-drifting cloud banks high in the sky, well behind the mountains.
@@ -380,11 +800,7 @@ export class Background {
   drawSkyClouds(ctx: CanvasRenderingContext2D, cam: Camera, time: number) {
     const { w, h } = cam;
     const dayish = 1 - theme.night * 0.55;
-    const layers = [
-      { parallax: 0.05, y: 0.15, speed: 4, scale: 1.35, alpha: 0.1, spacing: 780, seed: 0 },
-      { parallax: 0.09, y: 0.29, speed: 8, scale: 1.0, alpha: 0.14, spacing: 600, seed: 64 },
-    ];
-    for (const L of layers) {
+    for (const L of SKY_CLOUD_LAYERS) {
       const offX = cam.x * L.parallax + time * L.speed;
       const startI = Math.floor((offX - w) / L.spacing) - 1;
       const endI = Math.ceil((offX + w) / L.spacing) + 1;
@@ -405,6 +821,7 @@ export class Background {
     const offset = cam.x * 0.1;
     const startIdx = Math.floor((offset - w) / spacing);
     const endIdx = Math.ceil((offset + w) / spacing);
+    const farCol = mixColor(theme.far, theme.fog, 0.55);
 
     for (let i = startIdx; i <= endIdx; i++) {
       const r1 = hash01(i * 2 + 1);
@@ -412,7 +829,7 @@ export class Background {
       const sx = i * spacing - offset + w * 0.5;
       const sy = h * (0.58 + r1 * 0.08) - cam.y * 0.1;
       const scale = 0.55 + r2 * 0.45;
-      this.drawFloatingIsland(ctx, sx, sy, scale, i, mixColor(theme.far, theme.fog, 0.55), r2 > 0.35, time);
+      this.drawFloatingIsland(ctx, sx, sy, scale, i, farCol, r2 > 0.35, time);
     }
 
     this.drawBirds(ctx, cam, time);
@@ -424,6 +841,7 @@ export class Background {
     const offset2 = cam.x * 0.16;
     const start2 = Math.floor((offset2 - w) / spacing2);
     const end2 = Math.ceil((offset2 + w) / spacing2);
+    const nearCol = mixColor(theme.far, theme.fog, 0.28);
     for (let i = start2; i <= end2; i++) {
       const r1 = hash01(i * 3 + 11);
       if (r1 < 0.25) continue;
@@ -431,7 +849,7 @@ export class Background {
       const sx = i * spacing2 - offset2 + w * 0.5;
       const sy = h * (0.66 + r1 * 0.06) - cam.y * 0.16;
       const scale = 0.7 + r2 * 0.55;
-      this.drawFloatingIsland(ctx, sx, sy, scale, i + 50, mixColor(theme.far, theme.fog, 0.28), r2 > 0.6, time);
+      this.drawFloatingIsland(ctx, sx, sy, scale, i + 50, nearCol, r2 > 0.6, time);
     }
   }
 
@@ -458,14 +876,8 @@ export class Background {
     const { w, h } = cam;
     const span = w * 3;
     ctx.fillStyle = hexA(theme.mid, 0.62 * daylight);
-    // A few loose flocks drifting at different heights and speeds.
-    const flocks = [
-      { y: 0.2, speed: 26, count: 5, size: 6.2, drift: 12 },
-      { y: 0.3, speed: 19, count: 4, size: 5.2, drift: 9 },
-      { y: 0.14, speed: 33, count: 6, size: 4.6, drift: 7 },
-    ];
-    for (let k = 0; k < flocks.length; k++) {
-      const F = flocks[k];
+    for (let k = 0; k < BIRD_FLOCKS.length; k++) {
+      const F = BIRD_FLOCKS[k];
       const fx =
         (((time * F.speed + k * 760 - cam.x * 0.18) % span) + span) % span -
         w * 0.4;
@@ -598,17 +1010,32 @@ export class Background {
     const offset = cam.x * factor;
     const startIdx = Math.floor((offset - w) / spacing) - 1;
     const endIdx = Math.ceil((offset + w) / spacing) + 1;
-    const base = mixColor(theme.mid, theme.fog, 0.15);
-    const accent = mixColor(theme.mid, theme.skyHorizon, 0.2);
-
-    // One continuous, gently rolling ground line shared by every feature, as a
-    // smooth function of world X so neighbouring cells line up seamlessly.
-    const roll = (wx: number) =>
-      Math.sin(wx * 0.0017) * 15 +
-      Math.sin(wx * 0.0043 + 1.3) * 8 +
-      Math.sin(wx * 0.0111 + 0.7) * 3;
-    const screenX = (wx: number) => wx - offset + w * 0.5;
-    const crestY = (wx: number) => baseY + roll(wx);
+    // Biome colours are pure functions of the palette — one bundle per
+    // theme.version instead of fresh mixColor parses per feature cell per
+    // frame. The shared rolling ground line lives in midRoll (module scope),
+    // so no per-frame closures either.
+    const C = this.midCols.get(theme.version, 0, () => {
+      const base = mixColor(theme.mid, theme.fog, 0.15);
+      const forest = mixColor(base, "#1f4d3e", 0.4); // teal-green pines
+      const forestBack = mixColor(forest, theme.fog, 0.34);
+      const peak = mixColor(base, theme.far, 0.4);
+      // Warm, dark stone — deliberately off the cool blue of the ranges so
+      // the monoliths read clearly against the mountains behind them.
+      const monolith = mixColor(theme.mid, "#4a3a3e", 0.55);
+      return {
+        base,
+        accent: mixColor(theme.mid, theme.skyHorizon, 0.2),
+        forest,
+        forestLit: mixColor(forest, theme.skyGlow, 0.25),
+        forestBack,
+        forestBackLit: mixColor(forestBack, theme.skyGlow, 0.2),
+        peak,
+        peakLit: mixColor(peak, theme.cloud, 0.55),
+        monolith,
+        monolithLit: mixColor(monolith, theme.skyGlow, 0.32),
+      };
+    });
+    const base = C.base;
 
     // Fill the ground far below the crest so it always runs into the dune sea —
     // features stand on solid land instead of floating on cut-off platforms.
@@ -621,9 +1048,11 @@ export class Background {
     ctx.save();
     ctx.fillStyle = grad;
     ctx.beginPath();
-    ctx.moveTo(screenX(left), h * 3);
-    for (let wx = left; wx <= right; wx += 36) ctx.lineTo(screenX(wx), crestY(wx));
-    ctx.lineTo(screenX(right), h * 3);
+    ctx.moveTo(left - offset + w * 0.5, h * 3);
+    for (let wx = left; wx <= right; wx += 36) {
+      ctx.lineTo(wx - offset + w * 0.5, baseY + midRoll(wx));
+    }
+    ctx.lineTo(right - offset + w * 0.5, h * 3);
     ctx.closePath();
     ctx.fill();
     // Soft sky-lit rim along the crest.
@@ -631,8 +1060,8 @@ export class Background {
     ctx.lineWidth = 1.6;
     ctx.beginPath();
     for (let wx = left; wx <= right; wx += 36) {
-      const x = screenX(wx);
-      const y = crestY(wx);
+      const x = wx - offset + w * 0.5;
+      const y = baseY + midRoll(wx);
       if (wx === left) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
@@ -648,33 +1077,34 @@ export class Background {
       // Forest is a continuous treeline (every cell); other biomes leave gaps.
       if (kind !== "forest" && r1 < 0.32) continue;
 
-      const sx = screenX(worldX);
-      const sy = crestY(worldX); // sit on the shared ground line
+      const sx = worldX - offset + w * 0.5;
+      const sy = baseY + midRoll(worldX); // sit on the shared ground line
       const scale = 0.85 + r2 * 0.5;
-      // Local rolling ground level, relative to this feature's origin.
-      const groundY = (lx: number) => crestY(worldX + lx) - sy;
 
       ctx.save();
       ctx.globalAlpha = fade;
       if (kind === "forest") {
-        const col = mixColor(base, "#1f4d3e", 0.4); // teal-green pines
-        const lit = mixColor(col, theme.skyGlow, 0.25);
-        this.drawPineCluster(ctx, sx, sy, scale, i, col, lit, groundY);
+        this.drawPineCluster(
+          ctx,
+          sx,
+          sy,
+          scale,
+          i,
+          C.forest,
+          C.forestLit,
+          C.forestBack,
+          C.forestBackLit,
+          worldX
+        );
       } else if (kind === "peaks") {
-        const col = mixColor(base, theme.far, 0.4);
-        const lit = mixColor(col, theme.cloud, 0.55);
-        this.drawPeak(ctx, sx, sy, scale * 1.1, i, col, lit);
+        this.drawPeak(ctx, sx, sy, scale * 1.1, i, C.peak, C.peakLit);
       } else if (kind === "monuments") {
-        // Warm, dark stone — deliberately off the cool blue of the ranges so
-        // the monoliths read clearly against the mountains behind them.
-        const col = mixColor(theme.mid, "#4a3a3e", 0.55);
-        const lit = mixColor(col, theme.skyGlow, 0.32);
-        this.drawMonolith(ctx, sx, sy, scale, i, col, lit, groundY);
+        this.drawMonolith(ctx, sx, sy, scale, i, C.monolith, C.monolithLit);
       } else if (kind === "village") {
-        this.drawVillage(ctx, sx, sy, scale, i, base, accent);
+        this.drawVillage(ctx, sx, sy, scale, i, base, C.accent);
       } else {
         const kr = r2 > 0.55 ? "arch" : r2 > 0.3 ? "temple" : "pillars";
-        this.drawRuin(ctx, sx, sy, scale, i, kr, base, accent);
+        this.drawRuin(ctx, sx, sy, scale, i, kr, base, C.accent);
       }
       ctx.restore();
     }
@@ -682,78 +1112,59 @@ export class Background {
 
   drawSea(ctx: CanvasRenderingContext2D, cam: Camera, time: number) {
     const { w, h } = cam;
-    const surfaceY = CONFIG.world.seaLevel - cam.y;
+    // The dune sea is the one world-locked surface (the player skids on it),
+    // so its screen position must respect the camera zoom.
+    const surfaceY = (CONFIG.world.seaLevel - cam.y) * cam.zoom;
     if (surfaceY > h + 200) return;
 
     const top = Math.max(0, surfaceY - 100);
 
     // Deep fill beneath the dunes — warm vertical gradient into the haze.
-    const body = ctx.createLinearGradient(0, top, 0, h);
-    body.addColorStop(0, hexA(theme.sea, 0));
-    body.addColorStop(0.12, hexA(theme.sea, 0.5));
-    body.addColorStop(0.4, theme.sea);
-    body.addColorStop(1, theme.seaDeep);
+    // Built in local space with a 4px-quantized span and translated to the
+    // (camera-tracking) top, so it survives across frames per palette change.
+    const span = h - top;
+    const qspan = Math.round(span / 4) * 4;
+    const body = this.seaBodyGrad.get(theme.version, qspan, () => {
+      const g = ctx.createLinearGradient(0, 0, 0, qspan);
+      g.addColorStop(0, hexA(theme.sea, 0));
+      g.addColorStop(0.12, hexA(theme.sea, 0.5));
+      g.addColorStop(0.4, theme.sea);
+      g.addColorStop(1, theme.seaDeep);
+      return g;
+    });
+    ctx.save();
+    ctx.translate(0, top);
     ctx.fillStyle = body;
-    ctx.fillRect(0, top, w, h - top);
+    ctx.fillRect(0, 0, w, span);
+    ctx.restore();
 
     this.drawSandGrain(ctx, cam, surfaceY, top);
 
-    // Parallax dune layers — back to front, Alto-style rolling sand hills.
-    const layers = [
-      {
-        offset: -72,
-        parallax: 0.14,
-        layer: 0,
-        color: mixColor(theme.sea, theme.fog, 0.62),
-        dark: mixColor(theme.seaDeep, theme.fog, 0.5),
-        alpha: 0.48,
-        ripples: { spacing: 5.5, depth: 32, alpha: 0.07 },
-      },
-      {
-        offset: -42,
-        parallax: 0.3,
-        layer: 1,
-        color: mixColor(theme.sea, theme.fog, 0.35),
-        dark: mixColor(theme.seaDeep, theme.fog, 0.25),
-        alpha: 0.68,
-        ripples: { spacing: 4.2, depth: 48, alpha: 0.1 },
-      },
-      {
-        offset: -14,
-        parallax: 0.56,
-        layer: 2,
-        color: mixColor(theme.sea, theme.seaDeep, 0.18),
-        dark: mixColor(theme.seaDeep, theme.fog, 0.08),
-        alpha: 0.86,
-        ripples: { spacing: 3.2, depth: 68, alpha: 0.13 },
-      },
-      {
-        offset: 0,
-        parallax: 0.9,
-        layer: 3,
-        color: theme.sea,
-        dark: theme.seaDeep,
-        alpha: 1.0,
-        ripples: { spacing: 2.4, depth: 92, alpha: 0.17 },
-      },
-    ];
-    for (const L of layers) {
-      this.duneLayer(ctx, cam, surfaceY + L.offset, L.parallax, L.layer, time, L.color, L.dark, L.alpha);
-      this.drawDuneGrain(ctx, cam, surfaceY + L.offset, L.parallax, L.layer, time, L.dark);
-      this.drawSandRipples(
-        ctx,
-        cam,
-        surfaceY + L.offset,
-        L.parallax,
-        L.layer,
-        time,
-        L.color,
-        L.dark,
-        L.ripples
-      );
+    // Dune layer config lives at module scope (SEA_LAYERS); its theme-derived
+    // colours refresh in place only when the quantized palette changes.
+    refreshSeaLayers();
+    // Each layer's surface is sampled once into the shared height cache and
+    // its clip traced once, shared by the fill / grain / ripple passes (each
+    // pass used to rebuild both from scratch with fresh waveHeight calls).
+    let cols = 0;
+    for (const L of SEA_LAYERS) {
+      const baseY = surfaceY + L.offset;
+      cols = this.sampleDuneHeights(cam, baseY, L.parallax, L.layer, time);
+      ctx.save();
+      this.clipDune(ctx, cols, h);
+      this.duneLayer(ctx, cam, baseY, L.layer, L.color, L.dark, L.alpha);
+      this.drawDuneGrain(ctx, cam, L.parallax, L.layer, L.dark, baseY, time);
+      // Layer 0's ripples (alpha 0.07 under layer alpha 0.48, behind three
+      // nearer layers) are invisible — skip the whole pass.
+      if (L.layer > 0) {
+        this.drawSandRipples(ctx, cam, L.parallax, L.layer, L.color, L.dark, L.ripples, cols);
+      }
+      ctx.restore();
     }
 
-    this.drawDuneCrestHighlight(ctx, cam, surfaceY, 0.9, 3, time);
+    // Reuses the front layer's cached heights — sampled last in the loop
+    // above with the same offset/parallax the crest used to recompute.
+    this.drawDuneCrestHighlight(ctx, cols);
     this.drawHorizonHaze(ctx, cam, surfaceY);
   }
 
@@ -765,209 +1176,255 @@ export class Background {
     top: number
   ) {
     const { w, h } = cam;
-    const parallax = 0.35;
-    const offX = cam.x * parallax;
-    const cell = 14;
-
+    const offX = cam.x * 0.35;
+    const tw = Math.ceil(w + GRAIN_MARGIN);
+    if (grainTileStale(seaGrainTile, tw, h, offX, w, 6)) {
+      this.bakeSeaGrain(seaGrainTile, tw, h, offX);
+    }
+    // The tile is anchored to `top` (as the loop was), so the pattern moves
+    // with the camera vertically exactly like before; the surface cutoff that
+    // was a per-grain reject is now an exact clip line.
     ctx.save();
     ctx.beginPath();
-    ctx.rect(0, top, w, h - top);
+    ctx.rect(0, surfaceY + 4, w, Math.max(0, h - surfaceY - 4));
     ctx.clip();
-
-    const startI = Math.floor((offX - w) / cell);
-    const endI = Math.ceil((offX + w) / cell);
-    const startJ = Math.floor((surfaceY - top) / cell);
-    const endJ = Math.ceil((h - top) / cell) + startJ + 1;
-
-    for (let i = startI; i <= endI; i++) {
-      for (let j = startJ; j <= endJ; j++) {
-        const r = hash01(i * 113 + j * 197);
-        if (r < 0.42) continue;
-        const gx = i * cell - offX + hash01(i * 9 + j) * cell;
-        const gy = top + j * cell + hash01(i + j * 13) * cell;
-        if (gy < surfaceY + 4) continue;
-        const bright = r > 0.78;
-        ctx.fillStyle = hexA(
-          bright ? theme.cloud : theme.seaDeep,
-          (r - 0.42) * (bright ? 0.16 : 0.12)
-        );
-        ctx.fillRect(gx, gy, bright ? 1.4 : 1, bright ? 1.4 : 1);
-      }
-    }
+    ctx.drawImage(seaGrainTile.s!.canvas, seaGrainTile.u0 - offX, top);
     ctx.restore();
   }
 
-  // Per-dune grain — clipped stipple on each sand layer for a tactile sandy surface.
+  private bakeSeaGrain(tile: GrainTile, tw: number, th: number, offX: number) {
+    const cell = 28;
+    const s = grainScratch(tile, tw, th);
+    const c = s.ctx;
+    c.clearRect(0, 0, tw, th);
+    tile.u0 = Math.floor(offX / cell) * cell - cell;
+    tile.version = theme.version;
+    const startI = Math.floor(tile.u0 / cell);
+    const endI = Math.ceil((tile.u0 + tw) / cell);
+    const endJ = Math.ceil(th / cell);
+    for (let pass = 0; pass < 2; pass++) {
+      const bright = pass === 1;
+      c.fillStyle = bright ? theme.cloud : theme.seaDeep;
+      const size = bright ? 1.4 : 1;
+      for (let i = startI; i <= endI; i++) {
+        for (let j = 0; j <= endJ; j++) {
+          const r = hash01(i * 113 + j * 197);
+          if (r < 0.42) continue;
+          if ((r > 0.78) !== bright) continue;
+          const gx = i * cell - tile.u0 + hash01(i * 9 + j) * cell;
+          const gy = j * cell + hash01(i + j * 13) * cell;
+          c.globalAlpha = (r - 0.42) * (bright ? 0.16 : 0.12);
+          c.fillRect(gx, gy, size, size);
+        }
+      }
+    }
+    c.globalAlpha = 1;
+  }
+
+  // Per-dune grain — stipple on each sand layer for a tactile sandy surface.
+  // Runs inside the caller's dune clip; surface heights come from the shared
+  // height cache (nearest column — the ±8px hash jitter dwarfs the error).
+  // Blit the layer's baked stipple band. Called inside the layer's dune clip,
+  // so the crest line stays exact even as the (slowly time-drifting) surface
+  // moves a few px between rebakes.
   private drawDuneGrain(
     ctx: CanvasRenderingContext2D,
     cam: Camera,
-    baseY: number,
     parallax: number,
     layer: number,
-    time: number,
-    dark: string
+    dark: string,
+    baseY: number,
+    time: number
   ) {
-    const { w, h } = cam;
-    const cell = 10 + layer;
+    const { w } = cam;
     const offX = cam.x * parallax;
+    const tw = Math.ceil(w + GRAIN_MARGIN);
+    const tile = (duneGrainTiles[layer] ??= makeGrainTile());
+    // Staggered palette slack so the four layers never rebake the same frame.
+    if (grainTileStale(tile, tw, DUNE_TILE_H, offX, w, 5 + layer)) {
+      this.bakeDuneGrain(tile, tw, layer, dark, time, offX);
+    }
+    ctx.drawImage(tile.s!.canvas, tile.u0 - offX, baseY - DUNE_TILE_PAD);
+  }
 
-    ctx.save();
-    this.clipToDune(ctx, cam, baseY, parallax, layer, time, h);
-
-    const startI = Math.floor((offX - w) / cell);
-    const endI = Math.ceil((offX + w) / cell);
-    for (let i = startI; i <= endI; i++) {
-      for (let j = 0; j < 14; j++) {
-        const r = hash01(i * 89 + j * 157 + layer * 31);
-        if (r < 0.48) continue;
-        const gx = i * cell - offX + hash01(i * 5 + j) * cell;
-        const wx = gx + offX;
-        const surface = baseY + this.waveHeight(wx, time, layer);
-        const gy = surface + 4 + j * (5 + layer) + hash01(i + j * 11) * 8;
-        const bright = r > 0.76;
-        ctx.fillStyle = hexA(
-          bright ? theme.cloud : dark,
-          (r - 0.48) * (bright ? 0.14 : 0.1) * (1 - layer * 0.08)
-        );
-        ctx.fillRect(gx, gy, bright ? 1.3 : 0.9, bright ? 1.3 : 0.9);
+  private bakeDuneGrain(
+    tile: GrainTile,
+    tw: number,
+    layer: number,
+    dark: string,
+    time: number,
+    offX: number
+  ) {
+    const cell = (10 + layer) * 2;
+    const s = grainScratch(tile, tw, DUNE_TILE_H);
+    const c = s.ctx;
+    c.clearRect(0, 0, tw, DUNE_TILE_H);
+    tile.u0 = Math.floor(offX / cell) * cell - cell;
+    tile.version = theme.version;
+    const fade = 1 - layer * 0.08;
+    for (let pass = 0; pass < 2; pass++) {
+      const bright = pass === 1;
+      c.fillStyle = bright ? theme.cloud : dark;
+      const size = bright ? 1.3 : 0.9;
+      const gain = (bright ? 0.14 : 0.1) * fade;
+      const startI = Math.floor(tile.u0 / cell);
+      const endI = Math.ceil((tile.u0 + tw) / cell);
+      for (let i = startI; i <= endI; i++) {
+        for (let j = 0; j < 14; j++) {
+          const r = hash01(i * 89 + j * 157 + layer * 31);
+          if (r < 0.48) continue;
+          if ((r > 0.76) !== bright) continue;
+          const gx = i * cell - tile.u0 + hash01(i * 5 + j) * cell;
+          // Surface height in baseY-relative space; wave drift between
+          // rebakes is a few px and hides under the caller's fresh clip.
+          const wave = this.waveHeight(gx + tile.u0, time, layer);
+          const gy =
+            DUNE_TILE_PAD + wave + 4 + j * (5 + layer) + hash01(i + j * 11) * 8;
+          c.globalAlpha = (r - 0.48) * gain;
+          c.fillRect(gx, gy, size, size);
+        }
       }
     }
-    ctx.restore();
+    c.globalAlpha = 1;
   }
 
   // Wind-blown sand ripples — dense wavy lines following each dune face (Alto-style).
+  // Runs inside the caller's dune clip; surface heights come from the shared cache.
   private drawSandRipples(
     ctx: CanvasRenderingContext2D,
     cam: Camera,
-    baseY: number,
     parallax: number,
     layer: number,
-    time: number,
     sandLight: string,
     sandDark: string,
-    ripples: { spacing: number; depth: number; alpha: number }
+    ripples: { spacing: number; depth: number; alpha: number },
+    cols: number
   ) {
-    const { w, h } = cam;
-    const step = 4;
+    const step = 8; // 2 height-cache columns — invisible at these line widths
     const { spacing, depth, alpha } = ripples;
+    const offX = cam.x * parallax;
+    const lastX = (cols - 1) * HEIGHT_STEP; // at or past the right edge
 
     ctx.save();
-    this.clipToDune(ctx, cam, baseY, parallax, layer, time, h);
 
     const rippleDark = mixColor(sandDark, sandLight, 0.15);
     const rippleLight = mixColor(sandLight, theme.cloud, 0.45);
 
-    for (let d = 4; d < depth; d += spacing) {
-      const t = d / depth;
-      const fade = 1 - t * 0.72;
-      const lineAlpha = alpha * fade;
-      if (lineAlpha < 0.015) continue;
+    // Batch the alternating light/dark lines (up to ~37 antialiased stroke()
+    // calls per layer) into 2 colours x 3 depth bands = 6 strokes, keeping
+    // the fade toward the dune base.
+    const BANDS = 3;
+    for (let band = 0; band < BANDS; band++) {
+      const bandAlpha = alpha * (1 - ((band + 0.5) / BANDS) * 0.72);
+      if (bandAlpha < 0.015) continue;
+      for (let pass = 0; pass < 2; pass++) {
+        const light = pass === 0;
+        ctx.strokeStyle = hexA(light ? rippleLight : rippleDark, bandAlpha);
+        ctx.lineWidth = light ? 0.65 : 0.95;
+        ctx.beginPath();
+        for (let d = 4; d < depth; d += spacing) {
+          if ((Math.floor(d / spacing) % 2 === 0) !== light) continue;
+          if (Math.floor((d / depth) * BANDS) !== band) continue;
 
-      // Wind ripples bunch and spread — organic convergence like real sand.
-      const freq = 18 + layer * 3 + Math.sin(d * 0.08 + layer) * 4;
-      const amp = 1.6 + layer * 0.35 + Math.sin(d * 0.12) * 0.6;
-      const phase = d * 0.24 + layer * 1.9;
-      const isLight = Math.floor(d / spacing) % 2 === 0;
+          // Wind ripples bunch and spread — organic convergence like real sand.
+          const freq = 18 + layer * 3 + Math.sin(d * 0.08 + layer) * 4;
+          const amp = 1.6 + layer * 0.35 + Math.sin(d * 0.12) * 0.6;
+          const phase = d * 0.24 + layer * 1.9;
 
-      ctx.strokeStyle = hexA(isLight ? rippleLight : rippleDark, lineAlpha);
-      ctx.lineWidth = isLight ? 0.65 : 0.95;
-      ctx.beginPath();
-      for (let x = 0; x <= w; x += step) {
-        const wx = x + cam.x * parallax;
-        const surface = baseY + this.waveHeight(wx, time, layer);
-        const ripple =
-          Math.sin(wx / freq + phase) * amp +
-          Math.sin(wx / (freq * 0.38) + phase * 1.4 + 0.8) * amp * 0.42 +
-          Math.sin(wx / (freq * 2.1) + phase * 0.6) * amp * 0.18;
-        const y = surface + d + ripple;
-        if (x === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+          for (let x = 0; x <= lastX; x += step) {
+            const wx = x + offX;
+            const surface = heightScratch[x / HEIGHT_STEP];
+            const ripple =
+              Math.sin(wx / freq + phase) * amp +
+              Math.sin(wx / (freq * 0.38) + phase * 1.4 + 0.8) * amp * 0.42 +
+              Math.sin(wx / (freq * 2.1) + phase * 0.6) * amp * 0.18;
+            const y = surface + d + ripple;
+            if (x === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+        }
+        ctx.stroke();
       }
-      ctx.stroke();
     }
 
     ctx.restore();
   }
 
-  private clipToDune(
-    ctx: CanvasRenderingContext2D,
+  // Fill the shared height cache with one layer's dune surface (screen-space
+  // y per HEIGHT_STEP px column) and return the column count. The last column
+  // lands at or past the right edge so consumers cover the full width.
+  private sampleDuneHeights(
     cam: Camera,
     baseY: number,
     parallax: number,
     layer: number,
-    time: number,
-    bottom: number
-  ) {
-    const { w } = cam;
-    const step = 6;
+    time: number
+  ): number {
+    const cols = Math.ceil(cam.w / HEIGHT_STEP) + 1;
+    if (heightScratch.length < cols) heightScratch = new Float32Array(cols);
+    const offX = cam.x * parallax;
+    for (let k = 0; k < cols; k++) {
+      heightScratch[k] = baseY + this.waveHeight(k * HEIGHT_STEP + offX, time, layer);
+    }
+    return cols;
+  }
+
+  // Below-the-dune clip region, traced once per layer from the cached heights
+  // and shared by the fill / grain / ripple passes (it used to be rebuilt —
+  // with fresh waveHeight calls — for every pass).
+  private clipDune(ctx: CanvasRenderingContext2D, cols: number, bottom: number) {
     ctx.beginPath();
     ctx.moveTo(0, bottom);
-    for (let x = 0; x <= w; x += step) {
-      const wx = x + cam.x * parallax;
-      ctx.lineTo(x, baseY + this.waveHeight(wx, time, layer));
+    for (let k = 0; k < cols; k++) {
+      ctx.lineTo(k * HEIGHT_STEP, heightScratch[k]);
     }
-    ctx.lineTo(w, bottom);
+    ctx.lineTo((cols - 1) * HEIGHT_STEP, bottom);
     ctx.closePath();
     ctx.clip();
   }
 
   // Bright rim light along the front dune crest — Alto's glowing sand edge.
-  private drawDuneCrestHighlight(
-    ctx: CanvasRenderingContext2D,
-    cam: Camera,
-    surfaceY: number,
-    parallax: number,
-    layer: number,
-    time: number
-  ) {
-    const { w } = cam;
-    const step = 4;
+  // The crest polyline comes straight from the shared height cache (the front
+  // layer is sampled last in drawSea), so this pass costs zero waveHeight
+  // calls. Concentric plain 'lighter' strokes stand in for the old
+  // shadowBlur glow — WebKit rasterizes canvas shadows through a full-width
+  // Gaussian blur pass, the most expensive draw call that was in the frame.
+  private drawDuneCrestHighlight(ctx: CanvasRenderingContext2D, cols: number) {
     const daylight = 1 - theme.night * 0.7;
-    const crestY = (x: number) => {
-      const wx = x + cam.x * parallax;
-      return surfaceY + this.waveHeight(wx, time, layer);
-    };
 
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
-
-    // Soft outer glow ribbon.
-    ctx.shadowBlur = 14;
-    ctx.shadowColor = hexA(theme.cloud, 0.55 * daylight);
-    ctx.strokeStyle = hexA(theme.cloud, 0.35 * daylight);
-    ctx.lineWidth = 14;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    ctx.beginPath();
-    for (let x = 0; x <= w; x += step) {
-      const y = crestY(x) - 1;
-      if (x === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
 
-    // Bright sharp crest line.
-    ctx.shadowBlur = 6;
-    ctx.shadowColor = hexA(theme.cloud, 0.75 * daylight);
-    ctx.strokeStyle = hexA(theme.cloud, 0.82 * daylight);
-    ctx.lineWidth = 2.5;
+    // Crest polyline built once, stroked three times: soft outer glow ribbon,
+    // tighter halo, then the bright sharp crest line.
     ctx.beginPath();
-    for (let x = 0; x <= w; x += step) {
-      const y = crestY(x) - 1;
-      if (x === 0) ctx.moveTo(x, y);
+    for (let k = 0; k < cols; k++) {
+      const x = k * HEIGHT_STEP;
+      const y = heightScratch[k] - 1;
+      if (k === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
+    ctx.strokeStyle = hexA(theme.cloud, 0.1 * daylight);
+    ctx.lineWidth = 18;
+    ctx.stroke();
+    ctx.strokeStyle = hexA(theme.cloud, 0.18 * daylight);
+    ctx.lineWidth = 8;
+    ctx.stroke();
+    ctx.strokeStyle = hexA(theme.cloud, 0.8 * daylight);
+    ctx.lineWidth = 2.5;
     ctx.stroke();
 
     // Warm shadow band just below the crest — sells the lit ridge.
-    ctx.shadowBlur = 0;
     ctx.globalCompositeOperation = "source-over";
     ctx.strokeStyle = hexA(theme.seaDeep, 0.07 * daylight);
     ctx.lineWidth = 8;
     ctx.beginPath();
-    for (let x = 0; x <= w; x += step) {
-      const y = crestY(x) + 5;
-      if (x === 0) ctx.moveTo(x, y);
+    for (let k = 0; k < cols; k++) {
+      const x = k * HEIGHT_STEP;
+      const y = heightScratch[k] + 5;
+      if (k === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
     ctx.stroke();
@@ -976,15 +1433,23 @@ export class Background {
   }
 
   // Soft haze where the dunes meet the sky — distant layers fade into atmosphere.
+  // Fixed 160px band, so the gradient bakes in local space per palette change
+  // and just translates with the surface — exact, no quantization needed.
   private drawHorizonHaze(ctx: CanvasRenderingContext2D, cam: Camera, surfaceY: number) {
     const { w } = cam;
-    const haze = ctx.createLinearGradient(0, surfaceY - 110, 0, surfaceY + 50);
-    haze.addColorStop(0, hexA(theme.fog, 0));
-    haze.addColorStop(0.35, hexA(theme.fog, 0.08));
-    haze.addColorStop(0.65, hexA(theme.fog, 0.18));
-    haze.addColorStop(1, hexA(theme.fog, 0));
+    const haze = this.hazeGrad.get(theme.version, 0, () => {
+      const g = ctx.createLinearGradient(0, 0, 0, 160);
+      g.addColorStop(0, hexA(theme.fog, 0));
+      g.addColorStop(0.35, hexA(theme.fog, 0.08));
+      g.addColorStop(0.65, hexA(theme.fog, 0.18));
+      g.addColorStop(1, hexA(theme.fog, 0));
+      return g;
+    });
+    ctx.save();
+    ctx.translate(0, surfaceY - 110);
     ctx.fillStyle = haze;
-    ctx.fillRect(0, surfaceY - 110, w, 160);
+    ctx.fillRect(0, 0, w, 160);
+    ctx.restore();
   }
 
   // Gentle rolling dune silhouettes — long smooth swells like Alto's sand hills.
@@ -1001,30 +1466,38 @@ export class Background {
     return y;
   }
 
+  // Gradient body of one dune layer. Runs inside the caller's dune clip.
+  // The gradient is built in local space with a 4px-quantized span and
+  // translated to the (camera-tracking) top, so each layer's cache survives
+  // across frames per palette change. The layer's colours are pure functions
+  // of the theme, so theme.version covers them too.
   private duneLayer(
     ctx: CanvasRenderingContext2D,
     cam: Camera,
     baseY: number,
-    parallax: number,
     layer: number,
-    time: number,
     color: string,
     dark: string,
     alpha: number
   ) {
     const { w, h } = cam;
+    const gradTop = baseY - 60;
+    const span = h - gradTop;
+    const qspan = Math.round(span / 4) * 4;
+    const grad = this.duneGrads[layer].get(theme.version, qspan, () => {
+      const g = ctx.createLinearGradient(0, 0, 0, qspan);
+      g.addColorStop(0, mixColor(color, theme.cloud, 0.38));
+      g.addColorStop(0.12, mixColor(color, theme.cloud, 0.12));
+      g.addColorStop(0.35, color);
+      g.addColorStop(1, dark);
+      return g;
+    });
+
     ctx.save();
     ctx.globalAlpha = alpha;
-    this.clipToDune(ctx, cam, baseY, parallax, layer, time, h);
-
-    const grad = ctx.createLinearGradient(0, baseY - 60, 0, h);
-    grad.addColorStop(0, mixColor(color, theme.cloud, 0.38));
-    grad.addColorStop(0.12, mixColor(color, theme.cloud, 0.12));
-    grad.addColorStop(0.35, color);
-    grad.addColorStop(1, dark);
+    ctx.translate(0, gradTop);
     ctx.fillStyle = grad;
-    ctx.fillRect(0, baseY - 50, w, h - baseY + 50);
-
+    ctx.fillRect(0, 10, w, span - 10);
     ctx.restore();
   }
 
@@ -1085,6 +1558,72 @@ export class Background {
 
   // --- Floating island: flat plateau top, rocky sides, tapered underside. ---
 
+  // Unit-space layout for one island seed — every hash01 draw, plateau lookup
+  // and quad-bezier root solve happens here, once, instead of per frame.
+  private islandLayout(seed: number): IslandLayout {
+    let L = islandLayouts.get(seed);
+    if (L) return L;
+    const rw = 90 + hash01(seed * 7) * 70;
+    const rh = 24 + hash01(seed * 13) * 18;
+    const hang = 28 + hash01(seed * 19) * 38;
+    const skew = (hash01(seed * 23) - 0.5) * rw * 0.12;
+
+    const vineCount = 2 + ((hash01(seed * 53) * 5) | 0);
+    const vineX: number[] = [];
+    const vineY: number[] = [];
+    const vineLen: number[] = [];
+    const vineSway: number[] = [];
+    const vineCurl: number[] = [];
+    for (let v = 0; v < vineCount; v++) {
+      const along = hash01(seed * 59 + v * 11);
+      const anchorX = (along - 0.5) * rw * 1.15;
+      const surfaceY = this.islandUndersideY(anchorX, rw, hang, skew);
+      if (surfaceY === null) continue;
+      vineX.push(anchorX);
+      vineY.push(surfaceY);
+      vineLen.push(10 + hash01(seed * 67 + v) * 22);
+      vineSway.push((hash01(seed * 71 + v) - 0.5) * 14);
+      vineCurl.push((hash01(seed * 73 + v) - 0.5) * 8);
+    }
+
+    const treeCount = (1 + hash01(seed * 29) * 3) | 0;
+    const treeX: number[] = [];
+    const treeY: number[] = [];
+    const treeH: number[] = [];
+    for (let t = 0; t < treeCount; t++) {
+      const tx = (hash01(seed * 31 + t * 7) - 0.5) * rw * 1.2;
+      treeX.push(tx);
+      treeY.push(this.plateauTopY(tx, rw, rh, 1.2));
+      treeH.push(18 + hash01(seed * 41 + t) * 24);
+    }
+
+    const critterX = (hash01(seed * 43) - 0.5) * rw * 0.9;
+    L = {
+      rw,
+      rh,
+      hang,
+      skew,
+      vineX,
+      vineY,
+      vineLen,
+      vineSway,
+      vineCurl,
+      treeX,
+      treeY,
+      treeH,
+      hasCritter: hash01(seed * 37) > 0.5,
+      critterX,
+      critterY: this.plateauTopY(critterX, rw, rh, 1.2),
+      critterPick: hash01(seed * 47),
+      critterPh: hash01(seed * 59) * TAU,
+      critterSize: hash01(seed * 53),
+      style: new VersionCache<IslandStyle>(),
+    };
+    if (islandLayouts.size >= LAYOUT_CAP) evictOldest(islandLayouts);
+    islandLayouts.set(seed, L);
+    return L;
+  }
+
   private drawFloatingIsland(
     ctx: CanvasRenderingContext2D,
     x: number,
@@ -1095,10 +1634,30 @@ export class Background {
     withTrees: boolean,
     time: number
   ) {
-    const rw = (90 + hash01(seed * 7) * 70) * scale;
-    const rh = (24 + hash01(seed * 13) * 18) * scale;
-    const hang = (28 + hash01(seed * 19) * 38) * scale;
-    const skew = (hash01(seed * 23) - 0.5) * rw * 0.12;
+    const L = this.islandLayout(seed);
+    const rw = L.rw * scale;
+    const rh = L.rh * scale;
+    const hang = L.hang * scale;
+    const skew = L.skew * scale;
+
+    // Gradient + tinted colour strings rebuild only on palette change. The
+    // key carries colour + scale so the two ridges (different fog mixes and
+    // scales) can't cross-contaminate if they ever share a seed.
+    const style = L.style.get(theme.version, `${color}|${scale}`, () => {
+      const grad = ctx.createLinearGradient(0, -rh, 0, hang);
+      grad.addColorStop(0, mixColor(color, theme.skyGlow, 0.38));
+      grad.addColorStop(0.18, mixColor(color, theme.skyGlow, 0.12));
+      grad.addColorStop(0.45, color);
+      grad.addColorStop(1, mixColor(color, theme.mid, 0.25));
+      return {
+        grad,
+        treeCol: hexA(mixColor(color, theme.mid, 0.45), 0.92),
+        trunkCol: hexA(mixColor(color, theme.mid, 0.65), 0.88),
+        vineCol: hexA(mixColor(color, theme.mid, 0.4), 0.62),
+        leafCol: hexA(mixColor(color, theme.fog, 0.25), 0.5),
+        critterCol: hexA(mixColor(color, theme.mid, 0.62), 0.95),
+      };
+    });
 
     ctx.save();
     ctx.translate(x, y);
@@ -1113,53 +1672,56 @@ export class Background {
     ctx.quadraticCurveTo(0, hang, -rw * 0.22, hang * 0.78);
     ctx.quadraticCurveTo(-rw * 0.62 + skew, hang * 0.4, -rw, 0);
     ctx.closePath();
-
-    const grad = ctx.createLinearGradient(0, -rh, 0, hang);
-    grad.addColorStop(0, mixColor(color, theme.skyGlow, 0.38));
-    grad.addColorStop(0.18, mixColor(color, theme.skyGlow, 0.12));
-    grad.addColorStop(0.45, color);
-    grad.addColorStop(1, mixColor(color, theme.mid, 0.25));
-    ctx.fillStyle = grad;
+    ctx.fillStyle = style.grad;
     ctx.fill();
 
-    this.drawIslandVines(ctx, rw, hang, skew, seed, color, scale);
+    this.drawIslandVines(ctx, L, scale, style.vineCol, style.leafCol);
 
     if (withTrees) {
-      const treeCount = 1 + (hash01(seed * 29) * 3) | 0;
-      const treeCol = hexA(mixColor(color, theme.mid, 0.45), 0.92);
-      const trunkCol = hexA(mixColor(color, theme.mid, 0.65), 0.88);
-      for (let t = 0; t < treeCount; t++) {
-        const tx = (hash01(seed * 31 + t * 7) - 0.5) * rw * 1.2;
-        const surfaceY = this.plateauTopY(tx, rw, rh, 1.2);
-        const th = (18 + hash01(seed * 41 + t) * 24) * scale;
-        this.drawCypressTree(ctx, tx, surfaceY, th, treeCol, trunkCol);
+      for (let t = 0; t < L.treeX.length; t++) {
+        this.drawCypressTree(
+          ctx,
+          L.treeX[t] * scale,
+          L.treeY[t] * scale,
+          L.treeH[t] * scale,
+          style.treeCol,
+          style.trunkCol
+        );
       }
     }
 
     // A little critter grazing on the plateau every so often.
-    if (scale > 0.62 && hash01(seed * 37) > 0.5) {
-      const cx = (hash01(seed * 43) - 0.5) * rw * 0.9;
-      const surfaceY = this.plateauTopY(cx, rw, rh, 1.2);
-      const critterCol = hexA(mixColor(color, theme.mid, 0.62), 0.95);
-      this.drawIslandCritter(ctx, cx, surfaceY + 1, scale, seed, critterCol, time);
+    if (scale > 0.62 && L.hasCritter) {
+      this.drawIslandCritter(
+        ctx,
+        L.critterX * scale,
+        L.critterY * scale + 1,
+        scale,
+        L.critterPick,
+        L.critterPh,
+        L.critterSize,
+        style.critterCol,
+        time
+      );
     }
 
     ctx.restore();
   }
 
   // Tiny grazing silhouettes (deer / rabbit / perched bird) that give the
-  // floating islands a sense of life. Procedurally chosen and seed-stable.
+  // floating islands a sense of life. Procedurally chosen and seed-stable —
+  // pick / ph / size come from the cached island layout.
   private drawIslandCritter(
     ctx: CanvasRenderingContext2D,
     x: number,
     y: number,
     scale: number,
-    seed: number,
+    pick: number,
+    ph: number, // per-critter phase so they're out of sync
+    size: number,
     col: string,
     time: number
   ) {
-    const pick = hash01(seed * 47);
-    const ph = hash01(seed * 59) * TAU; // per-critter phase so they're out of sync
     const L = (a: number, b: number, t: number) => a + (b - a) * t;
 
     ctx.save();
@@ -1170,7 +1732,7 @@ export class Background {
 
     if (pick > 0.66) {
       // Deer — lowers its head to graze, then lifts it again.
-      const s = (12 + hash01(seed * 53) * 6) * scale;
+      const s = (12 + size * 6) * scale;
       const dip = Math.sin(time * 0.8 + ph) * 0.5 + 0.5; // 0 = head up, 1 = grazing
       ctx.lineWidth = Math.max(1, s * 0.1);
       for (const lx of [-0.3, -0.12, 0.12, 0.3]) {
@@ -1204,7 +1766,7 @@ export class Background {
       ctx.stroke();
     } else if (pick > 0.33) {
       // Rabbit — bobs up and down with little ear twitches.
-      const s = (8 + hash01(seed * 53) * 4) * scale;
+      const s = (8 + size * 4) * scale;
       const bob = -Math.abs(Math.sin(time * 2 + ph)) * s * 0.14;
       const tw = Math.sin(time * 3 + ph * 1.3) * 0.14; // ear flick
       ctx.save();
@@ -1227,7 +1789,7 @@ export class Background {
       ctx.restore();
     } else {
       // Perched bird — pecks the ground, tail flicking up as the head dips.
-      const s = (6 + hash01(seed * 53) * 3) * scale;
+      const s = (6 + size * 3) * scale;
       const peck = Math.pow(Math.sin(time * 1.6 + ph) * 0.5 + 0.5, 3);
       ctx.beginPath();
       ctx.ellipse(x, y - s * 0.5, s * 0.5, s * 0.33, -0.2, 0, TAU);
@@ -1344,32 +1906,25 @@ export class Background {
     return -peakH;
   }
 
-  // Wispy vines dangling from the island underside.
+  // Wispy vines dangling from the island underside. Anchors / lengths come
+  // from the cached unit-space layout — the bezier root solves happen once
+  // per seed, not per frame.
   private drawIslandVines(
     ctx: CanvasRenderingContext2D,
-    rw: number,
-    hang: number,
-    skew: number,
-    seed: number,
-    color: string,
-    scale: number
+    L: IslandLayout,
+    scale: number,
+    vineCol: string,
+    leafCol: string
   ) {
-    const vineCount = 2 + ((hash01(seed * 53) * 5) | 0);
-    const vineCol = hexA(mixColor(color, theme.mid, 0.4), 0.62);
-    const leafCol = hexA(mixColor(color, theme.fog, 0.25), 0.5);
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
 
-    for (let v = 0; v < vineCount; v++) {
-      const along = hash01(seed * 59 + v * 11);
-      const anchorX = (along - 0.5) * rw * 1.15;
-      const surfaceY = this.islandUndersideY(anchorX, rw, hang, skew);
-      if (surfaceY === null) continue;
-
-      const anchorY = surfaceY + 0.5;
-      const len = (10 + hash01(seed * 67 + v) * 22) * scale;
-      const sway = (hash01(seed * 71 + v) - 0.5) * 14 * scale;
-      const curl = (hash01(seed * 73 + v) - 0.5) * 8 * scale;
+    for (let v = 0; v < L.vineX.length; v++) {
+      const anchorX = L.vineX[v] * scale;
+      const anchorY = L.vineY[v] * scale + 0.5;
+      const len = L.vineLen[v] * scale;
+      const sway = L.vineSway[v] * scale;
+      const curl = L.vineCurl[v] * scale;
 
       ctx.strokeStyle = vineCol;
       ctx.lineWidth = Math.max(0.7, 1.1 * scale);
@@ -1841,36 +2396,44 @@ export class Background {
     seed: number,
     color: string,
     lit: string,
-    groundY: (localX: number) => number
+    back: string,
+    backLit: string,
+    worldX: number
   ) {
     ctx.save();
     ctx.translate(sx, baseY);
     // Spread firs across a wide span; with every cell planted they overlap
     // into one continuous treeline. They stand on the shared ground line, so
-    // no per-cluster platform can float free of the land.
-    const mw = 180 * scale;
+    // no per-cluster platform can float free of the land. Positions / heights
+    // (and the front row's draw order) come from the cached per-seed layout.
+    const L = pineLayout(seed);
+    const roll0 = midRoll(worldX); // local ground level is relative to here
+    const lift = 2 * scale;
 
     // Back row — smaller, hazier firs receding toward the fog for depth.
-    const back = mixColor(color, theme.fog, 0.34);
-    const backLit = mixColor(back, theme.skyGlow, 0.2);
-    const nb = 6 + ((hash01(seed * 7) * 5) | 0);
-    for (let t = 0; t < nb; t++) {
-      const fx = (hash01(seed * 11 + t * 3) - 0.5) * mw * 1.95;
-      const fh = (32 + hash01(seed * 17 + t) * 30) * scale;
-      this.drawFir(ctx, fx, groundY(fx) + 2 * scale, fh, back, backLit);
+    for (let t = 0; t < L.backX.length; t++) {
+      const fx = L.backX[t] * scale;
+      this.drawFir(
+        ctx,
+        fx,
+        midRoll(worldX + fx) - roll0 + lift,
+        L.backH[t] * scale,
+        back,
+        backLit
+      );
     }
 
     // Front row — taller, denser firs whose canopies overlap (tall-to-short).
-    const nf = 7 + ((hash01(seed * 13) * 5) | 0);
-    const trees: { fx: number; fh: number }[] = [];
-    for (let t = 0; t < nf; t++) {
-      const fx = (hash01(seed * 23 + t * 5) - 0.5) * mw * 1.85;
-      const fh = (50 + hash01(seed * 29 + t) * 66) * scale;
-      trees.push({ fx, fh });
-    }
-    trees.sort((a, b) => b.fh - a.fh);
-    for (const tr of trees) {
-      this.drawFir(ctx, tr.fx, groundY(tr.fx) + 2 * scale, tr.fh, color, lit);
+    for (let t = 0; t < L.frontX.length; t++) {
+      const fx = L.frontX[t] * scale;
+      this.drawFir(
+        ctx,
+        fx,
+        midRoll(worldX + fx) - roll0 + lift,
+        L.frontH[t] * scale,
+        color,
+        lit
+      );
     }
     ctx.restore();
   }
@@ -1937,13 +2500,12 @@ export class Background {
     scale: number,
     seed: number,
     color: string,
-    lit: string,
-    groundY: (localX: number) => number
+    lit: string
   ) {
     ctx.save();
-    // Plant the stones on the shared ground line (no separate base slab, so
-    // nothing floats when the camera drops).
-    ctx.translate(sx, baseY + groundY(0));
+    // Plant the stones on the shared ground line — baseY already sits on the
+    // crest (no separate base slab, so nothing floats when the camera drops).
+    ctx.translate(sx, baseY);
 
     const type = (hash01(seed * 3) * 3) | 0;
 
@@ -2043,35 +2605,14 @@ export class Background {
     width: number,
     alpha: number
   ) {
-    const puffs = [
-      { dx: 0, dy: 0, r: width * 0.28 },
-      { dx: -width * 0.22, dy: width * 0.04, r: width * 0.22 },
-      { dx: width * 0.24, dy: width * 0.02, r: width * 0.24 },
-      { dx: -width * 0.08, dy: -width * 0.1, r: width * 0.26 },
-      { dx: width * 0.1, dy: -width * 0.08, r: width * 0.2 },
-      { dx: width * 0.38, dy: width * 0.06, r: width * 0.16 },
-      { dx: -width * 0.35, dy: width * 0.05, r: width * 0.15 },
-    ];
+    // Every puff shares one tinted falloff sprite (see puffSprite) — a
+    // drawImage each instead of a fresh radial gradient + shader-filled arc.
+    const sprite = puffSprite();
     ctx.save();
     ctx.globalAlpha = alpha;
-    for (const p of puffs) {
-      const cx = x + p.dx;
-      const cy = y + p.dy;
-      const g = ctx.createRadialGradient(
-        cx,
-        cy - p.r * 0.3,
-        p.r * 0.1,
-        cx,
-        cy + p.r * 0.15,
-        p.r
-      );
-      g.addColorStop(0, hexA(theme.cloud, 0.95));
-      g.addColorStop(0.55, hexA(theme.cloud, 0.55));
-      g.addColorStop(1, hexA(theme.cloud, 0));
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(cx, cy, p.r, 0, TAU);
-      ctx.fill();
+    for (const p of CLUSTER_PUFFS) {
+      const r = p.r * width;
+      ctx.drawImage(sprite, x + p.dx * width - r, y + p.dy * width - r, r * 2, r * 2);
     }
     ctx.restore();
   }

@@ -9,6 +9,7 @@ import { clamp } from "./math";
 import { Player } from "../entities/player";
 import { Hazard } from "../entities/hazard";
 import { hexA } from "../entities/anchor";
+import { makeScratch, Scratch, VersionCache } from "../render/rcache";
 import { World } from "../systems/world";
 import { Particles } from "../systems/particles";
 import { Objectives } from "../systems/objectives";
@@ -60,17 +61,38 @@ export class Game {
   // True while a tap that began on the dash button is held (suppresses tether).
   private dashLatch = false;
 
+  // Reused dash-magnet params for world.update — mutated per sub-step instead
+  // of allocating a fresh object literal 120x/sec for the duration of a dash.
+  private dashMagnet = {
+    x: 0,
+    y: 0,
+    range: CONFIG.wind.dashMagnetRange,
+    strength: 1000,
+  };
+
+  // Baked vignette + top grade, rebuilt only on palette / size / menu changes.
+  private vignette = new VersionCache<Scratch>();
+  private vignetteScratch: Scratch | null = null;
+
   constructor(canvas: HTMLCanvasElement) {
-    const ctx = canvas.getContext("2d", { alpha: false });
+    // desynchronized lets Chromium present without compositor sync (saves a
+    // buffer copy + up to a frame of latency); Safari/WKWebView ignores it.
+    const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
     if (!ctx) throw new Error("2D canvas context unavailable");
     this.ctx = ctx;
     this.input = new Input(canvas);
     this.enterMenu();
   }
 
-  resize(w: number, h: number, dpr: number) {
+  resize(
+    w: number,
+    h: number,
+    dpr: number,
+    insets = { top: 0, right: 0, bottom: 0, left: 0 }
+  ) {
     this.dpr = dpr;
     this.camera.resize(w, h);
+    this.camera.insets = insets;
   }
 
   // --- State transitions ---------------------------------------------------
@@ -281,6 +303,11 @@ export class Game {
     this.handleStateInput();
 
     if (this.state !== "paused") {
+      // World streaming runs once per rendered frame, not per 120 Hz sub-step:
+      // the 700px spawn / 500px cull buffers dwarf per-frame camera movement.
+      // ensure() before the step loop so anchors exist for the physics steps;
+      // cull() after it, once the camera has settled for this frame.
+      this.world.ensure(this.camera.right);
       this.acc += dt;
       let steps = 0;
       while (this.acc >= CONFIG.fixedDt && steps < 8) {
@@ -289,6 +316,7 @@ export class Game {
         steps++;
       }
       if (steps === 8) this.acc = 0; // avoid spiral of death after a long stall
+      this.world.cull(this.camera.left);
     }
 
     this.particles.update(dt);
@@ -365,14 +393,11 @@ export class Game {
       const glideTime = this.time - this.attractGlideStartTime;
       this.player.animateMenuGlide(dt, glideTime, this.attractGlideX);
       this.camera.follow(this.player.x, this.player.y, 280, dt);
-      this.world.ensure(this.camera.right);
-      this.world.cull(this.camera.left);
       this.world.update(dt, this.time);
       return;
     }
 
     if (this.state === "crashing") {
-      this.world.ensure(this.camera.right);
       this.world.update(dt, this.time);
       const stopped = this.player.stepSkid(dt, this.world.seaLevel);
       this.distance = Math.max(
@@ -385,7 +410,6 @@ export class Game {
         Math.max(this.player.speed, 60),
         dt
       );
-      this.world.cull(this.camera.left);
 
       const spd = this.player.speed;
       if (spd > CONFIG.skid.stopSpeed && Math.random() < clamp(spd / 700, 0.06, 0.32)) {
@@ -411,24 +435,16 @@ export class Game {
 
     // --- Playing ---
     this.hintTimer += dt;
-    this.world.ensure(this.camera.right);
 
     const holdForTether = this.input.holding && !this.dashLatch;
-    this.player.step(dt, holdForTether, this.world.anchors, this.time);
+    this.player.step(dt, holdForTether, this.world.anchors, this.time, this.camera);
 
     const dashing = this.player.state === "dash";
-    this.world.update(
-      dt,
-      this.time,
-      dashing
-        ? {
-            x: this.player.x,
-            y: this.player.y,
-            range: CONFIG.wind.dashMagnetRange,
-            strength: 1000,
-          }
-        : undefined
-    );
+    if (dashing) {
+      this.dashMagnet.x = this.player.x;
+      this.dashMagnet.y = this.player.y;
+    }
+    this.world.update(dt, this.time, dashing ? this.dashMagnet : undefined);
 
     this.handlePlayerEvents();
     this.handleSkim(dt);
@@ -452,11 +468,11 @@ export class Game {
     this.wind = clamp(this.wind, 0, CONFIG.wind.max);
 
     this.camera.follow(this.player.x, this.player.y, this.player.speed, dt);
-    this.world.cull(this.camera.left);
 
-    // Highlight the nearest grab candidate so the route reads clearly.
+    // Highlight the nearest grab candidate so the route reads clearly. Same
+    // view gate as the actual grab, so the glow never lies.
     if (this.player.state === "glide") {
-      const target = this.player.findGrabTarget(this.world.anchors);
+      const target = this.player.findGrabTarget(this.world.anchors, this.camera);
       if (target) target.highlight = 1;
     }
   }
@@ -651,7 +667,7 @@ export class Game {
       this.player.draw(ctx, this.time, this.isAttractScreen());
     }
     this.particles.draw(ctx);
-    this.hud.drawWorldPopups(ctx);
+    this.hud.drawWorldPopups(ctx, cam.zoom);
     ctx.restore();
 
     this.background.drawForeground(ctx, cam, this.time);
@@ -661,12 +677,35 @@ export class Game {
   }
 
   // Cheap post-process: radial vignette + a touch of top/bottom grade for depth
-  // and HUD legibility.
+  // and HUD legibility. Baked at quarter resolution (bilinear upscale is
+  // invisible on smooth gradients) and rebuilt only when the palette, canvas
+  // size, or menu edge value changes — per-frame cost is one drawImage.
   private drawVignette(ctx: CanvasRenderingContext2D, cam: Camera) {
     const { w, h } = cam;
     const onMenu = this.isAttractScreen();
+    const sprite = this.vignette.get(theme.version, `${w}|${h}|${onMenu}`, () =>
+      this.bakeVignette(w, h, onMenu)
+    );
+    ctx.drawImage(sprite.canvas, 0, 0, w, h);
+  }
+
+  private bakeVignette(w: number, h: number, onMenu: boolean): Scratch {
+    // Reuse one scratch canvas across rebakes (a rebake happens on every
+    // palette step, so allocating here would churn ~5 canvases/sec).
+    const tw = Math.max(1, Math.ceil(w / 4));
+    const th = Math.max(1, Math.ceil(h / 4));
+    let s = this.vignetteScratch;
+    if (!s || s.canvas.width !== tw || s.canvas.height !== th) {
+      s = this.vignetteScratch = makeScratch(tw, th);
+    }
+    const c = s.ctx;
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.clearRect(0, 0, tw, th);
+    // Draw in CSS-pixel coordinates; the scratch is a quarter-res target.
+    c.scale(s.canvas.width / w, s.canvas.height / h);
+
     const edge = onMenu ? 0.18 : 0.42 - theme.night * 0.14;
-    const g = ctx.createRadialGradient(
+    const g = c.createRadialGradient(
       w * 0.5,
       h * 0.5,
       Math.min(w, h) * 0.34,
@@ -676,14 +715,16 @@ export class Game {
     );
     g.addColorStop(0, hexA(theme.skyTop, 0));
     g.addColorStop(1, hexA(theme.skyTop, edge));
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, w, h);
+    c.fillStyle = g;
+    c.fillRect(0, 0, w, h);
 
-    const top = ctx.createLinearGradient(0, 0, 0, h * 0.22);
+    const top = c.createLinearGradient(0, 0, 0, h * 0.22);
     top.addColorStop(0, hexA(theme.skyTop, onMenu ? 0.12 : 0.3));
     top.addColorStop(1, hexA(theme.skyTop, 0));
-    ctx.fillStyle = top;
-    ctx.fillRect(0, 0, w, h * 0.22);
+    c.fillStyle = top;
+    c.fillRect(0, 0, w, h * 0.22);
+
+    return s;
   }
 
   private buildHudData(): HudData {

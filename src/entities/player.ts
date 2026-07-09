@@ -5,7 +5,11 @@ import { drawMonkey, computeLatchArmAngle, monkeyShoulder, type LatchArm } from 
 import { drawNyanCat, NYAN_RAINBOW } from "../render/drawNyanCat";
 import type { CharacterId } from "../characters/registry";
 import { angleDelta, clamp, rad, TAU } from "../core/math";
+import { makeScratch, Scratch } from "../render/rcache";
 import { Anchor, hexA } from "./anchor";
+
+// Dash pattern for the tether-range ring (hoisted — setLineDash copies it).
+const RANGE_DASH = [7, 12];
 
 export type PlayerState = "glide" | "swing" | "dash" | "skid";
 
@@ -99,15 +103,31 @@ export class Player {
   }
 
   // Pick the best anchor to tether to: nearest within range, biased forward.
-  findGrabTarget(anchors: Anchor[]): Anchor | null {
+  // When `view` (the camera's visible world rect) is given, only anchors the
+  // player can actually SEE are eligible — latching onto something off-screen
+  // always reads as a bug, never as skill.
+  findGrabTarget(
+    anchors: Anchor[],
+    view?: { left: number; top: number; right: number; bottom: number }
+  ): Anchor | null {
     let best: Anchor | null = null;
     let bestScore = Infinity;
     const range = CONFIG.tether.grabRange;
+    const VIS = 12; // anchor centre must be this far inside the screen edge
     for (const a of anchors) {
       const dx = a.x - this.x;
       const dy = a.y - this.y;
       const d = Math.hypot(dx, dy);
       if (d > range || d < 6) continue;
+      if (
+        view &&
+        (a.x < view.left + VIS ||
+          a.x > view.right - VIS ||
+          a.y < view.top + VIS ||
+          a.y > view.bottom - VIS)
+      ) {
+        continue;
+      }
       let score = d;
       if (dx < 0) score += 500; // strongly discourage grabbing behind
       if (dy > 0) score += 120; // mild bias toward anchors above
@@ -181,8 +201,15 @@ export class Player {
     return true;
   }
 
-  // Main fixed-step update. `holding` drives the tether; `anchors` is the live set.
-  step(dt: number, holding: boolean, anchors: Anchor[], time: number) {
+  // Main fixed-step update. `holding` drives the tether; `anchors` is the live
+  // set; `view` is the camera's visible world rect (grabs are screen-gated).
+  step(
+    dt: number,
+    holding: boolean,
+    anchors: Anchor[],
+    time: number,
+    view?: { left: number; top: number; right: number; bottom: number }
+  ) {
     if (!this.alive) return;
 
     if (this.hazardInvuln > 0) {
@@ -192,7 +219,7 @@ export class Player {
     switch (this.state) {
       case "glide": {
         if (holding) {
-          const target = this.findGrabTarget(anchors);
+          const target = this.findGrabTarget(anchors, view);
           if (target) {
             this.grab(target);
             this.stepSwing(dt, holding, time);
@@ -393,6 +420,7 @@ export class Player {
   // --- Rendering -----------------------------------------------------------
 
   draw(ctx: CanvasRenderingContext2D, time: number, menuPreview = false) {
+    if (!menuPreview && this.state === "glide") this.drawGrabRange(ctx, time);
     if (this.characterId === "plane") {
       this.drawMotionTrail(ctx, time);
     } else if (this.characterId === "monkey") {
@@ -402,6 +430,21 @@ export class Player {
     }
     if (this.state === "swing" && this.anchor) this.drawTether(ctx, time);
     this.drawCharacter(ctx, time, menuPreview);
+  }
+
+  // Faint dashed circle showing the tether's reach while gliding, so grabs
+  // are always deliberate — you can see exactly what the hook can reach.
+  private drawGrabRange(ctx: CanvasRenderingContext2D, time: number) {
+    ctx.save();
+    ctx.strokeStyle = theme.tether;
+    ctx.globalAlpha = 0.14;
+    ctx.lineWidth = 1.6;
+    ctx.setLineDash(RANGE_DASH);
+    ctx.lineDashOffset = -time * 14; // slow drift keeps it readable, not static
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, CONFIG.tether.grabRange, 0, TAU);
+    ctx.stroke();
+    ctx.restore();
   }
 
   // Bright thin line trail with a soft glow at the plane and light taper.
@@ -419,21 +462,36 @@ export class Player {
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
 
-    // Bright thin core — ~1px, tapering in opacity toward the tail.
-    ctx.shadowColor = hexA(lineCol, 0.9);
-    ctx.shadowBlur = 5 * speedT;
-    for (let i = 1; i < n; i++) {
-      const t = i / n;
-      ctx.strokeStyle = hexA(lineCol, (0.1 + t * 0.9) * speedT);
+    // Bright thin core — ~1px, tapering in opacity toward the tail. The taper
+    // is quantized into a few alpha buckets so each bucket strokes one
+    // polyline instead of ~40 individual segments (which each cost a Gaussian
+    // blur pass under the old shadowBlur — brutal on mobile WebKit).
+    ctx.strokeStyle = lineCol;
+    const buckets = 4;
+    for (let b = 0; b < buckets; b++) {
+      const p0 = Math.round(((n - 1) * b) / buckets);
+      const p1 = Math.round(((n - 1) * (b + 1)) / buckets);
+      if (p1 <= p0) continue;
+      const t = (p0 + p1 + 1) / (2 * n); // bucket-midpoint taper
+      ctx.globalAlpha = (0.1 + t * 0.9) * speedT;
       ctx.lineWidth = 0.75 + t * 0.55;
       ctx.beginPath();
-      ctx.moveTo(pts[i - 1].x, pts[i - 1].y);
-      ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.moveTo(pts[p0].x, pts[p0].y);
+      for (let i = p0 + 1; i <= p1; i++) ctx.lineTo(pts[i].x, pts[i].y);
       ctx.stroke();
     }
 
+    // One wide low-alpha pass along the whole trail stands in for the old
+    // per-segment shadow glow.
+    ctx.globalAlpha = 0.25 * speedT;
+    ctx.lineWidth = 3.5;
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < n; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
     // Soft bloom where the line meets the plane.
-    ctx.shadowBlur = 0;
     const head = pts[n - 1];
     const glowR = CONFIG.player.radius * (1.4 + speedT * 0.6);
     const g = ctx.createRadialGradient(head.x, head.y, 0, head.x, head.y, glowR);
@@ -444,14 +502,16 @@ export class Player {
     ctx.arc(head.x, head.y, glowR, 0, TAU);
     ctx.fill();
 
-    // Tiny sparks hugging the line near the head.
+    // Tiny sparks hugging the line near the head — one fillStyle, alpha
+    // varied per spark (no per-spark rgba strings).
+    ctx.fillStyle = lineCol;
     for (let i = Math.floor(n * 0.5); i < n; i++) {
       const t = i / n;
       const p = pts[i];
       const phase = i * 1.9 + time * 3;
       const jx = Math.sin(phase) * 2.5 * t;
       const jy = Math.cos(phase * 1.2) * 2.5 * t;
-      ctx.fillStyle = hexA(lineCol, t * 0.45 * speedT);
+      ctx.globalAlpha = t * 0.45 * speedT;
       ctx.beginPath();
       ctx.arc(p.x + jx, p.y + jy, 0.7 + t * 1.2, 0, TAU);
       ctx.fill();
@@ -475,6 +535,11 @@ export class Player {
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
 
+    // One pre-baked puff sprite (constant colours) tinted per point via
+    // globalAlpha — every gradient stop's alpha was proportional to the point
+    // alpha, so this is equivalent to the old per-point radial gradients.
+    const puff = getNimbusPuff().canvas;
+    const half = NIMBUS_PUFF_R + NIMBUS_PUFF_PAD;
     for (let i = 1; i < n; i++) {
       const t = i / n;
       if (t < 0.25) continue;
@@ -485,34 +550,40 @@ export class Player {
       const jx = Math.sin(phase) * 3 * t;
       const jy = Math.cos(phase * 1.15) * 2.5 * t;
       const pr = r * (0.12 + t * 0.28) * speedT;
-      const alpha = (1 - t) * 0.38 * speedT;
+      const k = pr / NIMBUS_PUFF_R;
 
-      const g = ctx.createRadialGradient(nx + jx, ny + jy, 0, nx + jx, ny + jy, pr * 2.2);
-      g.addColorStop(0, hexA("#fff8b0", alpha));
-      g.addColorStop(0.45, hexA("#ffd030", alpha * 0.65));
-      g.addColorStop(1, hexA("#ffb020", 0));
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(nx + jx, ny + jy, pr, 0, TAU);
-      ctx.fill();
+      ctx.globalAlpha = (1 - t) * 0.38 * speedT;
+      ctx.drawImage(
+        puff,
+        nx + jx - half * k,
+        ny + jy - half * k,
+        half * 2 * k,
+        half * 2 * k
+      );
     }
 
-    for (let i = Math.floor(n * 0.35); i < n; i++) {
-      const t = i / n;
-      const p = pts[i];
-      const nx = p.x - nimbusOff * sin;
-      const ny = p.y + nimbusOff * cos;
-      const phase = i * 2.4 + time * 4.8;
-      ctx.fillStyle = hexA(i % 2 === 0 ? "#fff6a0" : "#ffc820", t * 0.5 * speedT);
-      ctx.beginPath();
-      ctx.arc(
-        nx + Math.sin(phase) * 4,
-        ny + Math.cos(phase * 0.9) * 3,
-        0.8 + t * 1.6,
-        0,
-        TAU
-      );
-      ctx.fill();
+    // Sparks alternate two constant golds — one fillStyle per parity pass,
+    // alpha varied per spark (no per-spark rgba strings).
+    const sparkStart = Math.floor(n * 0.35);
+    for (let pass = 0; pass < 2; pass++) {
+      ctx.fillStyle = pass === 0 ? "#fff6a0" : "#ffc820";
+      for (let i = sparkStart + ((sparkStart & 1) ^ pass); i < n; i += 2) {
+        const t = i / n;
+        const p = pts[i];
+        const nx = p.x - nimbusOff * sin;
+        const ny = p.y + nimbusOff * cos;
+        const phase = i * 2.4 + time * 4.8;
+        ctx.globalAlpha = t * 0.5 * speedT;
+        ctx.beginPath();
+        ctx.arc(
+          nx + Math.sin(phase) * 4,
+          ny + Math.cos(phase * 0.9) * 3,
+          0.8 + t * 1.6,
+          0,
+          TAU
+        );
+        ctx.fill();
+      }
     }
 
     ctx.restore();
@@ -527,34 +598,55 @@ export class Player {
     const bandH = CONFIG.player.radius * 0.22;
     const speedT = clamp(this.speed / 520, 0.25, 1);
 
+    // First polyline point — same cutoff as the old per-segment t < 0.2 skip.
+    const first = Math.max(0, Math.ceil(n * 0.2) - 1);
+    const span = n - 1 - first; // segments drawn
+    if (span < 1) return;
+
+    // Per-point unit normals, shared by all six bands (only the offset
+    // magnitude differs per band). Central difference keeps the bands
+    // parallel through corners; scratch arrays avoid per-frame allocation.
+    if (trailNX.length < n) {
+      trailNX = new Float32Array(Math.max(n, CONFIG.player.trailMax));
+      trailNY = new Float32Array(trailNX.length);
+    }
+    for (let i = first; i < n; i++) {
+      const a = pts[Math.max(0, i - 1)];
+      const b = pts[Math.min(n - 1, i + 1)];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const len = Math.hypot(dx, dy) || 1;
+      trailNX[i] = -dy / len;
+      trailNY[i] = dx / len;
+    }
+
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
+    ctx.lineWidth = bandH * 0.82;
 
-    for (let i = 1; i < n; i++) {
-      const t = i / n;
-      if (t < 0.2) continue;
-
-      const p0 = pts[i - 1];
-      const p1 = pts[i];
-      const dx = p1.x - p0.x;
-      const dy = p1.y - p0.y;
-      const len = Math.hypot(dx, dy) || 1;
-      const nx = -dy / len;
-      const ny = dx / len;
-      const alpha = (1 - t) * 0.88 * speedT;
-
-      for (let b = 0; b < NYAN_RAINBOW.length; b++) {
-        const offset = (b - (NYAN_RAINBOW.length - 1) / 2) * bandH;
-        const ox = nx * offset;
-        const oy = ny * offset;
-        const scroll = (time * 2.4 + b * 0.15) % 1;
-        ctx.strokeStyle = hexA(NYAN_RAINBOW[b], alpha * (0.85 + scroll * 0.15));
-        ctx.lineWidth = bandH * 0.82;
+    // Each band is one continuous offset polyline stroked in three alpha
+    // chunks — 18 strokes total instead of ~200 per-segment strokes. The
+    // scroll pulse depends only on time and band, so it folds into the band
+    // alpha exactly; the (1 - t) taper is quantized per chunk.
+    const chunks = 3;
+    for (let b = 0; b < NYAN_RAINBOW.length; b++) {
+      const offset = (b - (NYAN_RAINBOW.length - 1) / 2) * bandH;
+      const scroll = (time * 2.4 + b * 0.15) % 1;
+      const bandAlpha = 0.88 * speedT * (0.85 + scroll * 0.15);
+      ctx.strokeStyle = NYAN_RAINBOW[b];
+      for (let c = 0; c < chunks; c++) {
+        const pA = first + Math.floor((span * c) / chunks);
+        const pB = first + Math.floor((span * (c + 1)) / chunks);
+        if (pB <= pA) continue;
+        const t = (pA + pB + 1) / (2 * n); // chunk-midpoint taper
+        ctx.globalAlpha = (1 - t) * bandAlpha;
         ctx.beginPath();
-        ctx.moveTo(p0.x + ox, p0.y + oy);
-        ctx.lineTo(p1.x + ox, p1.y + oy);
+        ctx.moveTo(pts[pA].x + trailNX[pA] * offset, pts[pA].y + trailNY[pA] * offset);
+        for (let i = pA + 1; i <= pB; i++) {
+          ctx.lineTo(pts[i].x + trailNX[i] * offset, pts[i].y + trailNY[i] * offset);
+        }
         ctx.stroke();
       }
     }
@@ -825,4 +917,35 @@ export class Player {
     ctx.lineTo(topTip[0], topTip[1]);
     ctx.stroke();
   }
+}
+
+// --- Trail render scratch (module-level: render-only, never gameplay state) --
+
+/** Per-point trail normals for the rainbow bands, reused across frames. */
+let trailNX = new Float32Array(0);
+let trailNY = new Float32Array(0);
+
+/** Nimbus puff circle radius in sprite px — max on-screen size at 2x DPR. */
+const NIMBUS_PUFF_R = Math.ceil(CONFIG.player.radius * 0.4 * 2);
+const NIMBUS_PUFF_PAD = 2; // keep edge antialiasing off the canvas border
+let nimbusPuff: Scratch | null = null;
+
+// Golden nimbus puff, baked once — the colours are constant literals, so
+// unlike the theme-keyed caches this never needs rebuilding. The gradient
+// reaches 2.2x past the filled circle, matching the old per-point
+// createRadialGradient exactly.
+function getNimbusPuff(): Scratch {
+  if (nimbusPuff) return nimbusPuff;
+  const R = NIMBUS_PUFF_R;
+  const c = R + NIMBUS_PUFF_PAD;
+  nimbusPuff = makeScratch(c * 2, c * 2);
+  const g = nimbusPuff.ctx.createRadialGradient(c, c, 0, c, c, R * 2.2);
+  g.addColorStop(0, "#fff8b0");
+  g.addColorStop(0.45, hexA("#ffd030", 0.65));
+  g.addColorStop(1, hexA("#ffb020", 0));
+  nimbusPuff.ctx.fillStyle = g;
+  nimbusPuff.ctx.beginPath();
+  nimbusPuff.ctx.arc(c, c, R, 0, TAU);
+  nimbusPuff.ctx.fill();
+  return nimbusPuff;
 }

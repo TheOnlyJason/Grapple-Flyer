@@ -20,6 +20,12 @@ export interface Theme {
   fog: string; // atmospheric-perspective haze colour for distant layers
   ambient: string; // drifting motes / fireflies
   night: number; // 0 = full day, 1 = full night (drives stars, glow strength)
+  /**
+   * Monotonic counter bumped only when the (quantized) palette actually
+   * changes (~a few times per second). Renderers key gradient / sprite caches
+   * on this instead of rebuilding them every frame.
+   */
+  version: number;
   // Foreground (constant, from PALETTE).
   player: string;
   playerGlow: string;
@@ -156,12 +162,25 @@ const MOODS: Mood[] = [
 export const theme: Theme = {
   ...(PALETTE as unknown as Theme),
   ...MOODS[0],
+  version: 0,
 };
+
+// Palette updates are quantized to 1/512 of the day cycle (~0.19s). A full
+// mood crossfade spans ~19s, so each step moves colours by at most ~2-3 RGB
+// units — imperceptible — while letting every gradient/sprite cache downstream
+// key off theme.version instead of rebuilding 60x per second.
+const PHASE_STEPS = 512;
+let lastBucket = -1;
 
 export function updateTheme(phaseSeconds: number) {
   const phase = phaseSeconds / CYCLE_SECONDS;
+  const bucket = Math.floor((((phase % 1) + 1) % 1) * PHASE_STEPS);
+  if (bucket === lastBucket) return;
+  lastBucket = bucket;
+  theme.version++;
+
   const n = MOODS.length;
-  const f = (((phase % 1) + 1) % 1) * n;
+  const f = (bucket / PHASE_STEPS) * n;
   const i = Math.floor(f);
   let t = f - i;
   t = t * t * (3 - 2 * t); // smoothstep for gentle transitions
@@ -175,18 +194,39 @@ export function updateTheme(phaseSeconds: number) {
 
 // --- colour helpers (handle both #hex and rgb()/rgba()) ---
 
+// Hex nibble value for a char code ("0"-"9", "a"-"f", "A"-"F").
+function nib(code: number): number {
+  return code <= 57 ? code - 48 : (code | 32) - 87;
+}
+
+// Allocation-light colour parse: no regex, no match arrays. Handles "#rrggbb"
+// and "rgb()/rgba()" (the live theme's interpolated colours are rgb strings).
 export function parseColor(c: string): [number, number, number] {
-  if (c[0] === "#") {
-    const h = c.slice(1);
+  if (c.charCodeAt(0) === 35 /* "#" */) {
     return [
-      parseInt(h.slice(0, 2), 16),
-      parseInt(h.slice(2, 4), 16),
-      parseInt(h.slice(4, 6), 16),
+      nib(c.charCodeAt(1)) * 16 + nib(c.charCodeAt(2)),
+      nib(c.charCodeAt(3)) * 16 + nib(c.charCodeAt(4)),
+      nib(c.charCodeAt(5)) * 16 + nib(c.charCodeAt(6)),
     ];
   }
-  const m = c.match(/[\d.]+/g);
-  if (m && m.length >= 3) return [+m[0], +m[1], +m[2]];
-  return [0, 0, 0];
+  // Walk digit runs: rgb(12,34,56) / rgba(12, 34, 56, 0.5)
+  const out: [number, number, number] = [0, 0, 0];
+  let chan = 0;
+  let v = 0;
+  let inNum = false;
+  for (let i = 3; i < c.length && chan < 3; i++) {
+    const d = c.charCodeAt(i) - 48;
+    if (d >= 0 && d <= 9) {
+      v = v * 10 + d;
+      inNum = true;
+    } else if (inNum) {
+      out[chan++] = v;
+      v = 0;
+      inNum = false;
+    }
+  }
+  if (inNum && chan < 3) out[chan] = v;
+  return out;
 }
 
 export function mixColor(a: string, b: string, t: number): string {

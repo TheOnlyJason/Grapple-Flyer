@@ -1,12 +1,77 @@
 import { theme } from "../render/theme";
 import { Rng } from "../core/rng";
 import { TAU } from "../core/math";
-import { hexA } from "./anchor";
+import { makeScratch, Scratch, VersionCache } from "../render/rcache";
 
 interface Puff {
   dx: number;
   dy: number;
   r: number;
+}
+
+// --- Shared puff sprite ------------------------------------------------------
+// Every puff used to fill a fresh 4-stop radial gradient per frame (~100-250
+// createRadialGradient allocations/frame across the cloud systems). Instead the
+// soft-puff profile is baked once, in white, and re-tinted to theme.cloud only
+// when the quantized palette changes; each puff is then a single drawImage with
+// a per-puff globalAlpha. Baked at 2x the max on-screen puff radius (~80 CSS
+// px; DPR is clamped to 2) so puffs stay crisp. Init is lazy — first draw
+// call, never at import time.
+const PUFF_R = 160;
+
+let basePuff: HTMLCanvasElement | null = null;
+
+function getBasePuff(): HTMLCanvasElement {
+  if (!basePuff) {
+    const R = PUFF_R;
+    const { canvas, ctx } = makeScratch(R * 2, R * 2);
+    // Same geometry as the old per-puff gradient (offset centre = lit top).
+    const g = ctx.createRadialGradient(R, R - R * 0.38, R * 0.08, R, R + R * 0.12, R);
+    g.addColorStop(0, "rgba(255,255,255,0.98)");
+    g.addColorStop(0.45, "rgba(255,255,255,0.68)");
+    g.addColorStop(0.85, "rgba(255,255,255,0.22)");
+    g.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(R, R, R, 0, TAU);
+    ctx.fill();
+    basePuff = canvas;
+  }
+  return basePuff;
+}
+
+// Re-colour the white base puff via 'source-in' — keeps the baked alpha
+// falloff, swaps the RGB.
+function tintInto(target: Scratch, color: string): HTMLCanvasElement {
+  const { canvas, ctx } = target;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(getBasePuff(), 0, 0);
+  ctx.globalCompositeOperation = "source-in";
+  ctx.fillStyle = color;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.globalCompositeOperation = "source-over";
+  return canvas;
+}
+
+let cloudScratch: Scratch | null = null;
+const cloudTint = new VersionCache<HTMLCanvasElement>();
+
+function cloudPuffSprite(): HTMLCanvasElement {
+  return cloudTint.get(theme.version, theme.cloud, () => {
+    if (!cloudScratch) cloudScratch = makeScratch(PUFF_R * 2, PUFF_R * 2);
+    return tintInto(cloudScratch, theme.cloud);
+  });
+}
+
+// Skim-glow puff. theme.collectible is a PALETTE constant (never cycled), so
+// this one is tinted exactly once.
+let glowPuff: HTMLCanvasElement | null = null;
+
+function glowPuffSprite(): HTMLCanvasElement {
+  if (!glowPuff) {
+    glowPuff = tintInto(makeScratch(PUFF_R * 2, PUFF_R * 2), theme.collectible);
+  }
+  return glowPuff;
 }
 
 // Soft cloud bank. Skimming its surface ring builds the Wind Gauge.
@@ -42,17 +107,18 @@ export class Cloud {
   }
 
   draw(ctx: CanvasRenderingContext2D) {
+    const sprite = cloudPuffSprite();
+    const base = 0.72 + this.glow * 0.28;
     ctx.save();
-    ctx.globalAlpha = 0.72 + this.glow * 0.28;
 
     // Back layer — larger, softer puffs.
     for (const p of this.puffs) {
-      this.drawPuff(ctx, p, 1.08, 0.75);
+      this.drawPuff(ctx, sprite, p, 1.08, 0.75 * base);
     }
     // Front layer — brighter highlights on top edges.
     for (const p of this.puffs) {
       if (p.dy <= this.ry * 0.15) {
-        this.drawPuff(ctx, p, 1.0, 1.0);
+        this.drawPuff(ctx, sprite, p, 1.0, base);
       }
     }
 
@@ -61,16 +127,11 @@ export class Cloud {
     if (this.glow > 0.02) {
       ctx.save();
       ctx.globalCompositeOperation = "lighter";
+      ctx.globalAlpha = 0.16 * this.glow;
+      const glow = glowPuffSprite();
       for (const p of this.puffs) {
-        const cx = this.x + p.dx;
-        const cy = this.y + p.dy;
-        const g = ctx.createRadialGradient(cx, cy, p.r * 0.3, cx, cy, p.r * 1.2);
-        g.addColorStop(0, hexA(theme.collectible, 0.16 * this.glow));
-        g.addColorStop(1, hexA(theme.collectible, 0));
-        ctx.fillStyle = g;
-        ctx.beginPath();
-        ctx.arc(cx, cy, p.r * 1.2, 0, TAU);
-        ctx.fill();
+        const r = p.r * 1.2;
+        ctx.drawImage(glow, this.x + p.dx - r, this.y + p.dy - r, r * 2, r * 2);
       }
       ctx.restore();
     }
@@ -78,29 +139,14 @@ export class Cloud {
 
   private drawPuff(
     ctx: CanvasRenderingContext2D,
+    sprite: HTMLCanvasElement,
     p: Puff,
     scale: number,
     alpha: number
   ) {
-    const cx = this.x + p.dx;
-    const cy = this.y + p.dy;
     const r = p.r * scale;
-    const g = ctx.createRadialGradient(
-      cx,
-      cy - r * 0.38,
-      r * 0.08,
-      cx,
-      cy + r * 0.12,
-      r
-    );
-    g.addColorStop(0, hexA(theme.cloud, 0.98 * alpha));
-    g.addColorStop(0.45, hexA(theme.cloud, 0.68 * alpha));
-    g.addColorStop(0.85, hexA(theme.cloud, 0.22 * alpha));
-    g.addColorStop(1, hexA(theme.seaDeep, 0));
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, TAU);
-    ctx.fill();
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(sprite, this.x + p.dx - r, this.y + p.dy - r, r * 2, r * 2);
   }
 }
 

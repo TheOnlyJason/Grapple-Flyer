@@ -20,12 +20,28 @@ export class Input {
   private pendingPointerDown = false;
   private pendingTaps = new Set<string>();
 
+  // Cached canvas rect: the element is fixed and full-viewport, so its origin
+  // only moves on viewport changes — no need for a layout read per pointermove.
+  private rectLeft = 0;
+  private rectTop = 0;
+
   constructor(private el: HTMLElement) {
     this.attach();
   }
 
+  // Re-read the canvas position. Cheap; call after anything that moves it.
+  refreshRect() {
+    const rect = this.el.getBoundingClientRect();
+    this.rectLeft = rect.left;
+    this.rectTop = rect.top;
+  }
+
   private attach() {
     const el = this.el;
+
+    this.refreshRect();
+    window.addEventListener("resize", () => this.refreshRect());
+    window.addEventListener("orientationchange", () => this.refreshRect());
 
     el.addEventListener("pointerdown", (e) => {
       e.preventDefault();
@@ -79,9 +95,8 @@ export class Input {
   }
 
   private setPointer(e: PointerEvent) {
-    const rect = this.el.getBoundingClientRect();
-    this.pointer.x = e.clientX - rect.left;
-    this.pointer.y = e.clientY - rect.top;
+    this.pointer.x = e.clientX - this.rectLeft;
+    this.pointer.y = e.clientY - this.rectTop;
   }
 
   beginFrame() {
@@ -93,8 +108,12 @@ export class Input {
     this.pointerJustDown = this.pendingPointerDown;
     this.pendingPointerDown = false;
 
+    // Ping-pong the two persistent sets instead of allocating a fresh one:
+    // tapped stays stable for the frame, pendingTaps starts empty.
+    const taps = this.tapped;
     this.tapped = this.pendingTaps;
-    this.pendingTaps = new Set();
+    this.pendingTaps = taps;
+    this.pendingTaps.clear();
   }
 
   // True on any fresh interaction this frame (used to unlock audio / start runs).
