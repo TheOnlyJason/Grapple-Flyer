@@ -8,7 +8,9 @@ export interface CharacterDef {
 export const CHARACTERS: CharacterDef[] = [
   { id: "plane", name: "Paper Plane" },
   { id: "monkey", name: "Monkey" },
-  { id: "nyan", name: "Nyan Cat" },
+  // Display name steers clear of the "Nyan Cat" trademark (App Review 5.2);
+  // the internal id stays for save-data compatibility.
+  { id: "nyan", name: "Rainbow Cat" },
 ];
 
 export function isCharacterId(value: unknown): value is CharacterId {

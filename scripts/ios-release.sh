@@ -49,6 +49,7 @@ LANG=en_US.UTF-8 xcodebuild archive \
   -configuration Release \
   -destination 'generic/platform=iOS' \
   -archivePath build/GALE.xcarchive \
+  ${ASC_TEAM_ID:+DEVELOPMENT_TEAM="$ASC_TEAM_ID"} \
   -allowProvisioningUpdates \
   -authenticationKeyPath "$ASC_KEY_PATH" \
   -authenticationKeyID "$ASC_KEY_ID" \

@@ -42,7 +42,7 @@ limits (checked below each field).
 > • PERFECT releases, cloud skimming, and wind dashes to master
 > • A living day/night cycle — dawn, golden hour, dusk, and starlit night
 > • Ever-changing biomes: forests, peaks, ruins, monuments, floating isles
-> • Three pilots to unlock your style: Paper Plane, Monkey, and Nyan Cat
+> • Three pilots to unlock your style: Paper Plane, Monkey, and Rainbow Cat
 > • Run objectives to chase and personal bests to beat
 > • No ads. No accounts. No data collection. Just flight.
 >
@@ -56,8 +56,7 @@ limits (checked below each field).
 
 ## Category
 
-- Primary: Games → Arcade
-- Secondary: Games → Casual
+- Primary: Games (subcategories: Action + Casual — the API has no Arcade subcategory anymore)
 
 ## Age rating
 
