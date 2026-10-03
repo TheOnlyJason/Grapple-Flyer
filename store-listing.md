@@ -72,10 +72,8 @@ All questionnaire answers "No" → **4+**.
 
 ## URLs
 
-- Privacy policy URL: `https://<your-domain>/privacy.html`
-  (public/privacy.html ships with the site — run `npm run deploy`, then use
-  the deployed URL)
-- Support URL: your site root, e.g. `https://<your-domain>/`
+- Privacy policy URL: `https://grappleflyer.death6030.workers.dev/privacy` (live)
+- Support URL: `https://grappleflyer.death6030.workers.dev/`
 
 ## Screenshots (already generated — `store-screenshots/`)
 

@@ -4,15 +4,16 @@ GALE is wrapped as a native iOS app with [Capacitor](https://capacitorjs.com):
 the game is the same web build (`dist/`) running inside a full-screen WKWebView.
 The Xcode project lives in `ios/`.
 
-Everything that can be automated already is. What's left below is the stuff that
-needs **your Apple Developer account** and Xcode's UI.
+Everything that can be automated already is — including the archive, signing and
+upload, which now run from **one command with no Xcode GUI**. What's left below
+is the stuff that needs **your Apple Developer account**.
 
 ---
 
 ## What's already set up
 
 - ✅ Native Xcode project (`ios/App/App.xcodeproj`), builds cleanly (Debug + Release).
-- ✅ App name **GALE**, bundle id **`com.gale.skysailing`** _(placeholder — change it, see step 1)_.
+- ✅ App name **GALE**, bundle id **`com.theonlyjason.gale`**.
 - ✅ **Landscape-locked**, full screen, status bar hidden (`ios/App/App/Info.plist`).
 - ✅ App icon + launch screen generated from the game art
   (`ios/App/App/Assets.xcassets/`).
@@ -31,56 +32,73 @@ needs **your Apple Developer account** and Xcode's UI.
   (`npm run deploy`) and use its URL in the listing.
 - ✅ **Paste-ready listing copy** (name, subtitle, description, keywords,
   category, age rating, privacy answers) in `store-listing.md`.
-
-## Prerequisites (one time)
-
-- **Apple Developer Program** membership — $99/year: <https://developer.apple.com/programs/>
-- Xcode (installed) + a physical iPhone for real-device testing.
+- ✅ **One-command release pipeline**: `scripts/ios-release.sh` builds the web
+  app, archives, signs via cloud signing and uploads to App Store Connect
+  (`ios/App/ExportOptions.plist` holds the export settings).
 
 ---
 
-## 1. Set your bundle identifier
+## 1. Enroll in the Apple Developer Program (one time)
 
-`com.gale.skysailing` is a placeholder. Pick your own reverse-domain id and set it in **two** places:
+Enroll at <https://developer.apple.com/programs/enroll/> — **$99/year**. You'll
+need your Apple ID and a payment method. Approval is usually quick (same day to
+a couple of days).
 
-1. `capacitor.config.ts` → `appId`
-2. Xcode → **App** target → **Signing & Capabilities** → **Bundle Identifier**
+## 2. Generate an App Store Connect API key (one time)
 
-Then register that exact id at
-<https://developer.apple.com/account/resources/identifiers/list>.
+This key is what lets the release script (or Claude) sign and upload builds
+without ever opening Xcode:
 
-## 2. Signing
+1. Sign in at <https://appstoreconnect.apple.com>.
+2. Go to **Users and Access → Integrations → App Store Connect API → Team Keys**.
+3. Click **＋** to generate a key with the **Admin** role.
+4. **Download the `.p8` file** — this is a **one-time download**, so store it
+   somewhere safe (e.g. `~/secrets/AuthKey_XXXXXXXXXX.p8`).
+5. Note the **Key ID** (shown next to the key) and the **Issuer ID** (shown at
+   the top of the Team Keys page).
 
-Open the project and let Xcode manage signing:
+## 3. Archive & upload — one command
+
+Hand the key to Claude and ask for a release, or run it yourself:
 
 ```bash
-npm run ios      # builds web, syncs, opens Xcode
+ASC_KEY_ID=XXXXXXXXXX \
+ASC_ISSUER_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx \
+ASC_KEY_PATH=~/secrets/AuthKey_XXXXXXXXXX.p8 \
+./scripts/ios-release.sh
 ```
 
-In Xcode → **App** target → **Signing & Capabilities**:
-- Check **Automatically manage signing**
-- Select your **Team**
+The script rebuilds the web app into the native shell (`npm run ios:sync`),
+archives a Release build, signs it via Xcode cloud signing (the API key is
+team-scoped, so no team or profile setup is needed), and uploads it straight to
+App Store Connect. The build appears under your app in ~5–30 minutes once
+Apple finishes processing.
 
-## 3. Version & build number
+Re-uploading? Bump the **build number** first (Xcode → App target → General →
+Build, or `CURRENT_PROJECT_VERSION` in `ios/App/App.xcodeproj/project.pbxproj`)
+— App Store Connect rejects a build number it has already seen.
 
-Xcode → **App** target → **General**:
-- **Version** (e.g. `1.0.0`) — the public version.
-- **Build** (e.g. `1`) — must increase for every upload to App Store Connect.
+## 4. Finish the listing in App Store Connect
 
-## 4. Test on a real device
+These remaining steps can be done **by Claude** (through the App Store Connect
+API / browser) or by you, following `store-listing.md`:
 
-Plug in your iPhone, pick it as the run destination in Xcode, press ▶. Confirm:
-landscape lock, tap-and-hold to swing, DASH button, sound, no notch clipping.
+- Create the app record: **Apps → ＋** — platform iOS, name **GALE**, bundle id
+  `com.theonlyjason.gale`, primary language, category **Games**
+  (e.g. Arcade / Action).
+- Paste the listing copy (name, subtitle, description, keywords, support URL,
+  **privacy policy URL** — required) from `store-listing.md`.
+- Upload the screenshots from `store-screenshots/` (landscape; iPhone 6.9" and
+  iPad 13" sets are already at the required sizes).
+- Answer the **App Privacy** questionnaire (answers are in `store-listing.md`).
+- Set the age rating, pricing (Free) and availability.
+- Pick the processed build for the version and **Submit for Review**.
 
-## 5. Create the App Store Connect listing
+## 5. Test on a real device (recommended)
 
-At <https://appstoreconnect.apple.com> → **Apps** → **＋**:
-- Platform iOS, name **GALE**, your bundle id, primary language.
-- Category: **Games** (e.g. Arcade / Action).
-- **Screenshots** — landscape, required sizes: 6.7"/6.9" iPhone, and iPad if you
-  support it. Capture from a device or simulator (`⌘S` in the Simulator).
-- Description, keywords, support URL, **privacy policy URL** (required).
-- Age rating questionnaire, pricing (Free), availability.
+Plug in your iPhone, pick it as the run destination in Xcode
+(`npm run ios` opens the project), press ▶. Confirm: landscape lock,
+tap-and-hold to swing, DASH button, sound, no notch clipping.
 
 ## 6. Ads / privacy (only if you monetize)
 
@@ -94,16 +112,6 @@ auto-disabled in the native build. To show ads in the app, integrate **AdMob**
 If you ship **without** ads, the AdSense tag never loads in the app and you can
 answer "no data collected" (verify against any analytics you add).
 
-## 7. Archive & upload
-
-In Xcode:
-1. Set the run destination to **Any iOS Device (arm64)**.
-2. **Product → Archive**.
-3. In the Organizer: **Distribute App → App Store Connect → Upload**.
-
-The build appears in App Store Connect after processing. Attach it to your version,
-fill remaining metadata, and **Submit for Review**.
-
 ---
 
 ## Day-to-day: pushing web changes into the app
@@ -112,8 +120,11 @@ Any time you change the game code, refresh the native app with:
 
 ```bash
 npm run ios:sync     # rebuild dist/ + copy into the iOS project
-# then run/archive from Xcode
+# then run from Xcode, or cut a release with ./scripts/ios-release.sh
 ```
+
+(`ios-release.sh` runs `ios:sync` itself, so for a release the one command is
+enough.)
 
 Regenerate icons & launch screen after art changes:
 

@@ -6,7 +6,7 @@ import type { CapacitorConfig } from "@capacitor/cli";
 // Xcode (App target ▸ Signing & Capabilities ▸ Bundle Identifier), or re-run
 // `npx cap add ios`.
 const config: CapacitorConfig = {
-  appId: "com.gale.skysailing",
+  appId: "com.theonlyjason.gale",
   appName: "GALE",
   webDir: "dist",
   backgroundColor: "#0a0d24",
