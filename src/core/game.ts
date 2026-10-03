@@ -138,6 +138,11 @@ export class Game {
       const glideTime = this.time - this.attractGlideStartTime;
       this.player.animateMenuGlide(0, glideTime, this.attractGlideX);
       this.startX = this.player.x;
+      // The world here is whatever the attract glide flew into — guarantee a
+      // reachable first anchor and a rock-free launch corridor so the run
+      // can't end before it begins.
+      this.world.ensureOpeningAnchor(this.player.x, this.player.y);
+      this.world.removeHazardsNear(this.player.x + 180, this.player.y, 320);
       this.player.beginRun();
       this.resetRunStats();
       this.state = "playing";

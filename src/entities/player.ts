@@ -8,9 +8,6 @@ import { angleDelta, clamp, rad, TAU } from "../core/math";
 import { makeScratch, Scratch } from "../render/rcache";
 import { Anchor, hexA } from "./anchor";
 
-// Dash pattern for the tether-range ring (hoisted — setLineDash copies it).
-const RANGE_DASH = [7, 12];
-
 export type PlayerState = "glide" | "swing" | "dash" | "skid";
 
 export interface ReleaseInfo {
@@ -420,7 +417,6 @@ export class Player {
   // --- Rendering -----------------------------------------------------------
 
   draw(ctx: CanvasRenderingContext2D, time: number, menuPreview = false) {
-    if (!menuPreview && this.state === "glide") this.drawGrabRange(ctx, time);
     if (this.characterId === "plane") {
       this.drawMotionTrail(ctx, time);
     } else if (this.characterId === "monkey") {
@@ -430,21 +426,6 @@ export class Player {
     }
     if (this.state === "swing" && this.anchor) this.drawTether(ctx, time);
     this.drawCharacter(ctx, time, menuPreview);
-  }
-
-  // Faint dashed circle showing the tether's reach while gliding, so grabs
-  // are always deliberate — you can see exactly what the hook can reach.
-  private drawGrabRange(ctx: CanvasRenderingContext2D, time: number) {
-    ctx.save();
-    ctx.strokeStyle = theme.tether;
-    ctx.globalAlpha = 0.14;
-    ctx.lineWidth = 1.6;
-    ctx.setLineDash(RANGE_DASH);
-    ctx.lineDashOffset = -time * 14; // slow drift keeps it readable, not static
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, CONFIG.tether.grabRange, 0, TAU);
-    ctx.stroke();
-    ctx.restore();
   }
 
   // Bright thin line trail with a soft glow at the plane and light taper.

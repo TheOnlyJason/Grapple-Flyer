@@ -59,9 +59,11 @@ function resize() {
   if (canvas.width !== bw || canvas.height !== bh) {
     canvas.width = bw;
     canvas.height = bh;
-    canvas.style.width = w + "px";
-    canvas.style.height = h + "px";
   }
+  // Outside the guard: a window resize and a renderScale step can cancel out
+  // in device pixels while the CSS size still needs to change.
+  canvas.style.width = w + "px";
+  canvas.style.height = h + "px";
   game.resize(w, h, dpr, readInsets());
 }
 

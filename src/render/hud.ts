@@ -7,6 +7,11 @@ import type { CharacterId } from "../characters/registry";
 
 const PALETTE = theme; // HUD reads the live theme for cohesive colour grading
 
+// Touch devices don't have a keyboard — skip keyboard-only hints. Guarded for
+// the headless test harnesses, which don't define matchMedia.
+const COARSE_POINTER =
+  typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+
 // Assigning ctx.font triggers a CSS shorthand parse + font-cache lookup in
 // WebKit, so compose each string once. HUD sizes are a small fixed set;
 // animated popup sizes are quantized to 0.5px so keys repeat.
@@ -118,7 +123,11 @@ export class Hud {
 
   playButton(cam: Camera): { x: number; y: number; r: number } {
     const r = clamp(cam.w * 0.055, 36, 48);
-    return { x: cam.w / 2, y: cam.h * 0.82, r };
+    // Bottom-anchored cap: the button and its TAP TO PLAY label must always
+    // fit inside the frame with margin, even on short or clipped viewports
+    // (proportional-only placement used to push the label off screen).
+    const y = Math.min(cam.h * 0.78, cam.h - cam.insets.bottom - r - 72);
+    return { x: cam.w / 2, y, r };
   }
 
   characterCycleButton(
@@ -126,8 +135,12 @@ export class Hud {
     dir: -1 | 1
   ): { x: number; y: number; r: number } {
     const r = clamp(cam.w * 0.034, 22, 28);
+    const play = this.playButton(cam);
     const cx = cam.w / 2 + dir * clamp(cam.w * 0.19, 110, 150);
-    return { x: cx, y: cam.h * 0.68, r };
+    // Ride above the play button, but never so high that the picker collides
+    // with the game-over stats block on short screens.
+    const y = Math.max(play.y - play.r - 64, cam.h * 0.56);
+    return { x: cx, y, r };
   }
 
   // Screen-space HUD during a run.
@@ -437,8 +450,10 @@ export class Hud {
       );
     }
 
-    // Character picker — above the play button.
-    const pickY = h * 0.68;
+    // Character picker — placement derives from the play button so the two
+    // never drift apart (characterCycleButton is also the hit-test).
+    const play = this.playButton(cam);
+    const pickY = this.characterCycleButton(cam, 1).y;
     for (const dir of [-1, 1] as const) {
       const b = this.characterCycleButton(cam, dir);
       ctx.fillStyle = hexA(PALETTE.text, 0.14);
@@ -465,19 +480,22 @@ export class Hud {
       PALETTE.text,
       true
     );
-    this.text(
-      ctx,
-      "C  or  ← →  to change",
-      w / 2,
-      pickY + 34,
-      11,
-      "600",
-      hexA(PALETTE.textDim, 0.85),
-      true
-    );
+    // Keyboard hint: pointless on touch screens, and hidden whenever the
+    // layout is too cramped for it to clear the play button.
+    if (!COARSE_POINTER && pickY + 50 < play.y - play.r) {
+      this.text(
+        ctx,
+        "C  or  ← →  to change",
+        w / 2,
+        pickY + 34,
+        11,
+        "600",
+        hexA(PALETTE.textDim, 0.85),
+        true
+      );
+    }
 
     // Play button — bottom center circle with triangle.
-    const play = this.playButton(cam);
     ctx.fillStyle = hexA(PALETTE.text, 0.16 * pulse);
     ctx.beginPath();
     ctx.arc(play.x, play.y, play.r, 0, Math.PI * 2);

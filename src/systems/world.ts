@@ -21,6 +21,8 @@ export class World {
   private rng = new Rng();
   private genX = 0;
   private startX = 0;
+  /** World-x of the most recent anchor — used to cap anchor droughts. */
+  private lastAnchorX = 0;
 
   get seaLevel() {
     return CONFIG.world.seaLevel;
@@ -44,7 +46,49 @@ export class World {
     // One guaranteed opening anchor — after that, everything is random.
     const first = new Anchor(startX + 260, startY - 180, "normal");
     this.anchors.push(first);
+    this.lastAnchorX = first.x;
     this.genX = startX + 280;
+  }
+
+  /**
+   * Guarantee a fair first grab: runs start wherever the attract glide
+   * happens to be, so make sure an anchor sits just ahead of (px, py) at a
+   * comfortable height. If the random world already provides one, do nothing.
+   */
+  ensureOpeningAnchor(px: number, py: number) {
+    // The acceptance window must stay inside the tether's practical reach for
+    // a player cruising forward from (px, py) — a "nearby" anchor outside it
+    // is a death sentence dressed up as fairness.
+    for (const a of this.anchors) {
+      if (a.x > px + 100 && a.x < px + 600 && a.y > py - 240 && a.y < py + 40) {
+        return;
+      }
+    }
+    const anchor = new Anchor(
+      px + this.rng.range(260, 380),
+      py - this.rng.range(110, 180),
+      "normal"
+    );
+    this.anchors.push(anchor);
+    this.lastAnchorX = Math.max(this.lastAnchorX, anchor.x);
+  }
+
+  /**
+   * Clear rocks around a run's starting position. The attract preview glides
+   * through the world without collision, so "tap to play" could otherwise
+   * drop the player inside (or a frame away from) a hazard — an instant,
+   * unavoidable death.
+   */
+  removeHazardsNear(px: number, py: number, radius: number) {
+    let w = 0;
+    for (const h of this.hazards) {
+      const dx = h.x - px;
+      const dy = h.y - py;
+      if (dx * dx + dy * dy > (radius + h.rx) * (radius + h.rx)) {
+        this.hazards[w++] = h;
+      }
+    }
+    this.hazards.length = w;
   }
 
   private difficulty(): number {
@@ -67,17 +111,27 @@ export class World {
     const segEnd = this.genX + segW;
     this.genX = segEnd;
 
-    // --- Anchors: 0–2 per segment, scattered. Empty segments = real gaps. ---
+    // --- Anchors: 0–2 per segment, scattered. Empty segments = real gaps —
+    // but capped: a long anchor drought is a guaranteed unavoidable death.
+    // Checked against the segment END so the rescue lands before the gap
+    // outgrows a good slingshot, and the rescue spawns EARLY in the segment
+    // at a mid-altitude band the player can actually reach.
+    const drought = segEnd - this.lastAnchorX > 850;
     const emptyChance = lerp(0.08, 0.28, diff);
     let anchorCount = 0;
-    if (!rng.chance(emptyChance)) {
+    if (drought || !rng.chance(emptyChance)) {
       anchorCount = rng.int(1, diff > 0.45 ? 2 : 1);
     }
 
     const segAnchors: Anchor[] = [];
     for (let i = 0; i < anchorCount; i++) {
-      const ax = rng.range(segStart + 60, segEnd - 60);
-      const ay = rng.range(top, bottom);
+      const rescue = drought && i === 0;
+      const ax = rescue
+        ? rng.range(segStart + 40, Math.min(segEnd - 60, segStart + 260))
+        : rng.range(segStart + 60, segEnd - 60);
+      const ay = rescue
+        ? rng.range(-650, Math.min(bottom, 350))
+        : rng.range(top, bottom);
       const moving = rng.chance(lerp(0.06, 0.38, diff));
       const anchor = moving
         ? new Anchor(ax, ay, "moving", {
@@ -88,6 +142,7 @@ export class World {
         : new Anchor(ax, ay, "normal");
       this.anchors.push(anchor);
       segAnchors.push(anchor);
+      if (ax > this.lastAnchorX) this.lastAnchorX = ax;
     }
 
     // Collectibles: scattered in the segment or clustered near an anchor.
