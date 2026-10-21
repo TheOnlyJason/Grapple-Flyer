@@ -50,9 +50,9 @@ limits (checked below each field).
 
 ## Keywords (100 chars max, comma-separated)
 
-> glide,swing,slingshot,endless,runner,flying,relaxing,zen,arcade,sky,paper,plane,alto,one touch
+> glide,swing,slingshot,endless,runner,flying,relaxing,zen,arcade,sky,paper,plane,one touch,adventure
 
-*(95 chars)*
+*(99 chars — "alto" removed: other apps' names in keywords violate guideline 2.3.7)*
 
 ## Category
 
