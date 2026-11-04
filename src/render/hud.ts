@@ -1,4 +1,5 @@
 import { Camera } from "../core/camera";
+import { CONFIG } from "../core/config";
 import { theme } from "./theme";
 import { clamp } from "../core/math";
 import { hexA } from "../entities/anchor";
@@ -35,6 +36,7 @@ export interface HudData {
   wind: number; // 0..1
   dashReady: boolean;
   speed: number;
+  smashReady: boolean; // fast enough to shatter meteors on contact
   objectives: Objective[];
   objectivesDone: number;
   muted: boolean;
@@ -200,10 +202,26 @@ export class Hud {
     ctx.fillStyle = hexA(PALETTE.text, 0.12);
     this.roundRect(ctx, spX, spY, barW, 8, 4);
     ctx.fill();
-    ctx.fillStyle = hexA(PALETTE.tether, 0.9);
+    ctx.fillStyle = d.smashReady
+      ? hexA(PALETTE.collectible, 0.95)
+      : hexA(PALETTE.tether, 0.9);
     this.roundRect(ctx, spX, spY, barW * spd, 8, 4);
     ctx.fill();
-    this.text(ctx, "SPEED", spX, spY - 18, 10, "700", PALETTE.textDim);
+    // drawDashButton leaves textAlign centred; the speed label is left-aligned.
+    ctx.textAlign = "left";
+    // Threshold tick: past this mark, meteors shatter on contact.
+    const tickX = spX + barW * clamp(CONFIG.player.smashSpeed / 1200, 0, 1);
+    ctx.fillStyle = hexA(PALETTE.text, 0.55);
+    ctx.fillRect(tickX - 1, spY - 3, 2, 14);
+    this.text(
+      ctx,
+      d.smashReady ? "SPEED · SMASH" : "SPEED",
+      spX,
+      spY - 18,
+      10,
+      "700",
+      d.smashReady ? PALETTE.collectible : PALETTE.textDim
+    );
 
     // --- Centered fading hint ---
     if (d.hintAlpha > 0.01 && d.hint) {

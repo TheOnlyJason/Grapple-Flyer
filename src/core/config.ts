@@ -21,6 +21,10 @@ export const CONFIG = {
     cruiseSpeed: 360, // glide forward speed eases toward this
     minSpeed: 140,
     maxSpeed: 1900,
+    // Fly at least this fast and meteors shatter on contact instead of ending
+    // the run — a clean perfect release gets you there.
+    smashSpeed: 1050,
+    smashSpeedLoss: 0.06, // momentum scrubbed per meteor smashed at speed
     forwardDrag: 0.5, // rate vx eases back to cruise (per second)
     vertDrag: 1.15, // vertical air drag while gliding -> gentler terminal sink
     // Speed-based lift: flying fast trades into altitude retention (a glider!),

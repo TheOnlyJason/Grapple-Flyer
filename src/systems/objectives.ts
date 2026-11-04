@@ -6,7 +6,8 @@ export type ObjectiveKind =
   | "moving"
   | "collect"
   | "distance"
-  | "dash";
+  | "dash"
+  | "smash";
 
 export interface Objective {
   kind: ObjectiveKind;
@@ -56,6 +57,7 @@ const TEMPLATES: Template[] = [
     make: (t) => `Reach ${t} m in one run`,
   },
   { kind: "dash", range: [2, 3], step: 1, make: (t) => `Trigger ${t} wind dashes` },
+  { kind: "smash", range: [2, 3], step: 1, make: (t) => `Smash ${t} meteors at full speed` },
 ];
 
 // Generates and tracks three distinct run objectives.

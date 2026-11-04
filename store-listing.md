@@ -40,6 +40,7 @@ limits (checked below each field).
 > FEATURES
 > • One-touch play: hold to swing, release to slingshot
 > • PERFECT releases, cloud skimming, and wind dashes to master
+> • Hit top speed and smash straight through meteors
 > • A living day/night cycle — dawn, golden hour, dusk, and starlit night
 > • Ever-changing biomes: forests, peaks, ruins, monuments, floating isles
 > • Three pilots to unlock your style: Paper Plane, Monkey, and Rainbow Cat

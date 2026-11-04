@@ -60,6 +60,9 @@ export class Game {
 
   // True while a tap that began on the dash button is held (suppresses tether).
   private dashLatch = false;
+  // One-time "SMASH SPEED" nudge per run, shown the first time the player
+  // gets fast enough to plow through meteors.
+  private smashHintShown = false;
 
   // Reused dash-magnet params for world.update — mutated per sub-step instead
   // of allocating a fresh object literal 120x/sec for the duration of a dash.
@@ -105,6 +108,7 @@ export class Game {
     this.wind = 0;
     this.newBest = false;
     this.hintTimer = 0;
+    this.smashHintShown = false;
     this.particles.clear();
     this.objectives.reset(this.rng);
   }
@@ -472,6 +476,12 @@ export class Game {
 
     this.wind = clamp(this.wind, 0, CONFIG.wind.max);
 
+    // One-time nudge per run the first time the player reaches smash speed.
+    if (!this.smashHintShown && this.player.speed >= CONFIG.player.smashSpeed) {
+      this.smashHintShown = true;
+      this.hud.popup(this.player.x, this.player.y - 40, "SMASH SPEED", theme.collectible, 1.2);
+    }
+
     this.camera.follow(this.player.x, this.player.y, this.player.speed, dt);
 
     // Highlight the nearest grab candidate so the route reads clearly. Same
@@ -603,6 +613,7 @@ export class Game {
 
   private handleHazards() {
     const invuln = this.player.hazardInvuln > 0;
+    const fast = this.player.speed >= CONFIG.player.smashSpeed;
     for (const h of this.world.hazards) {
       if (h.gone || h.destroyed) continue;
 
@@ -618,17 +629,30 @@ export class Game {
         continue;
       }
 
-      if (hit) {
-        this.player.kill();
-        this.endRun({ crashSound: true });
-        return;
+      if (!hit) continue;
+
+      // Carrying enough speed turns a fatal collision into a smash-through:
+      // the meteor shatters and the player keeps most of their momentum.
+      if (fast) {
+        this.smashHazard(h, 40);
+        const keep = 1 - CONFIG.player.smashSpeedLoss;
+        this.player.vx *= keep;
+        this.player.vy *= keep;
+        this.objectives.report("smash", 1);
+        this.hud.popup(h.x, h.y - 24, "SMASH +40", theme.collectible, 1.15);
+        this.sound.dash();
+        continue;
       }
+
+      this.player.kill();
+      this.endRun({ crashSound: true });
+      return;
     }
   }
 
-  private smashHazard(h: Hazard) {
+  private smashHazard(h: Hazard, bonus = 20) {
     h.break_();
-    this.bonus += 20;
+    this.bonus += bonus;
     this.camera.addShake(4);
     this.particles.emit(h.x, h.y, {
       count: 16,
@@ -743,6 +767,7 @@ export class Game {
       wind: this.wind / CONFIG.wind.max,
       dashReady: this.wind >= CONFIG.wind.dashCost,
       speed: this.player.speed,
+      smashReady: this.player.speed >= CONFIG.player.smashSpeed,
       objectives: this.objectives.list,
       objectivesDone: this.objectives.completedCount,
       muted: !this.sound.enabled,
