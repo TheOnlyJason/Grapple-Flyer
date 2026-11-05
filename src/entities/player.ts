@@ -49,6 +49,7 @@ export class Player {
   dashTime = 0;
   /** Remaining hazard invulnerability after a wind dash (rocks can't kill). */
   hazardInvuln = 0;
+  smashGlow = false; // set by the game while the smash is charged: bigger aura + a mint ring
   /** Which arm grabs the anchor on the current swing. */
   latchArm: LatchArm = "right";
   /** Arm to use on the next anchor grab (alternates each latch). */
@@ -73,6 +74,7 @@ export class Player {
     this.swingTime = 0;
     this.dashTime = 0;
     this.hazardInvuln = 0;
+    this.smashGlow = false;
     this.latchArm = "right";
     this.nextLatchArm = "right";
     this.events.length = 0;
@@ -90,6 +92,7 @@ export class Player {
     this.swingTime = 0;
     this.dashTime = 0;
     this.hazardInvuln = 0;
+    this.smashGlow = false;
     this.latchArm = "right";
     this.nextLatchArm = "right";
     this.events.length = 0;
@@ -187,6 +190,8 @@ export class Player {
       this.anchor = null;
     }
     this.state = "dash";
+    this.inPerfectWindow = false; // a dash out of the window must not leave the aura gold
+    this.perfectQuality = 0;
     this.dashTime = CONFIG.wind.dashDuration;
     this.hazardInvuln = CONFIG.wind.dashDuration;
     // Aim the dash mostly forward, preserving a little of the current pitch.
@@ -407,6 +412,8 @@ export class Player {
 
   kill() {
     this.alive = false;
+    this.inPerfectWindow = false;
+    this.perfectQuality = 0;
   }
 
   drainEvents(sink: (e: PlayerEvent) => void) {
@@ -717,13 +724,25 @@ export class Player {
     this.drawAirplane(ctx);
   }
 
+  // The additive halo washes out to white on bright skies, so a charged smash
+  // (or a dash) also gets a plain mint ring that reads the same in every mood.
+  private drawChargeRing(ctx: CanvasRenderingContext2D, x: number, y: number, glowR: number) {
+    ctx.strokeStyle = hexA(theme.collectible, 0.85);
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(x, y, glowR * 0.5, 0, TAU);
+    ctx.stroke();
+  }
+
   private drawNyanCatCharacter(ctx: CanvasRenderingContext2D, time: number) {
     const isDash = this.state === "dash";
-    const isPerfect = this.inPerfectWindow;
-    const glowCol = isDash
-      ? theme.collectible
-      : isPerfect
+    // (the flag can be stale after a dash that began inside the window)
+    const isPerfect = this.inPerfectWindow && this.state === "swing";
+    const charged = isDash || this.smashGlow; // dash and a charged smash both break meteors
+    const glowCol = isPerfect
       ? theme.anchorPerfect
+      : charged
+      ? theme.collectible
       : "#ff99cc";
 
     ctx.save();
@@ -733,15 +752,16 @@ export class Player {
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
     const r = CONFIG.player.radius;
-    const glowR = r * (isDash ? 3.4 : 2.2);
+    const glowR = r * (charged ? 3.4 : 2.2);
     const g = ctx.createRadialGradient(0, 0, 1, 0, 0, glowR);
-    g.addColorStop(0, hexA(glowCol, isDash ? 0.38 : 0.16));
+    g.addColorStop(0, hexA(glowCol, charged ? 0.38 : 0.16));
     g.addColorStop(1, hexA(glowCol, 0));
     ctx.fillStyle = g;
     ctx.beginPath();
     ctx.arc(0, 0, glowR, 0, TAU);
     ctx.fill();
     ctx.restore();
+    if (charged) this.drawChargeRing(ctx, 0, 0, glowR);
 
     drawNyanCat(ctx, time);
     ctx.restore();
@@ -753,11 +773,13 @@ export class Player {
     menuPreview: boolean
   ) {
     const isDash = this.state === "dash";
-    const isPerfect = this.inPerfectWindow;
-    const glowCol = isDash
-      ? theme.collectible
-      : isPerfect
+    // (the flag can be stale after a dash that began inside the window)
+    const isPerfect = this.inPerfectWindow && this.state === "swing";
+    const charged = isDash || this.smashGlow; // dash and a charged smash both break meteors
+    const glowCol = isPerfect
       ? theme.anchorPerfect
+      : charged
+      ? theme.collectible
       : theme.playerGlow;
 
     ctx.save();
@@ -767,15 +789,16 @@ export class Player {
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
     const r = CONFIG.player.radius;
-    const glowR = r * (isDash ? 3.6 : 2.4);
+    const glowR = r * (charged ? 3.6 : 2.4);
     const g = ctx.createRadialGradient(0, 0, 1, 0, 0, glowR);
-    g.addColorStop(0, hexA(glowCol, isDash ? 0.4 : 0.18));
+    g.addColorStop(0, hexA(glowCol, charged ? 0.4 : 0.18));
     g.addColorStop(1, hexA(glowCol, 0));
     ctx.fillStyle = g;
     ctx.beginPath();
     ctx.arc(0, 0, glowR, 0, TAU);
     ctx.fill();
     ctx.restore();
+    if (charged) this.drawChargeRing(ctx, 0, 0, glowR);
 
     drawMonkey(ctx, time, this.buildMonkeyPose(menuPreview));
     ctx.restore();
@@ -814,11 +837,13 @@ export class Player {
 
   private drawAirplane(ctx: CanvasRenderingContext2D) {
     const isDash = this.state === "dash";
-    const isPerfect = this.inPerfectWindow;
-    const glowCol = isDash
-      ? theme.collectible
-      : isPerfect
+    // (the flag can be stale after a dash that began inside the window)
+    const isPerfect = this.inPerfectWindow && this.state === "swing";
+    const charged = isDash || this.smashGlow; // dash and a charged smash both break meteors
+    const glowCol = isPerfect
       ? theme.anchorPerfect
+      : charged
+      ? theme.collectible
       : theme.playerGlow;
 
     ctx.save();
@@ -828,17 +853,18 @@ export class Player {
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
     const r = CONFIG.player.radius;
-    const glowR = r * (isDash ? 4 : 2.8);
+    const glowR = r * (charged ? 4 : 2.8);
     const gx = Math.cos(this.angle) * r * 0.35;
     const gy = Math.sin(this.angle) * r * 0.35;
     const g = ctx.createRadialGradient(gx, gy, 1, gx, gy, glowR);
-    g.addColorStop(0, hexA(glowCol, isDash ? 0.45 : 0.22));
+    g.addColorStop(0, hexA(glowCol, charged ? 0.45 : 0.22));
     g.addColorStop(1, hexA(glowCol, 0));
     ctx.fillStyle = g;
     ctx.beginPath();
     ctx.arc(gx, gy, glowR, 0, TAU);
     ctx.fill();
     ctx.restore();
+    if (charged) this.drawChargeRing(ctx, gx, gy, glowR);
 
     const sprite = getPlayerSprite();
     if (isPlayerSpriteReady() && sprite) {

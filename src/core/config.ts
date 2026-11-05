@@ -21,9 +21,13 @@ export const CONFIG = {
     cruiseSpeed: 360, // glide forward speed eases toward this
     minSpeed: 140,
     maxSpeed: 1900,
-    // Fly at least this fast and meteors shatter on contact instead of ending
-    // the run — a clean perfect release gets you there.
+    // Reach this speed and meteors shatter on contact instead of ending the
+    // run — a clean perfect release gets you there.
     smashSpeed: 1050,
+    // Reaching smash speed charges the smash for this long. Drag bleeds a
+    // launch below smashSpeed within 0.1–0.5 s, far too briefly to reach the
+    // meteor you were aiming at, so the charge outlives the speed itself.
+    smashHold: 1.3,
     smashSpeedLoss: 0.06, // momentum scrubbed per meteor smashed at speed
     forwardDrag: 0.5, // rate vx eases back to cruise (per second)
     vertDrag: 1.15, // vertical air drag while gliding -> gentler terminal sink
@@ -51,6 +55,22 @@ export const CONFIG = {
     idealLaunchAngleDeg: -44, // screen-space launch dir: up & forward
     perfectToleranceDeg: 17, // +/- window around ideal that counts as perfect
     minSwingSpeed: 60, // below this while tethered, swing feels dead
+  },
+
+  hazard: {
+    // Shatter animation when a meteor is smashed (wind dash or smash speed).
+    shatter: {
+      hold: 0.04, // seconds the cracked rock hangs together before flying apart
+      life: 0.8, // seconds from the break until the last piece is gone
+      shards: [5, 7], // target pieces per rock (small -> big); a coarse silhouette can cap it at 4-6
+      speed: [170, 380], // outward shard speed away from the impact point, px/s
+      carry: 0.45, // fraction of the player's velocity the pieces inherit
+      lift: 70, // small upward pop so pieces arc instead of dropping flat
+      gravity: 520,
+      drag: 1.1,
+      spin: [2.5, 7], // |angular velocity| of a tumbling piece, rad/s
+      flash: 0.16, // seconds the fresh fracture edges glow
+    },
   },
 
   wind: {

@@ -63,6 +63,8 @@ export class Game {
   // One-time "SMASH SPEED" nudge per run, shown the first time the player
   // gets fast enough to plow through meteors.
   private smashHintShown = false;
+  private smashCharge = 0; // seconds of meteor-smashing left since last reaching smash speed
+  private lastShatterSfx = -1; // game clock of the last crunch, to de-stack a multi-rock dash
 
   // Reused dash-magnet params for world.update — mutated per sub-step instead
   // of allocating a fresh object literal 120x/sec for the duration of a dash.
@@ -109,6 +111,7 @@ export class Game {
     this.newBest = false;
     this.hintTimer = 0;
     this.smashHintShown = false;
+    this.clearSmash();
     this.particles.clear();
     this.objectives.reset(this.rng);
   }
@@ -206,6 +209,16 @@ export class Game {
     return dx * dx + dy * dy <= b.r * b.r;
   }
 
+  /** True while a meteor hit will smash it instead of ending the run. */
+  get smashArmed(): boolean {
+    return this.smashCharge > 0;
+  }
+
+  private clearSmash() {
+    this.smashCharge = 0;
+    this.player.smashGlow = false;
+  }
+
   private endRun(opts: { crashSound?: boolean; burst?: boolean } = {}) {
     if (
       this.state !== "playing" &&
@@ -214,6 +227,7 @@ export class Game {
     ) {
       return;
     }
+    this.clearSmash();
     this.state = "gameover";
     this.timeInState = 0;
     const score = Math.floor(this.score);
@@ -277,6 +291,7 @@ export class Game {
   private startGroundCrash() {
     if (this.state !== "playing" && this.state !== "paused") return;
     this.state = "crashing";
+    this.clearSmash();
     this.dashLatch = false;
     this.sound.setWind(0);
     this.player.startSkid(this.world.seaLevel);
@@ -448,6 +463,18 @@ export class Game {
     const holdForTether = this.input.holding && !this.dashLatch;
     this.player.step(dt, holdForTether, this.world.anchors, this.time, this.camera);
 
+    // Reaching smash speed charges the smash for a short while, so the meteor
+    // the player was aiming at still breaks after drag bleeds the launch off.
+    if (this.player.speed >= CONFIG.player.smashSpeed) {
+      this.smashCharge = CONFIG.player.smashHold;
+    } else if (this.smashCharge > 0) {
+      this.smashCharge = Math.max(0, this.smashCharge - dt);
+    }
+    // The aura swells and gains a mint ring while charged, blinking out at the end.
+    this.player.smashGlow =
+      this.smashCharge > 0 &&
+      (this.smashCharge > 0.35 || Math.floor(this.smashCharge * 16) % 2 === 0);
+
     const dashing = this.player.state === "dash";
     if (dashing) {
       this.dashMagnet.x = this.player.x;
@@ -477,7 +504,7 @@ export class Game {
     this.wind = clamp(this.wind, 0, CONFIG.wind.max);
 
     // One-time nudge per run the first time the player reaches smash speed.
-    if (!this.smashHintShown && this.player.speed >= CONFIG.player.smashSpeed) {
+    if (!this.smashHintShown && this.smashCharge > 0) {
       this.smashHintShown = true;
       this.hud.popup(this.player.x, this.player.y - 40, "SMASH SPEED", theme.collectible, 1.2);
     }
@@ -509,6 +536,11 @@ export class Game {
         }
         case "release": {
           const { perfect, x, y } = e.info;
+          // The launch speed itself counts: by the time the step's own speed
+          // check runs, one step of glide drag has already come off it.
+          if (e.info.speed >= CONFIG.player.smashSpeed) {
+            this.smashCharge = CONFIG.player.smashHold;
+          }
           if (perfect) {
             this.perfectCount += 1;
             this.bonus += CONFIG.scoring.perfectPoints;
@@ -613,7 +645,7 @@ export class Game {
 
   private handleHazards() {
     const invuln = this.player.hazardInvuln > 0;
-    const fast = this.player.speed >= CONFIG.player.smashSpeed;
+    const fast = this.smashCharge > 0;
     for (const h of this.world.hazards) {
       if (h.gone || h.destroyed) continue;
 
@@ -631,16 +663,15 @@ export class Game {
 
       if (!hit) continue;
 
-      // Carrying enough speed turns a fatal collision into a smash-through:
-      // the meteor shatters and the player keeps most of their momentum.
+      // A charged smash turns a fatal collision into a smash-through: the
+      // meteor shatters and the player keeps most of their momentum.
       if (fast) {
-        this.smashHazard(h, 40);
+        this.smashHazard(h, 40, 6);
         const keep = 1 - CONFIG.player.smashSpeedLoss;
         this.player.vx *= keep;
         this.player.vy *= keep;
         this.objectives.report("smash", 1);
         this.hud.popup(h.x, h.y - 24, "SMASH +40", theme.collectible, 1.15);
-        this.sound.dash();
         continue;
       }
 
@@ -650,20 +681,40 @@ export class Game {
     }
   }
 
-  private smashHazard(h: Hazard, bonus = 20) {
-    h.break_();
+  private smashHazard(h: Hazard, bonus = 20, shake = 4) {
+    const p = this.player;
+    // The rock fractures away from where the player struck it and the pieces
+    // inherit some of the player's travel, so the debris stays on screen.
+    h.break_(p.x, p.y, p.vx, p.vy);
     this.bonus += bonus;
-    this.camera.addShake(4);
+    this.camera.addShake(shake);
+    // Dust from the fracture…
     this.particles.emit(h.x, h.y, {
-      count: 16,
-      speed: [80, 320],
+      count: 14,
+      speed: [60, 240],
       life: [0.3, 0.7],
-      size: [2, 5],
+      size: [1.5, 3.5],
       color: theme.hazardEdge,
-      drag: 1.4,
-      gravity: 200,
+      drag: 1.6,
+      gravity: 240,
       additive: false,
     });
+    // …and a few hot sparks thrown forward along the player's travel.
+    this.particles.emit(p.x, p.y, {
+      count: 6,
+      speed: [320, 640],
+      life: [0.12, 0.26],
+      size: [1.5, 2.6],
+      color: theme.skyGlow,
+      angle: Math.atan2(p.vy, p.vx),
+      spread: 1.3,
+      drag: 2.5,
+    });
+    // A dash can break several rocks in one step — one crunch covers them.
+    if (Math.abs(this.time - this.lastShatterSfx) > 0.05) {
+      this.lastShatterSfx = this.time;
+      this.sound.shatter();
+    }
   }
 
   // --- Render --------------------------------------------------------------
@@ -767,7 +818,8 @@ export class Game {
       wind: this.wind / CONFIG.wind.max,
       dashReady: this.wind >= CONFIG.wind.dashCost,
       speed: this.player.speed,
-      smashReady: this.player.speed >= CONFIG.player.smashSpeed,
+      smashReady: this.smashCharge > 0,
+      smashCharge: this.smashCharge / CONFIG.player.smashHold,
       objectives: this.objectives.list,
       objectivesDone: this.objectives.completedCount,
       muted: !this.sound.enabled,

@@ -250,7 +250,10 @@ export class World {
     w = 0;
     for (let i = 0; i < hazards.length; i++) {
       const h = hazards[i];
-      if (h.x + h.rx > limit && !h.gone) hazards[w++] = h;
+      // A shattering rock stays until its pieces finish: they inherit the
+      // player's travel and can still be on screen after the rock's own
+      // position has scrolled out.
+      if ((h.x + h.rx > limit || h.destroyed) && !h.gone) hazards[w++] = h;
     }
     hazards.length = w;
   }

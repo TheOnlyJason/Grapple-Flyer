@@ -36,7 +36,8 @@ export interface HudData {
   wind: number; // 0..1
   dashReady: boolean;
   speed: number;
-  smashReady: boolean; // fast enough to shatter meteors on contact
+  smashReady: boolean; // smash is charged: a meteor hit shatters it
+  smashCharge: number; // 0..1 of the smash window left
   objectives: Objective[];
   objectivesDone: number;
   muted: boolean;
@@ -209,10 +210,16 @@ export class Hud {
     ctx.fill();
     // drawDashButton leaves textAlign centred; the speed label is left-aligned.
     ctx.textAlign = "left";
-    // Threshold tick: past this mark, meteors shatter on contact.
+    // Threshold tick: reach this mark to charge the smash.
     const tickX = spX + barW * clamp(CONFIG.player.smashSpeed / 1200, 0, 1);
     ctx.fillStyle = hexA(PALETTE.text, 0.55);
     ctx.fillRect(tickX - 1, spY - 3, 2, 14);
+    // The smash window, draining under the speed bar once it is charged.
+    if (d.smashCharge > 0) {
+      ctx.fillStyle = hexA(PALETTE.collectible, 0.95);
+      this.roundRect(ctx, spX, spY + 11, barW * d.smashCharge, 3, 1.5);
+      ctx.fill();
+    }
     this.text(
       ctx,
       d.smashReady ? "SPEED · SMASH" : "SPEED",

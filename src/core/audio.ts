@@ -288,6 +288,36 @@ export class Sound {
     osc.stop(t + dur + 0.02);
   }
 
+  // Filtered white-noise burst — the "crack" layer of impact sounds. The
+  // noise buffer is generated once and shared.
+  private noiseBuf: AudioBuffer | null = null;
+  private noise(dur: number, gain: number, hz: number, q = 0.8) {
+    if (!this.ctx || !this.master || !this.enabled) return;
+    const ctx = this.ctx;
+    if (!this.noiseBuf) {
+      const len = Math.floor(ctx.sampleRate * 0.3);
+      this.noiseBuf = ctx.createBuffer(1, len, ctx.sampleRate);
+      const data = this.noiseBuf.getChannelData(0);
+      for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+    }
+    const t = ctx.currentTime;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseBuf;
+    const filter = ctx.createBiquadFilter();
+    filter.type = "bandpass";
+    filter.frequency.setValueAtTime(hz, t);
+    filter.frequency.exponentialRampToValueAtTime(Math.max(80, hz * 0.35), t + dur);
+    filter.Q.value = q;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(gain, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(filter);
+    filter.connect(g);
+    g.connect(this.master);
+    src.start(t);
+    src.stop(t + dur + 0.02);
+  }
+
   grab() {
     this.blip(220, 0.16, "triangle", 0.12, 360);
   }
@@ -306,5 +336,10 @@ export class Sound {
   }
   crash() {
     this.blip(140, 0.5, "square", 0.18, 50);
+  }
+  // Rock breaking apart: a short crack of noise over a low thud.
+  shatter() {
+    this.noise(0.2, 0.45, 1400, 0.6);
+    this.blip(120, 0.16, "square", 0.1, 45);
   }
 }
