@@ -21,7 +21,9 @@ is the stuff that needs **your Apple Developer account**.
 - ✅ Web-only AdSense is disabled inside the app (App Store policy — see step 6).
 - ✅ Export compliance declared (`ITSAppUsesNonExemptEncryption = NO`) — no
   encryption questionnaire on uploads.
-- ✅ Version `1.0`, build `1` (bump the build number for each re-upload).
+- ✅ Version `1.1`, build `3` live in review (1.0 / build 2 is on the store).
+  Bump both `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in
+  `ios/App/App.xcodeproj/project.pbxproj` for each release.
 - ✅ Performance pass: 15 audited+verified fixes (sprite caches, palette
   quantization, de-blurred trails, 120 Hz loop hoists, adaptive resolution)
   — the heaviest scene went from 16.6 ms to 2.5 ms per frame.
@@ -131,3 +133,23 @@ Regenerate icons & launch screen after art changes:
 ```bash
 npm run assets       # redraw source art + slice all iOS sizes
 ```
+
+## Shipping an update (what 1.1 took, headless)
+
+1. Bump `MARKETING_VERSION` (e.g. `1.1`) and `CURRENT_PROJECT_VERSION` (must be
+   new) in `ios/App/App.xcodeproj/project.pbxproj`.
+2. `./scripts/ios-release.sh` — builds, archives, uploads. Processing took ~3 min.
+3. Create the version and fill it in via the API (`scripts/asc.mjs`):
+   - `POST /v1/appStoreVersions` (`versionString`, `releaseType: AFTER_APPROVAL`).
+     Apple copies the previous version's localization, screenshots and review
+     detail onto it; `whatsNew` and `promotionalText` start empty.
+   - `PATCH /v1/appStoreVersionLocalizations/<id>` with `description`,
+     `whatsNew`, `promotionalText` from `store-listing.md`.
+   - `PATCH /v1/appStoreReviewDetails/<id>` — refresh `notes` for the update.
+   - `PATCH /v1/appStoreVersions/<id>/relationships/build` once the build's
+     `processingState` is `VALID`.
+   - New-version `appInfos` get a fresh `ageRatingDeclaration`; any question Apple
+     added since last time (1.1 hit `socialMedia`) is `null` and blocks the
+     submission with `ENTITY_ERROR.ATTRIBUTE.REQUIRED` — PATCH it to `false`.
+   - `POST /v1/reviewSubmissions` → `POST /v1/reviewSubmissionItems` (the
+     version) → `PATCH /v1/reviewSubmissions/<id>` `{submitted: true}`.
