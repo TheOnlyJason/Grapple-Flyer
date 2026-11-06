@@ -85,6 +85,31 @@ export const CONFIG = {
     dashDebrisRange: 90, // hazards destroyed in path during dash
   },
 
+  // Orbs are the currency: collected in a run, banked into the save when it ends.
+  orbs: {
+    points: 10, // score per orb (the orb itself is the reward: +1 to the bank)
+    pickupRadius: 16, // added to the player radius
+    trailChance: 0.6, // chance a world segment carries a trail of orbs
+    trailCount: [4, 7], // orbs per trail
+    spacing: 48, // px between orbs in a trail
+  },
+
+  // Power-ups are rare floating pickups; touching one switches its effect on.
+  powerups: {
+    firstAt: 1400, // px of world before the first pickup can appear
+    gap: [2600, 4200], // px between pickups
+    pickupRadius: 30, // added to the player radius
+    magnet: {
+      duration: 8, // seconds
+      range: 380, // orbs + wisps inside this radius fly to the player
+      strength: 1150, // their speed, px/s
+    },
+    barrier: {
+      grace: 0.6, // seconds of smash-through after the barrier breaks
+      seaBounce: 820, // upward launch (px/s) when it saves you from the cloud sea
+    },
+  },
+
   camera: {
     anchorX: 0.33, // player rests this far across the screen
     anchorY: 0.46,

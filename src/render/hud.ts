@@ -3,8 +3,20 @@ import { CONFIG } from "../core/config";
 import { theme } from "./theme";
 import { clamp } from "../core/math";
 import { hexA } from "../entities/anchor";
-import { Objective } from "../systems/objectives";
+import {
+  Objective,
+  OBJECTIVE_EXIT,
+  OBJECTIVE_HOLD,
+  OBJECTIVE_STRIKE,
+} from "../systems/objectives";
 import type { CharacterId } from "../characters/registry";
+import {
+  drawOrbIcon,
+  drawPowerIcon,
+  ORB_COLOR,
+  POWERUP_COLOR,
+  type PowerUpKind,
+} from "../entities/powerup";
 
 const PALETTE = theme; // HUD reads the live theme for cohesive colour grading
 
@@ -38,6 +50,10 @@ export interface HudData {
   speed: number;
   smashReady: boolean; // smash is charged: a meteor hit shatters it
   smashCharge: number; // 0..1 of the smash window left
+  orbs: number; // orbs picked up this run
+  orbBank: number; // banked total (includes this run once it has ended)
+  magnet: number; // 0..1 of the magnet power-up left (0 = off)
+  barrier: boolean; // barrier power-up is up
   objectives: Objective[];
   objectivesDone: number;
   muted: boolean;
@@ -69,6 +85,12 @@ export class Hud {
   private attractTop: CanvasGradient | null = null;
   private attractBottom: CanvasGradient | null = null;
   private attractGradH = 0;
+  // Width of the run-start hint at its full 18px size, measured once per string.
+  private hintWidth = 0;
+  private hintWidthFor = "";
+  // Objective label widths (13px/600), for the cross-out line. A handful of
+  // distinct labels exist, so this stays tiny.
+  private labelWidths = new Map<string, number>();
 
   popup(x: number, y: number, text: string, color: string, scale = 1) {
     this.popups.push({ x, y, text, color, life: 1.1, maxLife: 1.1, scale });
@@ -183,6 +205,9 @@ export class Hud {
       "600",
       hexA(PALETTE.anchorPerfect, 0.85)
     );
+    // Orbs collected this run.
+    drawOrbIcon(ctx, 33 + ins.left, 113 + ins.top, 6);
+    this.text(ctx, `${d.orbs}`, 46 + ins.left, 105 + ins.top, 14, "700", ORB_COLOR);
 
     // --- Objectives (top-right) ---
     this.drawObjectives(ctx, cam, d);
@@ -230,12 +255,45 @@ export class Hud {
       d.smashReady ? PALETTE.collectible : PALETTE.textDim
     );
 
+    // --- Active power-ups: chips beside the speed bar ---
+    let chipX = spX + barW + 34;
+    if (d.magnet > 0) {
+      this.drawPowerChip(ctx, chipX, spY - 2, "magnet", d.magnet);
+      chipX += 42;
+    }
+    if (d.barrier) this.drawPowerChip(ctx, chipX, spY - 2, "barrier", 1);
+
     // --- Centered fading hint ---
     if (d.hintAlpha > 0.01 && d.hint) {
       ctx.textAlign = "center";
       this.setFont(ctx, "600", 18);
-      ctx.fillStyle = hexA(PALETTE.text, d.hintAlpha * 0.9);
-      ctx.fillText(d.hint, cam.w / 2, cam.h * 0.2);
+      if (this.hintWidthFor !== d.hint) {
+        this.hintWidthFor = d.hint;
+        this.hintWidth = ctx.measureText(d.hint).width;
+      }
+      const hintCol = hexA(PALETTE.text, d.hintAlpha * 0.9);
+      // Top centre by default. Where that would run into the objectives
+      // column (phones), the hint drops to the free strip between the speed
+      // bar with its power-up chips and the dash button, shrunk to fit.
+      const objectivesLeft = cam.w - 250 - ins.right;
+      if (cam.w / 2 + this.hintWidth / 2 + 16 <= objectivesLeft) {
+        ctx.fillStyle = hintCol;
+        ctx.fillText(d.hint, cam.w / 2, cam.h * 0.2);
+      } else {
+        const dash = this.dashButton(cam);
+        const left = spX + barW + 34 + 42 + 16 + 12; // clear of both chips
+        const right = dash.x - dash.r - 16;
+        const size = clamp(Math.floor((18 * (right - left)) / this.hintWidth), 11, 18);
+        const hx = (left + right) / 2;
+        const hy = cam.h - ins.bottom - 37 - size / 2;
+        this.setFont(ctx, "600", size);
+        // Down here the backdrop can be the pale cloud sea: a shadow that
+        // fades with the text keeps it readable.
+        ctx.fillStyle = hexA("#0a0d24", 0.5 * d.hintAlpha);
+        ctx.fillText(d.hint, hx + 1.5, hy + 1.5);
+        ctx.fillStyle = hintCol;
+        ctx.fillText(d.hint, hx, hy);
+      }
     }
 
     // Mute indicator.
@@ -248,6 +306,31 @@ export class Hud {
       "600",
       hexA(PALETTE.textDim, 0.7)
     );
+  }
+
+  // A worn power-up: dark badge, its glyph, and a ring showing what is left
+  // (a full ring for the barrier, which lasts until it is used).
+  private drawPowerChip(
+    ctx: CanvasRenderingContext2D,
+    cx: number,
+    cy: number,
+    kind: PowerUpKind,
+    frac: number
+  ) {
+    const r = 16;
+    const col = POWERUP_COLOR[kind];
+    ctx.fillStyle = hexA("#10143a", 0.6);
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = hexA(PALETTE.text, 0.16);
+    ctx.stroke();
+    ctx.strokeStyle = col;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * clamp(frac, 0, 1));
+    ctx.stroke();
+    drawPowerIcon(ctx, kind, cx, cy, r * 1.3, col);
   }
 
   private drawPauseButton(
@@ -315,6 +398,7 @@ export class Hud {
     const x = cam.w - 250 - ins.right;
     let y = 54 + ins.top;
     ctx.textAlign = "left";
+    const allDone = d.objectives.length > 0 && d.objectivesDone === d.objectives.length;
     this.text(
       ctx,
       `OBJECTIVES  ${d.objectivesDone}/${d.objectives.length}`,
@@ -322,12 +406,19 @@ export class Hud {
       y,
       12,
       "700",
-      PALETTE.textDim
+      allDone ? PALETTE.collectible : PALETTE.textDim
     );
     y += 22;
+    const w = 224;
     for (const o of d.objectives) {
-      const w = 224;
-      const flash = o.justCompleted > 0 ? o.justCompleted / 1.5 : 0;
+      if (o.gone) continue;
+      // A finished objective is crossed out, holds for a beat, then fades
+      // while its row closes up so the ones below slide into place.
+      const exit = o.done
+        ? clamp((o.doneFor - OBJECTIVE_STRIKE - OBJECTIVE_HOLD) / OBJECTIVE_EXIT, 0, 1)
+        : 0;
+      const ease = exit * exit * (3 - 2 * exit);
+      ctx.globalAlpha = 1 - ease;
       // Track
       ctx.fillStyle = hexA(PALETTE.text, 0.1);
       this.roundRect(ctx, x, y + 16, w, 6, 3);
@@ -338,22 +429,22 @@ export class Hud {
         : hexA(PALETTE.anchor, 0.85);
       this.roundRect(ctx, x, y + 16, w * frac, 6, 3);
       ctx.fill();
-      const col = o.done
-        ? PALETTE.collectible
-        : flash > 0
-        ? PALETTE.anchorPerfect
-        : PALETTE.text;
-      this.text(
-        ctx,
-        `${o.done ? "✓ " : ""}${o.label}`,
-        x,
-        y,
-        13,
-        "600",
-        col
-      );
-      y += 38;
+      this.text(ctx, o.label, x, y, 13, "600", o.done ? PALETTE.collectible : PALETTE.text);
+      if (o.done) {
+        // The strike runs left to right across the label.
+        let labelW = this.labelWidths.get(o.label);
+        if (labelW === undefined) {
+          labelW = ctx.measureText(o.label).width; // font is still the label's
+          this.labelWidths.set(o.label, labelW);
+        }
+        const k = clamp(o.doneFor / OBJECTIVE_STRIKE, 0, 1);
+        const run = (labelW + 8) * (1 - (1 - k) * (1 - k));
+        ctx.fillStyle = PALETTE.collectible;
+        ctx.fillRect(x - 4, y + 6, run, 2);
+      }
+      y += 38 * (1 - ease);
     }
+    ctx.globalAlpha = 1;
   }
 
   private drawDashButton(ctx: CanvasRenderingContext2D, cam: Camera, d: HudData) {
@@ -446,7 +537,9 @@ export class Hud {
           ctx,
           "★ NEW BEST ★",
           w / 2,
-          subtitleY - scoreSize * 0.55,
+          // Above the title: between the title and the score there is no
+          // room for a third line on phone-height screens.
+          Math.max(ins.top + 4, h * 0.09 - 21),
           13,
           "800",
           hexA(PALETTE.anchorPerfect, bestPulse),
@@ -465,7 +558,7 @@ export class Hud {
       );
       this.text(
         ctx,
-        `${d.perfectCount} perfect  ·  ${d.objectivesDone}/${d.objectives.length} objectives`,
+        `${d.perfectCount} perfect  ·  ${d.objectivesDone}/${d.objectives.length} objectives  ·  +${d.orbs} orbs`,
         w / 2,
         statsY,
         clamp(w * 0.022, 15, 18),
@@ -473,6 +566,18 @@ export class Hud {
         PALETTE.text,
         true
       );
+    }
+
+    // Orb bank — top right. Number right-aligned against the orb glyph.
+    {
+      const coinX = w - 40 - ins.right;
+      const coinY = 38 + ins.top;
+      drawOrbIcon(ctx, coinX, coinY, 11);
+      ctx.textAlign = "right";
+      ctx.textBaseline = "top";
+      this.text(ctx, `${d.orbBank}`, coinX - 20, coinY - 13, 24, "800", ORB_COLOR, true);
+      this.text(ctx, "ORBS", coinX + 12, coinY + 18, 10, "700", PALETTE.textDim);
+      ctx.textAlign = "center";
     }
 
     // Character picker — placement derives from the play button so the two

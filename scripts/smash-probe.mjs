@@ -215,10 +215,12 @@ if (MODE === "ahead") {
       player.state = "glide"; player.anchor = null; player.y = 0;
       player.vx = v0; player.vy = 0;
       rock.x = player.x + D + rock.rx;
+      game.barrier = false;
       let outcome = "missed";
       for (let i = 0; i < 120 * 8; i++) {
         rock.y = player.y; // keep it dead ahead
         for (const a of game.world.anchors) a.y = -99999; // nothing to latch onto
+        game.world.powerups.length = 0; // no barrier pickup may absorb the hit
         if (game.world.hazards[0] !== rock) { outcome = "culled"; break; }
         const speed = player.speed;
         frame();
@@ -275,6 +277,8 @@ if (MODE === "bot") {
           holding = false; lastRelease = t;
         }
       }
+      // Power-ups would absorb hits and inflate the smash columns.
+      game.world.powerups.length = 0; game.barrier = false; game.magnetTime = 0;
       frame(); frames++;
       if (game.state !== "playing") continue;
       if (armedNow()) armedFrames++;

@@ -334,6 +334,24 @@ export class Sound {
   dash() {
     this.blip(160, 0.45, "sawtooth", 0.16, 1100);
   }
+  orb() {
+    this.blip(1320, 0.07, "sine", 0.07, 1760);
+  }
+  // An objective ticked off.
+  objective() {
+    this.blip(784, 0.12, "triangle", 0.11, 1047);
+    this.blip(1047, 0.22, "sine", 0.09, 1568);
+  }
+  // Power-up picked up: a quick rising pair.
+  powerUp() {
+    this.blip(523, 0.14, "triangle", 0.13, 784);
+    this.blip(784, 0.24, "sine", 0.1, 1175);
+  }
+  // Barrier giving way: glassy crack over a falling tone.
+  barrierBreak() {
+    this.noise(0.16, 0.32, 2600, 1.2);
+    this.blip(700, 0.3, "triangle", 0.13, 180);
+  }
   crash() {
     this.blip(140, 0.5, "square", 0.18, 50);
   }

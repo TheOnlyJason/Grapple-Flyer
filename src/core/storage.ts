@@ -7,16 +7,25 @@ interface SaveData {
   bestDistance: number;
   runs: number;
   totalPerfect: number;
+  orbs: number; // banked currency
   character: CharacterId;
 }
 
 const KEY = "gale.save.v1";
+
+const MAX_ORBS = 999_999_999;
+/** Whatever is stored or passed in, the bank is a whole number in [0, MAX_ORBS]. */
+function cleanOrbs(v: unknown): number {
+  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : 0;
+  return Number.isFinite(n) && n > 0 ? Math.min(MAX_ORBS, Math.floor(n)) : 0;
+}
 
 const DEFAULT: SaveData = {
   bestScore: 0,
   bestDistance: 0,
   runs: 0,
   totalPerfect: 0,
+  orbs: 0,
   character: "plane",
 };
 
@@ -37,6 +46,8 @@ export class Storage {
           ...parsed,
           character: isCharacterId(parsed.character) ? parsed.character : "plane",
         };
+        // Saves from before orbs existed (or a hand-edited value) bank nothing.
+        this.data.orbs = cleanOrbs(parsed.orbs);
       }
     } catch {
       this.data = { ...DEFAULT };
@@ -52,9 +63,10 @@ export class Storage {
   }
 
   // Record a finished run; returns whether a new best score was set.
-  recordRun(score: number, distance: number, perfect: number): boolean {
+  recordRun(score: number, distance: number, perfect: number, orbs = 0): boolean {
     this.data.runs += 1;
     this.data.totalPerfect += perfect;
+    this.data.orbs = cleanOrbs(this.data.orbs + cleanOrbs(orbs));
     const isBest = score > this.data.bestScore;
     if (isBest) this.data.bestScore = score;
     if (distance > this.data.bestDistance) this.data.bestDistance = distance;

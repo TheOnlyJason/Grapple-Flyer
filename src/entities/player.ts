@@ -49,6 +49,7 @@ export class Player {
   dashTime = 0;
   /** Remaining hazard invulnerability after a wind dash (rocks can't kill). */
   hazardInvuln = 0;
+  private grabLockout = 0; // seconds the tether refuses to attach (after a barrier bounce)
   smashGlow = false; // set by the game while the smash is charged: bigger aura + a mint ring
   /** Which arm grabs the anchor on the current swing. */
   latchArm: LatchArm = "right";
@@ -74,6 +75,7 @@ export class Player {
     this.swingTime = 0;
     this.dashTime = 0;
     this.hazardInvuln = 0;
+    this.grabLockout = 0;
     this.smashGlow = false;
     this.latchArm = "right";
     this.nextLatchArm = "right";
@@ -92,6 +94,7 @@ export class Player {
     this.swingTime = 0;
     this.dashTime = 0;
     this.hazardInvuln = 0;
+    this.grabLockout = 0;
     this.smashGlow = false;
     this.latchArm = "right";
     this.nextLatchArm = "right";
@@ -217,10 +220,11 @@ export class Player {
     if (this.hazardInvuln > 0) {
       this.hazardInvuln = Math.max(0, this.hazardInvuln - dt);
     }
+    if (this.grabLockout > 0) this.grabLockout = Math.max(0, this.grabLockout - dt);
 
     switch (this.state) {
       case "glide": {
-        if (holding) {
+        if (holding && this.grabLockout <= 0) {
           const target = this.findGrabTarget(anchors, view);
           if (target) {
             this.grab(target);
@@ -408,6 +412,22 @@ export class Player {
     this.recordTrail();
 
     return Math.abs(this.vx) < CONFIG.skid.stopSpeed;
+  }
+
+  /** Barrier save: thrown back up off the cloud sea instead of crashing. */
+  bounce(groundY: number, speed: number) {
+    this.y = groundY - 2;
+    this.vy = -speed;
+    this.vx = Math.max(this.vx, CONFIG.player.cruiseSpeed * 1.25);
+    // Fly free: a dash would flatten the launch, and a rope would haul the
+    // player straight back under — and a held finger would re-grab the same
+    // anchor on the very next step, hence the short lockout.
+    this.state = "glide";
+    this.dashTime = 0;
+    this.anchor = null;
+    this.inPerfectWindow = false;
+    this.perfectQuality = 0;
+    this.grabLockout = 0.3;
   }
 
   kill() {

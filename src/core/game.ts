@@ -9,6 +9,13 @@ import { clamp } from "./math";
 import { Player } from "../entities/player";
 import { Hazard } from "../entities/hazard";
 import { hexA } from "../entities/anchor";
+import {
+  drawBarrier,
+  drawMagnetField,
+  ORB_COLOR,
+  POWERUP_COLOR,
+  POWERUP_NAME,
+} from "../entities/powerup";
 import { makeScratch, Scratch, VersionCache } from "../render/rcache";
 import { World } from "../systems/world";
 import { Particles } from "../systems/particles";
@@ -21,6 +28,14 @@ import {
 } from "../characters/registry";
 
 type GameState = "menu" | "playing" | "paused" | "crashing" | "gameover";
+
+/** A pull toward (x, y) applied to collectibles by World.update. */
+interface MagnetField {
+  x: number;
+  y: number;
+  range: number;
+  strength: number;
+}
 
 export class Game {
   private ctx: CanvasRenderingContext2D;
@@ -66,13 +81,28 @@ export class Game {
   private smashCharge = 0; // seconds of meteor-smashing left since last reaching smash speed
   private lastShatterSfx = -1; // game clock of the last crunch, to de-stack a multi-rock dash
 
+  // Orbs picked up this run (banked into the save when the run ends) and the
+  // power-up effects currently worn.
+  private runOrbs = 0;
+  private magnetTime = 0; // seconds of magnet left
+  private barrier = false; // absorbs one fatal hit
+  private barrierGrace = 0; // seconds rocks still break on contact after it bursts
+  private objectivesChimed = 0; // completed objectives already announced this run
+
   // Reused dash-magnet params for world.update — mutated per sub-step instead
   // of allocating a fresh object literal 120x/sec for the duration of a dash.
-  private dashMagnet = {
+  private dashMagnet: MagnetField = {
     x: 0,
     y: 0,
     range: CONFIG.wind.dashMagnetRange,
     strength: 1000,
+  };
+  // Same idea for the magnet power-up's wider, longer pull.
+  private powerMagnet: MagnetField = {
+    x: 0,
+    y: 0,
+    range: CONFIG.powerups.magnet.range,
+    strength: CONFIG.powerups.magnet.strength,
   };
 
   // Baked vignette + top grade, rebuilt only on palette / size / menu changes.
@@ -112,8 +142,12 @@ export class Game {
     this.hintTimer = 0;
     this.smashHintShown = false;
     this.clearSmash();
+    this.runOrbs = 0;
+    this.magnetTime = 0;
+    this.barrier = false;
     this.particles.clear();
     this.objectives.reset(this.rng);
+    this.objectivesChimed = 0;
   }
 
   private seedAndReset(seed?: number | string) {
@@ -145,6 +179,11 @@ export class Game {
       const glideTime = this.time - this.attractGlideStartTime;
       this.player.animateMenuGlide(0, glideTime, this.attractGlideX);
       this.startX = this.player.x;
+      // The difficulty ramp restarts with the run. The world does not: what
+      // is on screen stays and the sky keeps its time of day; only the part
+      // not yet in view is rebuilt on the fresh ramp.
+      this.world.beginRun(this.player.x, this.camera.right + 60);
+      this.world.ensure(this.camera.right);
       // The world here is whatever the attract glide flew into — guarantee a
       // reachable first anchor and a rock-free launch corridor so the run
       // can't end before it begins.
@@ -215,6 +254,7 @@ export class Game {
   }
 
   private clearSmash() {
+    this.barrierGrace = 0;
     this.smashCharge = 0;
     this.player.smashGlow = false;
   }
@@ -234,8 +274,11 @@ export class Game {
     this.newBest = this.storage.recordRun(
       score,
       Math.floor(this.distance),
-      this.perfectCount
+      this.perfectCount,
+      this.runOrbs
     );
+    this.magnetTime = 0;
+    this.barrier = false;
     this.sound.setWind(0);
     if (opts.crashSound) this.sound.crash();
     this.camera.addShake(16);
@@ -292,6 +335,7 @@ export class Game {
     if (this.state !== "playing" && this.state !== "paused") return;
     this.state = "crashing";
     this.clearSmash();
+    this.magnetTime = 0;
     this.dashLatch = false;
     this.sound.setWind(0);
     this.player.startSkid(this.world.seaLevel);
@@ -346,6 +390,11 @@ export class Game {
     this.particles.update(dt);
     this.hud.update(dt);
     if (this.state !== "paused") this.objectives.update(dt);
+    const objectivesDone = this.objectives.completedCount;
+    if (objectivesDone > this.objectivesChimed && this.state === "playing") {
+      this.sound.objective();
+    }
+    this.objectivesChimed = objectivesDone;
     this.sound.setWind(
       this.state === "playing" ? clamp(this.player.speed / 1100, 0, 1) : 0
     );
@@ -470,6 +519,7 @@ export class Game {
     } else if (this.smashCharge > 0) {
       this.smashCharge = Math.max(0, this.smashCharge - dt);
     }
+    if (this.barrierGrace > 0) this.barrierGrace = Math.max(0, this.barrierGrace - dt);
     // The aura swells and gains a mint ring while charged, blinking out at the end.
     this.player.smashGlow =
       this.smashCharge > 0 &&
@@ -480,17 +530,44 @@ export class Game {
       this.dashMagnet.x = this.player.x;
       this.dashMagnet.y = this.player.y;
     }
-    this.world.update(dt, this.time, dashing ? this.dashMagnet : undefined);
+    // The magnet power-up pulls orbs and wisps in; a dash keeps its own pull.
+    let magnet: MagnetField | undefined;
+    if (this.magnetTime > 0) {
+      this.magnetTime = Math.max(0, this.magnetTime - dt);
+      this.powerMagnet.x = this.player.x;
+      this.powerMagnet.y = this.player.y;
+      magnet = this.powerMagnet;
+    } else if (dashing) {
+      magnet = this.dashMagnet;
+    }
+    this.world.update(dt, this.time, magnet);
 
     this.handlePlayerEvents();
     this.handleSkim(dt);
     this.handleCollectibles();
+    this.handlePowerUps();
     this.handleHazards();
 
     // Cloud-sea death floor — skid to a stop before run over.
     if (this.player.y >= this.world.seaLevel) {
-      this.startGroundCrash();
-      return;
+      if (!this.barrier) {
+        this.startGroundCrash();
+        return;
+      }
+      // The barrier takes the hit: it bursts and throws the player back up.
+      this.breakBarrier(this.player.x, this.world.seaLevel);
+      this.player.bounce(this.world.seaLevel, CONFIG.powerups.barrier.seaBounce);
+      this.particles.emit(this.player.x, this.world.seaLevel, {
+        count: 22,
+        speed: [60, 320],
+        life: [0.35, 0.8],
+        size: [2, 5.5],
+        color: theme.sea,
+        angle: -Math.PI / 2,
+        spread: Math.PI * 0.8,
+        gravity: 240,
+        additive: false,
+      });
     }
 
     // Scoring + objectives tied to distance.
@@ -620,32 +697,89 @@ export class Game {
   }
 
   private handleCollectibles() {
-    const rr = CONFIG.player.radius + 14;
-    const r2 = rr * rr;
+    const wispR = CONFIG.player.radius + 14;
+    const orbR = CONFIG.player.radius + CONFIG.orbs.pickupRadius;
     for (const c of this.world.collectibles) {
       if (c.collected) continue;
       const dx = c.x - this.player.x;
       const dy = c.y - this.player.y;
-      if (dx * dx + dy * dy <= r2) {
-        c.collected = true;
-        this.bonus += CONFIG.scoring.collectPoints;
-        this.wind += CONFIG.wind.collectGain;
-        this.objectives.report("collect", 1);
-        this.sound.collect();
+      const rr = c.kind === "orb" ? orbR : wispR;
+      if (dx * dx + dy * dy > rr * rr) continue;
+      c.collected = true;
+      if (c.kind === "orb") {
+        this.runOrbs += 1;
+        this.bonus += CONFIG.orbs.points;
+        this.objectives.report("orb", 1);
+        this.sound.orb();
         this.particles.emit(c.x, c.y, {
-          count: 7,
-          speed: [60, 220],
-          life: [0.25, 0.6],
-          size: [1.5, 3.5],
-          color: theme.collectible,
+          count: 4,
+          speed: [50, 170],
+          life: [0.2, 0.45],
+          size: [1.5, 3],
+          color: ORB_COLOR,
         });
+        continue;
       }
+      this.bonus += CONFIG.scoring.collectPoints;
+      this.wind += CONFIG.wind.collectGain;
+      this.objectives.report("collect", 1);
+      this.sound.collect();
+      this.particles.emit(c.x, c.y, {
+        count: 7,
+        speed: [60, 220],
+        life: [0.25, 0.6],
+        size: [1.5, 3.5],
+        color: theme.collectible,
+      });
     }
+  }
+
+  private handlePowerUps() {
+    const rr = CONFIG.player.radius + CONFIG.powerups.pickupRadius;
+    for (const p of this.world.powerups) {
+      if (p.collected) continue;
+      const dx = p.x - this.player.x;
+      const dy = p.y - this.player.y;
+      if (dx * dx + dy * dy > rr * rr) continue;
+      p.collected = true;
+      if (p.kind === "magnet") this.magnetTime = CONFIG.powerups.magnet.duration;
+      else this.barrier = true;
+      const col = POWERUP_COLOR[p.kind];
+      this.hud.popup(p.x, p.y - 34, POWERUP_NAME[p.kind], col, 1.25);
+      this.sound.powerUp();
+      this.camera.addShake(3);
+      this.particles.emit(p.x, p.y, {
+        count: 18,
+        speed: [90, 380],
+        life: [0.3, 0.75],
+        size: [2, 4.5],
+        color: col,
+      });
+    }
+  }
+
+  // The barrier absorbs a fatal hit and is gone. A short grace follows so a
+  // second rock overlapping the first can't end the run on the next step. It
+  // has its own timer: it is not a speed smash, so it must not light the
+  // smash HUD, fire the smash hint or count toward the smash objective.
+  private breakBarrier(x: number, y: number) {
+    this.barrier = false;
+    this.barrierGrace = CONFIG.powerups.barrier.grace;
+    const col = POWERUP_COLOR.barrier;
+    this.hud.popup(x, y - 40, "BARRIER BROKEN", col, 1.2);
+    this.sound.barrierBreak();
+    this.camera.addShake(9);
+    this.particles.emit(this.player.x, this.player.y, {
+      count: 20,
+      speed: [140, 460],
+      life: [0.3, 0.7],
+      size: [2, 4.5],
+      color: col,
+    });
   }
 
   private handleHazards() {
     const invuln = this.player.hazardInvuln > 0;
-    const fast = this.smashCharge > 0;
     for (const h of this.world.hazards) {
       if (h.gone || h.destroyed) continue;
 
@@ -665,13 +799,21 @@ export class Game {
 
       // A charged smash turns a fatal collision into a smash-through: the
       // meteor shatters and the player keeps most of their momentum.
-      if (fast) {
+      if (this.smashCharge > 0) {
         this.smashHazard(h, 40, 6);
         const keep = 1 - CONFIG.player.smashSpeedLoss;
         this.player.vx *= keep;
         this.player.vy *= keep;
         this.objectives.report("smash", 1);
         this.hud.popup(h.x, h.y - 24, "SMASH +40", theme.collectible, 1.15);
+        continue;
+      }
+
+      // The barrier takes the hit instead: the rock breaks, the bubble bursts
+      // — and for a beat afterwards a second rock breaks the same way.
+      if (this.barrier || this.barrierGrace > 0) {
+        if (this.barrier) this.breakBarrier(h.x, h.y);
+        this.smashHazard(h, 20, 6);
         continue;
       }
 
@@ -735,6 +877,7 @@ export class Game {
     cam.apply(ctx);
     for (const c of this.world.clouds) c.draw(ctx);
     for (const c of this.world.collectibles) c.draw(ctx, this.time);
+    for (const p of this.world.powerups) p.draw(ctx, this.time);
     for (const h of this.world.hazards) h.draw(ctx, this.time);
     for (const a of this.world.anchors) a.draw(ctx, this.time);
     if (
@@ -745,6 +888,11 @@ export class Game {
       this.state === "gameover"
     ) {
       this.player.draw(ctx, this.time, this.isAttractScreen());
+      // Worn power-ups. The magnet's rings blink over its last 1.5 s.
+      if (this.magnetTime > 1.5 || (this.magnetTime > 0 && Math.floor(this.magnetTime * 8) % 2 === 0)) {
+        drawMagnetField(ctx, this.player.x, this.player.y, this.time);
+      }
+      if (this.barrier) drawBarrier(ctx, this.player.x, this.player.y, this.time);
     }
     this.particles.draw(ctx);
     this.hud.drawWorldPopups(ctx, cam.zoom);
@@ -820,6 +968,10 @@ export class Game {
       speed: this.player.speed,
       smashReady: this.smashCharge > 0,
       smashCharge: this.smashCharge / CONFIG.player.smashHold,
+      orbs: this.runOrbs,
+      orbBank: this.storage.data.orbs,
+      magnet: this.magnetTime / CONFIG.powerups.magnet.duration,
+      barrier: this.barrier,
       objectives: this.objectives.list,
       objectivesDone: this.objectives.completedCount,
       muted: !this.sound.enabled,

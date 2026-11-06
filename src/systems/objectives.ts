@@ -7,7 +7,13 @@ export type ObjectiveKind =
   | "collect"
   | "distance"
   | "dash"
-  | "smash";
+  | "smash"
+  | "orb";
+
+// A finished objective is crossed out, lingers, then fades and closes up.
+export const OBJECTIVE_STRIKE = 0.35; // s for the line to cross the label
+export const OBJECTIVE_HOLD = 0.9; // s it stays crossed out
+export const OBJECTIVE_EXIT = 0.45; // s to fade away while the list closes up
 
 export interface Objective {
   kind: ObjectiveKind;
@@ -16,6 +22,8 @@ export interface Objective {
   progress: number;
   done: boolean;
   justCompleted: number; // >0 briefly when completed, for HUD flash
+  doneFor: number; // seconds since it was completed (drives the cross-out)
+  gone: boolean; // crossed out and faded: no longer listed on screen
 }
 
 interface Template {
@@ -58,6 +66,7 @@ const TEMPLATES: Template[] = [
   },
   { kind: "dash", range: [2, 3], step: 1, make: (t) => `Trigger ${t} wind dashes` },
   { kind: "smash", range: [2, 3], step: 1, make: (t) => `Smash ${t} meteors at full speed` },
+  { kind: "orb", range: [15, 30], step: 5, make: (t) => `Collect ${t} orbs` },
 ];
 
 // Generates and tracks three distinct run objectives.
@@ -79,6 +88,8 @@ export class Objectives {
         progress: 0,
         done: false,
         justCompleted: 0,
+        doneFor: 0,
+        gone: false,
       });
     }
   }
@@ -116,11 +127,17 @@ export class Objectives {
   update(dt: number) {
     for (const o of this.list) {
       if (o.justCompleted > 0) o.justCompleted = Math.max(0, o.justCompleted - dt);
+      if (o.done && !o.gone) {
+        o.doneFor += dt;
+        if (o.doneFor >= OBJECTIVE_STRIKE + OBJECTIVE_HOLD + OBJECTIVE_EXIT) o.gone = true;
+      }
     }
   }
 
   get completedCount(): number {
-    return this.list.filter((o) => o.done).length;
+    let n = 0; // read every frame by the HUD — no array allocation
+    for (const o of this.list) if (o.done) n++;
+    return n;
   }
 
   get allDone(): boolean {

@@ -52,6 +52,14 @@ const player = game.player;
 player.vx = 360; player.vy = 0; // cruise, so the scene barely changes between windows
 for (const a of game.world.anchors) a.y -= 2000;
 
+// A fresh run starts rock-free, so fly on until the world has made three.
+for (let i = 0; i < 12000 && game.world.hazards.length < 3; i++) {
+  for (const a of game.world.anchors) a.y = -99999;
+  game.world.powerups.length = 0;
+  player.state = "glide"; player.y = -900; player.vy = 0; player.vx = 900;
+  tick(1);
+}
+player.vx = 360; player.y = 0;
 // Three rocks parked in view, well above the flight line.
 const mine = game.world.hazards.slice(0, 3);
 if (mine.length < 3) throw new Error("need 3 generated rocks, got " + mine.length);

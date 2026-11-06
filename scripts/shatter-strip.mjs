@@ -106,6 +106,15 @@ if (game.state !== "playing") throw new Error("expected playing, got " + game.st
 // Stage the collision: park one rock dead ahead of the player and clear the rest.
 const player = game.player;
 const rocks = game.world.hazards;
+// A fresh run starts rock-free, so fly on (high, out of harm's way) until one exists.
+for (let i = 0; i < 12000 && rocks.length === 0; i++) {
+  for (const a of game.world.anchors) a.y -= 2000;
+  game.world.powerups.length = 0;
+  player.state = "glide"; player.y = -900; player.vy = 0; player.vx = 900;
+  tick(1);
+}
+player.y = 0;
+tick(2);
 if (rocks.length === 0) throw new Error("no hazards generated");
 const rock = rocks[0];
 rocks.length = 1;

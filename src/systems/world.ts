@@ -5,6 +5,7 @@ import { Anchor } from "../entities/anchor";
 import { Cloud } from "../entities/cloud";
 import { Collectible } from "../entities/collectible";
 import { Hazard } from "../entities/hazard";
+import { PowerUp, POWERUP_KINDS } from "../entities/powerup";
 
 const SPAWN_BUFFER = 700;
 const CULL_BUFFER = 500;
@@ -17,12 +18,17 @@ export class World {
   clouds: Cloud[] = [];
   collectibles: Collectible[] = [];
   hazards: Hazard[] = [];
+  powerups: PowerUp[] = [];
 
   private rng = new Rng();
   private genX = 0;
-  private startX = 0;
   /** World-x of the most recent anchor — used to cap anchor droughts. */
   private lastAnchorX = 0;
+  /** World-x where the current run began: the difficulty ramp is measured from here. */
+  private runOriginX = 0;
+  /** World-x past which the next power-up pickup spawns. */
+  private nextPowerX = 0;
+  private powerCount = 0;
 
   get seaLevel() {
     return CONFIG.world.seaLevel;
@@ -40,8 +46,11 @@ export class World {
     this.clouds = [];
     this.collectibles = [];
     this.hazards = [];
+    this.powerups = [];
     this.genX = startX;
-    this.startX = startX;
+    this.runOriginX = startX;
+    this.nextPowerX = startX + CONFIG.powerups.firstAt;
+    this.powerCount = rng.int(0, POWERUP_KINDS.length - 1); // random first kind
 
     // One guaranteed opening anchor — after that, everything is random.
     const first = new Anchor(startX + 260, startY - 180, "normal");
@@ -91,8 +100,40 @@ export class World {
     this.hazards.length = w;
   }
 
+  /**
+   * A new run starts at `originX`: the difficulty ramp restarts there. The
+   * world itself carries on — nothing left of `keepUntilX` (the screen plus a
+   * margin) is touched — but what lies beyond was generated for the previous
+   * run's difficulty, so it is dropped and regenerated on the fresh ramp.
+   */
+  beginRun(originX: number, keepUntilX: number) {
+    this.runOriginX = originX;
+    if (keepUntilX >= this.genX) return;
+    let w = 0;
+    for (const a of this.anchors) if (a.x <= keepUntilX) this.anchors[w++] = a;
+    this.anchors.length = w;
+    w = 0;
+    for (const c of this.clouds) if (c.x - c.rx <= keepUntilX) this.clouds[w++] = c;
+    this.clouds.length = w;
+    w = 0;
+    for (const c of this.collectibles) if (c.baseX <= keepUntilX) this.collectibles[w++] = c;
+    this.collectibles.length = w;
+    w = 0;
+    for (const h of this.hazards) if (h.x - h.rx <= keepUntilX) this.hazards[w++] = h;
+    this.hazards.length = w;
+    w = 0;
+    for (const p of this.powerups) if (p.x <= keepUntilX) this.powerups[w++] = p;
+    this.powerups.length = w;
+
+    this.genX = keepUntilX;
+    this.lastAnchorX = originX;
+    for (const a of this.anchors) if (a.x > this.lastAnchorX) this.lastAnchorX = a.x;
+    // A dropped pickup must not push the next one a whole gap further out.
+    this.nextPowerX = Math.min(this.nextPowerX, this.genX + CONFIG.powerups.firstAt);
+  }
+
   private difficulty(): number {
-    return clamp((this.genX - this.startX) / 13000, 0, 1);
+    return clamp((this.genX - this.runOriginX) / 13000, 0, 1);
   }
 
   ensure(cameraRight: number) {
@@ -178,7 +219,7 @@ export class World {
     }
 
     // --- Hazards: scattered anywhere in the segment (not on a line). ---
-    if (segEnd - this.startX > 1400) {
+    if (segEnd - this.runOriginX > 1400) {
       const hazardChance = lerp(0.12, 0.52, diff);
       if (rng.chance(hazardChance)) {
         const count = rng.chance(diff * 0.5) ? 2 : 1;
@@ -186,10 +227,86 @@ export class World {
           const hx = rng.range(segStart + 30, segEnd - 30);
           const hy = rng.range(top + 60, bottom - 20);
           const r = rng.range(34, 92);
-          this.hazards.push(new Hazard(hx, hy, r, r * rng.range(0.75, 1.35), rng));
+          const rock = new Hazard(hx, hy, r, r * rng.range(0.75, 1.35), rng);
+          // A pickup placed by an earlier segment may already sit here; a
+          // power-up must stay collectable, so this rock simply doesn't spawn.
+          let onPickup = false;
+          for (let k = this.powerups.length - 1; k >= 0 && k >= this.powerups.length - 3; k--) {
+            const p = this.powerups[k];
+            if (rock.hits(p.x, p.baseY, 60)) onPickup = true;
+          }
+          if (onPickup) continue;
+          this.hazards.push(rock);
+          // An orb trail from an earlier segment can reach in here: no orb
+          // may sit inside a rock, so clear this one's footprint.
+          const cs = this.collectibles;
+          for (let k = cs.length - 1; k >= 0 && k >= cs.length - 40; k--) {
+            const c = cs[k];
+            if (c.kind === "orb" && rock.hits(c.baseX, c.baseY, 22)) c.collected = true;
+          }
         }
       }
     }
+
+    // --- Orbs (the currency): a trail per segment, most of the time. Either
+    // an arc hung under an anchor — it traces the swing — or a gentle wave
+    // across open sky. Placed after the rocks so none spawns inside one.
+    if (rng.chance(CONFIG.orbs.trailChance)) {
+      const n = rng.int(CONFIG.orbs.trailCount[0], CONFIG.orbs.trailCount[1]);
+      const gap = CONFIG.orbs.spacing;
+      if (segAnchors.length > 0 && rng.chance(0.5)) {
+        const a = rng.pick(segAnchors);
+        const radius = rng.range(150, 250);
+        const span = ((n - 1) * gap) / radius; // radians covered by the arc
+        const mid = Math.PI / 2 + rng.range(-0.25, 0.25); // straight down (+y)
+        for (let i = 0; i < n; i++) {
+          const ang = mid + span / 2 - (i * span) / (n - 1);
+          this.addOrb(a.x + Math.cos(ang) * radius, a.y + Math.sin(ang) * radius);
+        }
+      } else {
+        const x0 = rng.range(segStart + 20, segEnd - 20);
+        const y0 = rng.range(top + 140, bottom + 120);
+        const amp = rng.range(-70, 70);
+        for (let i = 0; i < n; i++) {
+          this.addOrb(x0 + i * gap, y0 + Math.sin((i / (n - 1)) * Math.PI) * amp);
+        }
+      }
+    }
+
+    // --- Power-up: one rare pickup every few thousand px, kinds alternating,
+    // near an anchor when the segment has one so it is reachable by a swing.
+    if (segEnd >= this.nextPowerX) {
+      const kind = POWERUP_KINDS[this.powerCount++ % POWERUP_KINDS.length];
+      let px: number;
+      let py: number;
+      if (segAnchors.length > 0) {
+        const a = rng.pick(segAnchors);
+        px = a.x + rng.range(70, 170);
+        py = a.y + rng.range(60, 170);
+      } else {
+        px = rng.range(segStart + 60, segEnd - 60);
+        py = rng.range(top + 220, bottom);
+      }
+      // Never inside (or hugging) a rock: lift it clear.
+      for (let tries = 0; tries < 4 && this.insideHazard(px, py, 60); tries++) py -= 150;
+      this.powerups.push(new PowerUp(px, py, kind));
+      this.nextPowerX = segEnd + rng.range(CONFIG.powerups.gap[0], CONFIG.powerups.gap[1]);
+    }
+  }
+
+  private addOrb(x: number, y: number) {
+    // Keep clear of rocks and above the cloud sea.
+    if (y > CONFIG.world.seaLevel - 60 || this.insideHazard(x, y, 22)) return;
+    this.collectibles.push(new Collectible(x, y, "orb"));
+  }
+
+  /** True if (x, y) with padding `r` overlaps one of the most recent rocks. */
+  private insideHazard(x: number, y: number, r: number): boolean {
+    const hs = this.hazards;
+    for (let i = hs.length - 1; i >= 0 && i >= hs.length - 8; i--) {
+      if (hs[i].hits(x, y, r)) return true;
+    }
+    return false;
   }
 
   update(
@@ -200,6 +317,7 @@ export class World {
     for (const a of this.anchors) a.update(dt, time);
     for (const c of this.clouds) c.update(dt);
     for (const h of this.hazards) h.update(dt);
+    for (const p of this.powerups) p.update(time);
 
     for (const col of this.collectibles) {
       if (magnet && !col.collected) {
@@ -245,6 +363,14 @@ export class World {
       if (c.baseX > limit && !c.collected) collectibles[w++] = c;
     }
     collectibles.length = w;
+
+    const powerups = this.powerups;
+    w = 0;
+    for (let i = 0; i < powerups.length; i++) {
+      const p = powerups[i];
+      if (p.x > limit && !p.collected) powerups[w++] = p;
+    }
+    powerups.length = w;
 
     const hazards = this.hazards;
     w = 0;
