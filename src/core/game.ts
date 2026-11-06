@@ -182,7 +182,7 @@ export class Game {
       // The difficulty ramp restarts with the run. The world does not: what
       // is on screen stays and the sky keeps its time of day; only the part
       // not yet in view is rebuilt on the fresh ramp.
-      this.world.beginRun(this.player.x, this.camera.right + 60);
+      this.world.beginRun(this.player.x, this.camera.right);
       this.world.ensure(this.camera.right);
       // The world here is whatever the attract glide flew into — guarantee a
       // reachable first anchor and a rock-free launch corridor so the run
@@ -465,6 +465,9 @@ export class Game {
     if (this.state === "menu" || this.state === "gameover") {
       const glideTime = this.time - this.attractGlideStartTime;
       this.player.animateMenuGlide(dt, glideTime, this.attractGlideX);
+      // No run in progress: keep the difficulty ramp parked at the plane so
+      // the sky scrolling in behind the menu stays at opening difficulty.
+      this.world.holdRamp(this.player.x);
       this.camera.follow(this.player.x, this.player.y, 280, dt);
       this.world.update(dt, this.time);
       return;

@@ -416,9 +416,17 @@ export class Player {
 
   /** Barrier save: thrown back up off the cloud sea instead of crashing. */
   bounce(groundY: number, speed: number) {
+    const p = CONFIG.player;
+    const wasFast = this.speed >= p.smashSpeed;
     this.y = groundY - 2;
     this.vy = -speed;
-    this.vx = Math.max(this.vx, CONFIG.player.cruiseSpeed * 1.25);
+    this.vx = Math.max(this.vx, p.cruiseSpeed * 1.25);
+    if (!wasFast) {
+      // The save is not a speed smash: a fast shallow entry plus the launch
+      // would otherwise cross smash speed and charge it. Stay just under.
+      const cap = Math.sqrt(Math.max(0, (p.smashSpeed - 1) ** 2 - speed * speed));
+      this.vx = Math.min(this.vx, Math.max(cap, p.cruiseSpeed * 1.25));
+    }
     // Fly free: a dash would flatten the launch, and a rope would haul the
     // player straight back under — and a held finger would re-grab the same
     // anchor on the very next step, hence the short lockout.

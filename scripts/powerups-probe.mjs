@@ -309,6 +309,13 @@ check("bounce climbs back toward the lowest anchors", sea - minY > 300, `rose ${
   }
   check("barrier saves a tethered player from the sea too", trials > 0 && saved === trials, `${saved}/${trials} staged grabs survived 1.5 s`);
 }
+// A fast, shallow entry: the launch must not push the player over smash speed.
+stage();
+game.barrier = true; game.smashHintShown = false;
+player.y = sea - 6; player.vy = 320; player.vx = 760;
+let peak = 0;
+for (let i = 0; i < 120 && game.state === "playing"; i++) { clearAnchors(); frame(); peak = Math.max(peak, player.speed); }
+check("a fast barrier bounce does not arm the smash", game.state === "playing" && !game.barrier && !game.smashArmed && game.smashHintShown === false && peak < 1050, `peak speed ${peak.toFixed(0)}`);
 stage();
 player.y = sea - 6; player.vy = 320;
 for (let i = 0; i < 60 && game.state === "playing"; i++) { clearAnchors(); frame(); }
@@ -377,6 +384,63 @@ check("what was on screen is still there", world.anchors.filter(onScreen).length
 check("difficulty ramp restarted", hardBefore > 0.9 && world.difficulty() < 0.25, `${hardBefore.toFixed(2)} → ${world.difficulty().toFixed(2)}`);
 const rocksEarly = world.hazards.filter((h) => !h.destroyed && h.x - h.rx > game.camera.right + 60 && h.x < player.x + 800).length;
 check("no rocks generated in the fresh run's opening stretch", rocksEarly === 0, `${rocksEarly}`);
+
+// --- 8. Restarts: nothing pops into view, trails stay whole, idling stays easy -------
+{
+  let popIns = 0, cutTrails = 0, restarts = 0, worstIdle = 0;
+  let seed = 4242;
+  const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+  for (const [vw, vh] of [[667, 375], [1366, 1024], [932, 430]]) {
+    game.resize(vw, vh, 2);
+    for (let k = 0; k < 25; k++) {
+      restart();
+      // A short run, then a fatal rock.
+      const fly = 60 + Math.floor(rnd() * 500);
+      for (let i = 0; i < fly && game.state === "playing"; i++) {
+        for (const a of world.anchors) if (a.x < player.x + 200) a.y = -99999;
+        keepStaged(world.hazards, stagedRocks);
+        player.y = 0; player.vy = 0; player.vx = 300 + rnd() * 900; frame();
+      }
+      player.vx = 420; game.smashCharge = 0; game.barrier = false; game.barrierGrace = 0;
+      const killer = cloneRock(player.x + 150, 0);
+      world.hazards.push(killer);
+      for (let i = 0; i < 300 && game.state === "playing"; i++) { killer.y = player.y; player.vx = 420; game.barrier = false; frame(); }
+      if (game.state !== "gameover") continue;
+      // Idle on the game-over screen for a random while (up to ~40 s).
+      const idle = 95 + Math.floor(rnd() * 3000);
+      frame(idle);
+      worstIdle = Math.max(worstIdle, world.difficulty());
+      const cloudsBefore = new Set(world.clouds);
+      const listBefore = world.collectibles.slice();
+      const orbSet = new Set(listBefore.filter((c) => c.kind === "orb"));
+      tap();
+      if (game.state !== "playing") continue;
+      restarts++;
+      const right = game.camera.right;
+      // New scenery whose solid body reaches into the frame = a pop-in.
+      for (const c of world.clouds) if (!cloudsBefore.has(c) && c.x - (0.85 * c.rx + 0.56 * c.ry) < right) popIns++;
+      for (const c of world.collectibles) if (c.kind === "orb" && !orbSet.has(c) && c.baseX + 9 < right) popIns++;
+      // A kept orb whose own trail carries on to the right and was dropped =
+      // a cut trail. One trail's orbs are neighbours in the world's list, left
+      // to right; orbs of different trails have the next segment's wisps
+      // between them, so only true neighbours are compared.
+      const kept = new Set(world.collectibles);
+      for (let i = 0; i + 1 < listBefore.length; i++) {
+        const a = listBefore[i], b = listBefore[i + 1];
+        if (a.kind !== "orb" || b.kind !== "orb") continue;
+        const near = Math.hypot(a.baseX - b.baseX, a.baseY - b.baseY) <= 80;
+        // (An orb marked collected was cleared out of a newly generated rock's
+        // footprint and then culled — the normal rule, not a cut.)
+        if (near && b.baseX > a.baseX && kept.has(a) && !kept.has(b) && !a.collected && !b.collected) cutTrails++;
+      }
+    }
+  }
+  game.resize(1280, 720, 2);
+  check("restarts ran at three viewport sizes", restarts >= 60, `${restarts}`);
+  check("no cloud or orb pops into view on a restart", popIns === 0, `${popIns} in ${restarts} restarts`);
+  check("no orb trail is cut at the rebuild line", cutTrails === 0, `${cutTrails}`);
+  check("idling on game over keeps the next opening easy", worstIdle < 0.3, `worst difficulty after idling ${worstIdle.toFixed(2)}`);
+}
 
 console.log(failures ? `\n${failures} FAILED` : "\nall checks passed");
 process.exit(failures ? 1 : 0);

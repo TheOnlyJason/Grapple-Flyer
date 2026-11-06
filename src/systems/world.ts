@@ -9,6 +9,12 @@ import { PowerUp, POWERUP_KINDS } from "../entities/powerup";
 
 const SPAWN_BUFFER = 700;
 const CULL_BUFFER = 500;
+// On a restart, how far past the right screen edge the old world is kept.
+// It must exceed the furthest anything can hang to the LEFT of the segment
+// that created it, or regenerated scenery lands inside the frame and pops in:
+// a cloud's puffs reach 0.85*rx + 0.56*ry (up to ~278 px) left of its centre,
+// an orb arc ~200 px left of its anchor.
+const RESTART_KEEP_MARGIN = 300;
 
 // Procedurally fills the sky with scattered anchors, hazards, and clouds.
 // Nothing spawns on a fixed "rail" — placement is random per segment so routes
@@ -101,13 +107,25 @@ export class World {
   }
 
   /**
-   * A new run starts at `originX`: the difficulty ramp restarts there. The
-   * world itself carries on — nothing left of `keepUntilX` (the screen plus a
-   * margin) is touched — but what lies beyond was generated for the previous
-   * run's difficulty, so it is dropped and regenerated on the fresh ramp.
+   * No run in progress (menu / game over): park the difficulty ramp at the
+   * gliding plane, so the sky that scrolls in behind the attract screen —
+   * which becomes the opening of the next run — stays at opening difficulty
+   * however long the player waits.
    */
-  beginRun(originX: number, keepUntilX: number) {
+  holdRamp(x: number) {
+    this.runOriginX = x;
+  }
+
+  /**
+   * A new run starts at `originX`: the difficulty ramp restarts there. The
+   * world itself carries on — nothing on screen (or within a margin past
+   * `viewRight`) is touched — but what lies beyond was generated for the
+   * previous run's difficulty, so it is dropped and regenerated on the fresh
+   * ramp.
+   */
+  beginRun(originX: number, viewRight: number) {
     this.runOriginX = originX;
+    const keepUntilX = viewRight + RESTART_KEEP_MARGIN;
     if (keepUntilX >= this.genX) return;
     let w = 0;
     for (const a of this.anchors) if (a.x <= keepUntilX) this.anchors[w++] = a;
@@ -115,8 +133,24 @@ export class World {
     w = 0;
     for (const c of this.clouds) if (c.x - c.rx <= keepUntilX) this.clouds[w++] = c;
     this.clouds.length = w;
+    // An orb trail that starts inside the kept region is kept whole — a trail
+    // that leads off the edge must not stop one orb later. Trail orbs are
+    // stored contiguously, left to right; neighbours on a steep wave can be
+    // up to ~77 px apart, hence the slack on the spacing.
     w = 0;
-    for (const c of this.collectibles) if (c.baseX <= keepUntilX) this.collectibles[w++] = c;
+    let prevOrb: Collectible | null = null; // last kept orb while still walking its trail
+    for (const c of this.collectibles) {
+      const tail =
+        c.kind === "orb" &&
+        prevOrb !== null &&
+        Math.hypot(c.baseX - prevOrb.baseX, c.baseY - prevOrb.baseY) <= CONFIG.orbs.spacing + 32;
+      if (c.baseX <= keepUntilX || tail) {
+        this.collectibles[w++] = c;
+        prevOrb = c.kind === "orb" ? c : null;
+      } else {
+        prevOrb = null;
+      }
+    }
     this.collectibles.length = w;
     w = 0;
     for (const h of this.hazards) if (h.x - h.rx <= keepUntilX) this.hazards[w++] = h;

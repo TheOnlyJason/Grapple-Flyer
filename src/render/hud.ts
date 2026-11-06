@@ -296,6 +296,7 @@ export class Hud {
     }
 
     // Mute indicator.
+    ctx.textAlign = "left"; // the hint block above may have left it centred
     this.text(
       ctx,
       d.muted ? "♪ off (M)" : "♪ on (M)",
