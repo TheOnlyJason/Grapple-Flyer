@@ -88,9 +88,8 @@ export class Hud {
   // Width of the run-start hint at its full 18px size, measured once per string.
   private hintWidth = 0;
   private hintWidthFor = "";
-  // Objective label widths (13px/600), for the cross-out line. A handful of
-  // distinct labels exist, so this stays tiny.
-  private labelWidths = new Map<string, number>();
+  // Measured ink (visible glyph) box per (weight, size, string) — see ink().
+  private inkCache = new Map<string, { top: number; bottom: number; width: number }>();
 
   popup(x: number, y: number, text: string, color: string, scale = 1) {
     this.popups.push({ x, y, text, color, life: 1.1, maxLife: 1.1, scale });
@@ -431,16 +430,13 @@ export class Hud {
       ctx.fill();
       this.text(ctx, o.label, x, y, 13, "600", o.done ? PALETTE.collectible : PALETTE.text);
       if (o.done) {
-        // The strike runs left to right across the label.
-        let labelW = this.labelWidths.get(o.label);
-        if (labelW === undefined) {
-          labelW = ctx.measureText(o.label).width; // font is still the label's
-          this.labelWidths.set(o.label, labelW);
-        }
+        // The strike runs left to right through the middle of the lettering
+        // (measured: the platform font decides how low the text sits).
+        const box = this.ink(ctx, o.label, 13, "600");
         const k = clamp(o.doneFor / OBJECTIVE_STRIKE, 0, 1);
-        const run = (labelW + 8) * (1 - (1 - k) * (1 - k));
+        const run = (box.width + 8) * (1 - (1 - k) * (1 - k));
         ctx.fillStyle = PALETTE.collectible;
-        ctx.fillRect(x - 4, y + 6, run, 2);
+        ctx.fillRect(x - 4, Math.round(y + (box.top + box.bottom) / 2), run, 2);
       }
       y += 38 * (1 - ease);
     }
@@ -510,57 +506,67 @@ export class Hud {
     ctx.fillStyle = this.attractBottom!;
     ctx.fillRect(0, h * 0.5, w, h * 0.5);
 
-    // Title — stacked, upper center.
+    // Title block — upper centre, stacked by measured ink so the lines keep
+    // the same gaps whatever the platform font's metrics are.
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
     const titleSize = clamp(w * 0.105, 54, 82);
-    this.text(ctx, "GALE", w / 2, h * 0.09, titleSize, "900", PALETTE.text, true);
+    const titleTop = h * 0.09 + titleSize * 0.04;
+    const titleBottom = this.textFromInkTop(
+      ctx,
+      "GALE",
+      w / 2,
+      titleTop,
+      titleSize,
+      "900",
+      PALETTE.text,
+      true
+    );
 
-    const subtitleY = h * 0.09 + titleSize * 0.78;
     if (mode === "menu") {
-      this.text(
+      this.textFromInkTop(
         ctx,
         "SKY-SAILING",
         w / 2,
-        subtitleY,
+        titleBottom + 10,
         12,
         "700",
         hexA(PALETTE.anchorPerfect, 0.88),
         true
       );
     } else {
-      const scoreSize = clamp(w * 0.055, 32, 48);
-      const statsY = subtitleY + scoreSize * 1.05;
       if (d.newBest) {
+        // Above the title: between the title and the score there is no room
+        // for a third line on phone-height screens.
+        const banner = "★ NEW BEST ★";
+        const box = this.ink(ctx, banner, 13, "800");
         const bestPulse = 0.6 + Math.sin(performance.now() / 200) * 0.4;
-        this.text(
+        this.textFromInkTop(
           ctx,
-          "★ NEW BEST ★",
+          banner,
           w / 2,
-          // Above the title: between the title and the score there is no
-          // room for a third line on phone-height screens.
-          Math.max(ins.top + 4, h * 0.09 - 21),
+          Math.max(ins.top + 4, titleTop - 8 - (box.bottom - box.top)),
           13,
           "800",
           hexA(PALETTE.anchorPerfect, bestPulse),
           true
         );
       }
-      this.text(
+      const scoreBottom = this.textFromInkTop(
         ctx,
         `${Math.floor(d.score)} pts  ·  ${Math.floor(d.distance)} m`,
         w / 2,
-        subtitleY,
-        scoreSize,
+        titleBottom + 10,
+        clamp(w * 0.055, 32, 48),
         "800",
         hexA(PALETTE.anchor, 0.98),
         true
       );
-      this.text(
+      this.textFromInkTop(
         ctx,
         `${d.perfectCount} perfect  ·  ${d.objectivesDone}/${d.objectives.length} objectives  ·  +${d.orbs} orbs`,
         w / 2,
-        statsY,
+        scoreBottom + 9,
         clamp(w * 0.022, 15, 18),
         "700",
         PALETTE.text,
@@ -684,6 +690,55 @@ export class Hud {
       "600",
       hexA(PALETTE.textDim, 0.75)
     );
+  }
+
+  /**
+   * Where a line of text actually puts ink, relative to the y it is drawn at
+   * (textBaseline "top"), plus its width. Fonts disagree badly about this:
+   * iOS's system font sits about 0.2em lower than the headless renderer's, so
+   * anything stacked against text — the title block, the objective strike —
+   * is laid out from measured ink rather than the nominal font size.
+   * Requires ctx.textBaseline === "top". Cached; leaves the font set.
+   */
+  private ink(
+    ctx: CanvasRenderingContext2D,
+    s: string,
+    size: number,
+    weight: string
+  ): { top: number; bottom: number; width: number } {
+    const key = `${weight}|${size}|${s}`;
+    let box = this.inkCache.get(key);
+    if (!box) {
+      this.setFont(ctx, weight, size);
+      const m = ctx.measureText(s);
+      const asc = m.actualBoundingBoxAscent;
+      const desc = m.actualBoundingBoxDescent;
+      box =
+        Number.isFinite(asc) && Number.isFinite(desc) && desc > 0
+          ? { top: -asc, bottom: desc, width: m.width }
+          : // No glyph metrics (the test harnesses' canvas mock): nominal box.
+            { top: size * 0.05, bottom: size * 0.78, width: m.width };
+      if (this.inkCache.size > 96) this.inkCache.clear(); // score strings come and go
+      this.inkCache.set(key, box);
+    }
+    return box;
+  }
+
+  /** Draw `s` so its visible top edge lands on `inkTop`; returns its visible bottom edge. */
+  private textFromInkTop(
+    ctx: CanvasRenderingContext2D,
+    s: string,
+    x: number,
+    inkTop: number,
+    size: number,
+    weight: string,
+    color: string,
+    shadow = false
+  ): number {
+    const box = this.ink(ctx, s, size, weight);
+    const y = inkTop - box.top;
+    this.text(ctx, s, x, y, size, weight, color, shadow);
+    return y + box.bottom;
   }
 
   private setFont(ctx: CanvasRenderingContext2D, weight: string, size: number) {
