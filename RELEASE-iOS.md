@@ -21,9 +21,10 @@ is the stuff that needs **your Apple Developer account**.
 - ✅ Web-only AdSense is disabled inside the app (App Store policy — see step 6).
 - ✅ Export compliance declared (`ITSAppUsesNonExemptEncryption = NO`) — no
   encryption questionnaire on uploads.
-- ✅ Version `1.1`, build `3` live in review (1.0 / build 2 is on the store).
+- ✅ Version `1.2`, build `8` is in App Review (1.1 / build 3 is on the store).
   Bump both `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in
-  `ios/App/App.xcodeproj/project.pbxproj` for each release.
+  `ios/App/App.xcodeproj/project.pbxproj` for each release. TestFlight-only
+  builds 4–7 also used the 1.2 train.
 - ✅ Performance pass: 15 audited+verified fixes (sprite caches, palette
   quantization, de-blurred trails, 120 Hz loop hoists, adaptive resolution)
   — the heaviest scene went from 16.6 ms to 2.5 ms per frame.
