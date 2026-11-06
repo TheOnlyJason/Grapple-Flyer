@@ -92,6 +92,21 @@ export class Input {
     });
 
     el.addEventListener("contextmenu", (e) => e.preventDefault());
+
+    // Holding a finger down is how the game is played, and iOS treats any
+    // held touch as a long press: text selection, the loupe, the callout
+    // menu, and Live Text on words it finds drawn in the canvas (the HUD's
+    // objectives would light up under a resting finger). Pointer events do
+    // not cancel that machinery; a default-prevented touch event does. The
+    // pointer events above still fire — only the browser's own gestures and
+    // the compatibility mouse events are dropped.
+    const block = (e: Event) => e.preventDefault();
+    for (const type of ["touchstart", "touchmove", "touchend", "touchcancel"]) {
+      el.addEventListener(type, block, { passive: false });
+    }
+    for (const type of ["selectstart", "dragstart", "gesturestart"]) {
+      document.addEventListener(type, block);
+    }
   }
 
   private setPointer(e: PointerEvent) {

@@ -1,5 +1,22 @@
 import UIKit
 import Capacitor
+import WebKit
+
+/// The game's web view controller (set as the storyboard's custom class).
+///
+/// Text interaction is switched off for the whole web view. Holding a finger
+/// down is how GALE is played, and WebKit otherwise treats a held touch as a
+/// long press — selection, the loupe, and Live Text on words drawn in the
+/// canvas, which made the HUD's objectives highlight under a resting finger.
+/// The page blocks this too (styles + default-prevented touch events); this
+/// is the backstop that does not depend on the page.
+class GameViewController: CAPBridgeViewController {
+    override func webViewConfiguration(for instanceConfiguration: InstanceConfiguration) -> WKWebViewConfiguration {
+        let configuration = super.webViewConfiguration(for: instanceConfiguration)
+        configuration.preferences.isTextInteractionEnabled = false
+        return configuration
+    }
+}
 
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
