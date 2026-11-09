@@ -66,6 +66,20 @@ export const CONFIG = {
     // from straight-below while still holding makes the hook slip (the player
     // flies on with the speed they have, no boost) — no loop-the-loops.
     maxSwingAngleDeg: 90,
+    // Where the slip flings the player (screen angle, negative = up). At the
+    // cap the swing's own velocity is straight up — a rocket that stalls —
+    // so the hook slipping off redirects the speed forward-up instead. Just
+    // outside the PERFECT window (-44 ± 17), so a timed release still wins.
+    slipLaunchAngleDeg: -62,
+    // An anchor must be at least this far above the player to be grabbable:
+    // the swing cannot lift the player above the anchor, so a rope to one
+    // at or below their height would slip on the very next step.
+    grabMinAbove: 10,
+    // After a release or slip the anchor just left stays ungrabbable for
+    // this long, so a re-press during the launch cannot haul the player back
+    // onto it (the clip that prompted this turned a PERFECT into a vertical
+    // rocket). Other anchors can be grabbed at once.
+    regrabCooldown: 0.6,
     // The "classic" swing model (the pre-pendulum rod) kept its own reel rate.
     classicReelRate: 90,
     // A press grabs only if an anchor is in reach at that moment — or comes

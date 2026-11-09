@@ -278,6 +278,9 @@ if (MODE === "bot") {
     restart();
     grabSpeeds.length = 0; perfectReleases.length = 0; plainReleases.length = 0;
     let frames = 0, armedFrames = 0, fastFrames = 0, runs = 0, smashes = 0, meteorDeaths = 0, otherDeaths = 0;
+    // Anchor supply: how much of the glide has something grabbable on screen,
+    // and the longest stretch with nothing (a world-generation health check).
+    let glideFrames = 0, reachFrames = 0, gap = 0, maxGap = 0;
     let holding = false, swingFrames = 0, lastRelease = -1e9, goPerfect = true, sloppyDelay = 0;
     let seed = 12345;
     const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
@@ -313,6 +316,11 @@ if (MODE === "bot") {
       if (game.state !== "playing") continue;
       if (armedNow()) armedFrames++;
       if (player.speed >= SMASH) fastFrames++;
+      if (player.state === "glide") {
+        glideFrames++;
+        if (player.findGrabTarget(game.world.anchors, game.camera)) { reachFrames++; gap = 0; }
+        else { gap++; if (gap > maxGap) maxGap = gap; }
+      } else gap = 0;
       for (const h of game.world.hazards) if (h.destroyed && !seen.has(h)) { seen.add(h); smashes++; }
     }
     const pct = (a) => ((100 * a) / frames).toFixed(1) + "%";
@@ -322,6 +330,9 @@ if (MODE === "bot") {
     );
     console.log(
       `      grab speed ${fmt(grabSpeeds)} | perfect release ${fmt(perfectReleases)} p75 ${Math.round(pctl(perfectReleases, 0.75))} | plain release ${fmt(plainReleases)} p75 ${Math.round(pctl(plainReleases, 0.75))}`
+    );
+    console.log(
+      `      anchor in reach ${((100 * reachFrames) / Math.max(1, glideFrames)).toFixed(0)}% of the glide | longest stretch with nothing to grab ${(maxGap / 120).toFixed(1)} s`
     );
   }
 }

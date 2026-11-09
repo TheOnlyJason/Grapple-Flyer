@@ -241,7 +241,7 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
   pressAndGrab();
   check("dead-on radial grab keeps speed and turns forward", player.state === "swing" && Math.abs(E(g) - e0) / (0.5 * 600 * 600) < 0.005 && player.vx > 0, `vx ${player.vx.toFixed(0)} dE ${(100 * Math.abs(E(g) - e0) / (0.5 * 600 * 600)).toFixed(2)}%`);
   up();
-  const b = stageAnchor(9500 + 30, -200);
+  const b = stageAnchor(9500 + 20, -200 - 22); // 30 px away, just above (level anchors are off limits)
   placeGlide(9500, -200, 500, 0);
   const e1 = E(g);
   pressAndGrab();
@@ -357,11 +357,17 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
   pressAndGrab();
   check("straight-up radial grab turns forward", player.state === "swing" && finite() && player.vx > 0 && Math.abs(Math.hypot(player.vx, player.vy) - 500) < 500 * 0.02, `v (${player.vx.toFixed(0)}, ${player.vy.toFixed(0)})`);
   up();
-  // Above the anchor, moving forward: swings on, still forward.
+  // Above (or level with) the anchor: the swing could not lift the player
+  // past it, so the press is refused and the glide carries on untouched.
   a = stageAnchor(26000 + 100, -400 + 200);
   placeGlide(26000, -400, 500, 0);
-  pressAndGrab();
-  check("grab from above the anchor keeps heading forward", player.state === "swing" && finite() && player.vx > 0 && Math.abs(player.swingPhi) > Math.PI / 2, `φ ${(player.swingPhi * 180 / Math.PI).toFixed(0)}° vx ${player.vx.toFixed(0)}`);
+  const grabbedFromAbove = pressAndGrab();
+  check("a press above the anchor's height is refused", !grabbedFromAbove && player.state === "glide" && player.vx > 0, `state ${player.state} vx ${player.vx.toFixed(0)}`);
+  up();
+  a = stageAnchor(26500 + 200, -400 + 4);
+  placeGlide(26500, -400, 500, 0);
+  const grabbedLevel = pressAndGrab();
+  check("a press at an anchor level with the player is refused", !grabbedLevel && player.state === "glide", `state ${player.state}`);
   up();
   restoreKnobs();
 }
@@ -381,6 +387,8 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
   }
   check("a swing that would loop slips at the anchor's height instead", slipped && maxPhi <= Math.PI / 2 + 1e-9 && Math.abs(slipY - a.y) < 1.5, `max φ ${(maxPhi * 180 / Math.PI).toFixed(1)}°, slipped at y−anchor.y = ${(slipY - a.y).toFixed(1)}`);
   check("the slip keeps the speed (no boost, no loss)", slipped && Math.abs(slipSpeed - preSpeed) / preSpeed < 0.02, `${preSpeed.toFixed(0)} → ${slipSpeed.toFixed(0)}`);
+  const slipAng = (Math.atan2(player.vy, player.vx) * 180) / Math.PI;
+  check("the slip flings forward-up, not straight up", slipped && player.vx > 0 && Math.abs(slipAng - CFG.tether.slipLaunchAngleDeg) < 0.5, `launch ${slipAng.toFixed(1)}° (knob ${CFG.tether.slipLaunchAngleDeg}°), v (${player.vx.toFixed(0)}, ${player.vy.toFixed(0)})`);
   // Still holding: no re-grab, even with the anchor in reach.
   let regrabbed = false;
   for (let i = 0; i < 120; i++) { quiet(); frame(); if (player.state === "swing") regrabbed = true; }
@@ -392,6 +400,35 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
   let grabbed = false;
   for (let i = 0; i < 10 && !grabbed; i++) { quiet(); frame(); grabbed = player.state === "swing"; }
   check("a fresh press grabs again", grabbed);
+  up();
+  restoreKnobs();
+}
+
+// --- 7b. The anchor just left is off limits for a moment ------------------------------------
+{
+  setKnobs({ "tether.swingDrag": 0, "tether.reelRate": 0 });
+  const a = stageAnchor(28600, -600);
+  placeSwing(a, 150, deg(45), 900 / 150); // in the PERFECT window, rising
+  quiet(); frame();
+  up(); quiet(); frame(); // release
+  const launched = player.state === "glide" && player.vx > 0 && player.vy < 0;
+  down();
+  let regrabbed = false;
+  for (let i = 0; i < 6; i++) { quiet(); frame(); if (player.state === "swing") regrabbed = true; }
+  check("a re-press right after a release does not re-grab the anchor just left", launched && !regrabbed && player.vx > 0, `state ${player.state}, v (${player.vx.toFixed(0)}, ${player.vy.toFixed(0)})`);
+  up(); quiet(); frame();
+  // ...but another anchor in reach is grabbed at once.
+  const b = new Anchor(player.x + 160, player.y - 200);
+  world.anchors.push(b);
+  down();
+  let grabbedOther = false;
+  for (let i = 0; i < 6; i++) { world.anchors.length = 0; world.anchors.push(a, b); world.genX = player.x + 1e6; frame(); if (player.state === "swing") { grabbedOther = player.anchor === b; break; } }
+  check("a different anchor can be grabbed right away", grabbedOther, `anchor is ${player.anchor === b ? "the new one" : player.anchor === a ? "the old one" : "none"}`);
+  up();
+  // After the cooldown the old anchor is fair game again.
+  placeGlide(a.x - 200, a.y + 150, 400, 0);
+  for (let i = 0; i < Math.ceil(CFG.tether.regrabCooldown * 120) + 12; i++) { quiet(); frame(); player.x = a.x - 200; player.y = a.y + 150; }
+  check("the old anchor is grabbable again once the cooldown has run out", pressAndGrab() && player.anchor === a);
   up();
   restoreKnobs();
 }

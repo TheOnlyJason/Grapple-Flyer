@@ -71,6 +71,11 @@ export class Player {
   /** Remaining hazard invulnerability after a wind dash (rocks can't kill). */
   hazardInvuln = 0;
   private grabLockout = 0; // seconds the tether refuses to attach (after a barrier bounce)
+  // The anchor just released or slipped from, and how long it stays off
+  // limits: a re-press right after a launch must not haul the player back
+  // onto the rope they just left (other anchors are fair game at once).
+  private lastAnchor: Anchor | null = null;
+  private lastAnchorCooldown = 0;
   smashGlow = false; // set by the game while the smash is charged: bigger aura + a mint ring
   /** Which arm grabs the anchor on the current swing. */
   latchArm: LatchArm = "right";
@@ -97,6 +102,8 @@ export class Player {
     this.dashTime = 0;
     this.hazardInvuln = 0;
     this.grabLockout = 0;
+    this.lastAnchor = null;
+    this.lastAnchorCooldown = 0;
     this.wantsGrab = 0;
     this.flipping = false;
     this.flipSpin = 0;
@@ -120,6 +127,8 @@ export class Player {
     this.dashTime = 0;
     this.hazardInvuln = 0;
     this.grabLockout = 0;
+    this.lastAnchor = null;
+    this.lastAnchorCooldown = 0;
     this.wantsGrab = 0;
     this.flipping = false;
     this.flipSpin = 0;
@@ -146,11 +155,17 @@ export class Player {
     let bestScore = Infinity;
     const range = CONFIG.tether.grabRange;
     const VIS = 12; // anchor centre must be this far inside the screen edge
+    const minAbove = CONFIG.tether.grabMinAbove;
     for (const a of anchors) {
+      if (a === this.lastAnchor) continue; // just let go of it; see lastAnchorCooldown
       const dx = a.x - this.x;
       const dy = a.y - this.y;
       const d = Math.hypot(dx, dy);
       if (d > range || d < 6) continue;
+      // The swing cannot carry the player above the anchor, so an anchor at
+      // or below the player's own height has nothing to offer: grabbing it
+      // would slip on the very next step.
+      if (dy > -minAbove) continue;
       if (
         view &&
         (a.x < view.left + VIS ||
@@ -162,7 +177,6 @@ export class Player {
       }
       let score = d;
       if (dx < 0) score += 500; // strongly discourage grabbing behind
-      if (dy > 0) score += 120; // mild bias toward anchors above
       if (score < bestScore) {
         bestScore = score;
         best = a;
@@ -216,7 +230,7 @@ export class Player {
       info: { perfect, quality, speed: this.speed, x: this.x, y: this.y },
     });
 
-    this.anchor = null;
+    this.forgetAnchor();
     this.state = "glide";
     this.inPerfectWindow = false;
     this.perfectQuality = 0;
@@ -257,6 +271,10 @@ export class Player {
       this.hazardInvuln = Math.max(0, this.hazardInvuln - dt);
     }
     if (this.grabLockout > 0) this.grabLockout = Math.max(0, this.grabLockout - dt);
+    if (this.lastAnchorCooldown > 0) {
+      this.lastAnchorCooldown = Math.max(0, this.lastAnchorCooldown - dt);
+      if (this.lastAnchorCooldown === 0) this.lastAnchor = null;
+    }
     if (!holding) {
       this.wantsGrab = 0;
       this.flipping = false;
@@ -455,6 +473,14 @@ export class Player {
     this.vy = a.vyAt(time) - L * omega * sin - reel * cos;
 
     if (slipped) {
+      // At the cap the tangent is vertical: flying on with that velocity is
+      // a rocket straight up that stalls and leaves the player crawling. The
+      // hook slipping off flings the player forward instead — the same
+      // speed, redirected (as the grab itself is), up and ahead.
+      const s = Math.hypot(this.vx, this.vy);
+      const ang = rad(T.slipLaunchAngleDeg);
+      this.vx = s * Math.cos(ang);
+      this.vy = s * Math.sin(ang);
       this.slip(a);
       return;
     }
@@ -462,15 +488,21 @@ export class Player {
     if (this.inPerfectWindow) a.perfectGlow = 1;
   }
 
-  // The hook lets go at the top of the swing: free flight with the current
-  // velocity, no boost, and the held finger has to press again to grab.
+  // The hook lets go at the top of the swing: free flight (forward-up, see
+  // stepSwing), no boost, and the held finger has to press again to grab.
   private slip(anchor: Anchor) {
     this.events.push({ type: "slip", x: anchor.x, y: anchor.y });
-    this.anchor = null;
+    this.forgetAnchor();
     this.state = "glide";
     this.inPerfectWindow = false;
     this.perfectQuality = 0;
-    this.grabLockout = 0.25;
+  }
+
+  /** Let go of the current anchor and keep it off limits for a moment. */
+  private forgetAnchor() {
+    this.lastAnchor = this.anchor;
+    this.lastAnchorCooldown = CONFIG.tether.regrabCooldown;
+    this.anchor = null;
   }
 
   // The original swing, kept verbatim for comparison: semi-implicit Euler, a
