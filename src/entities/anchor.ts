@@ -36,10 +36,29 @@ export class Anchor {
     }
   }
 
+  // Moving anchors follow y = baseY + amp·sin(speed·t + phase); the swing
+  // physics needs the pivot's motion in closed form so the player can ride
+  // it exactly (no finite differences, no one-step lag).
+  yAt(t: number): number {
+    return this.kind === "moving"
+      ? this.baseY + Math.sin(t * this.speed + this.phase) * this.amp
+      : this.y; // live value: a static anchor is wherever it has been put
+  }
+
+  vyAt(t: number): number {
+    return this.kind === "moving"
+      ? this.amp * this.speed * Math.cos(t * this.speed + this.phase)
+      : 0;
+  }
+
+  ayAt(t: number): number {
+    return this.kind === "moving"
+      ? -this.amp * this.speed * this.speed * Math.sin(t * this.speed + this.phase)
+      : 0;
+  }
+
   update(dt: number, t: number) {
-    if (this.kind === "moving") {
-      this.y = this.baseY + Math.sin(t * this.speed + this.phase) * this.amp;
-    }
+    if (this.kind === "moving") this.y = this.yAt(t);
     if (this.pulse > 0) this.pulse = Math.max(0, this.pulse - dt * 2.2);
     // highlight / perfectGlow are set externally each frame; ease them down here.
     this.highlight *= Math.max(0, 1 - dt * 8);

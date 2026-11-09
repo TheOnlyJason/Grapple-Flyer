@@ -138,7 +138,20 @@ for (let i = 0; i < 4; i++) frame();
 if (game.state !== "playing") throw new Error("expected playing, got " + game.state);
 
 const MODE = process.argv[2] || "decay";
-const SMASH = 1050;
+// Knobs come from the live config (exposed as window.GALE_CONFIG). GALE_KNOBS
+// overrides them before anything runs, e.g.
+//   GALE_KNOBS='{"tether.swingDrag":0,"player.smashSpeed":1250}' node scripts/smash-probe.mjs bot
+const CFG = globalThis.window.GALE_CONFIG;
+if (process.env.GALE_KNOBS) {
+  for (const [path, value] of Object.entries(JSON.parse(process.env.GALE_KNOBS))) {
+    const keys = path.split(".");
+    let o = CFG;
+    for (const k of keys.slice(0, -1)) o = o[k];
+    o[keys[keys.length - 1]] = value;
+  }
+  console.log("knobs:", process.env.GALE_KNOBS);
+}
+const SMASH = CFG.player.smashSpeed;
 const armedNow = () => ("smashArmed" in game ? game.smashArmed : player.speed >= SMASH);
 function restart() {
   for (let i = 0; i < 400 && game.state !== "playing"; i++) {
@@ -155,8 +168,9 @@ if (MODE === "decay") {
   const ANGLE = (-44 * Math.PI) / 180; // CONFIG.tether.idealLaunchAngleDeg
   const KEEPS = [900, 800, 700, 600, 500];
   console.log("seconds (and px travelled) until speed first drops below each level after a launch at -44 deg:");
-  console.log("launch |  >=1050        | " + KEEPS.map((k) => `>=${k}`.padEnd(14)).join("| "));
+  console.log(`launch |  >=${SMASH}        | ` + KEEPS.map((k) => `>=${k}`.padEnd(14)).join("| "));
   for (const v0 of [1060, 1100, 1200, 1300, 1450]) {
+    restart(); // an earlier launch may have flown into the sea
     game.world.hazards.length = 0;
     for (const a of game.world.anchors) a.y = -99999;
     player.state = "glide";
@@ -165,7 +179,7 @@ if (MODE === "decay") {
     player.vx = Math.cos(ANGLE) * v0;
     player.vy = Math.sin(ANGLE) * v0;
     const x0 = player.x;
-    const levels = [1050, ...KEEPS];
+    const levels = [SMASH, ...KEEPS];
     const out = levels.map(() => null);
     for (let i = 0; i < 120 * 8 && game.state === "playing"; i++) {
       frame();
@@ -179,6 +193,7 @@ if (MODE === "decay") {
   if ("smashArmed" in game) {
     console.log("\nwith the game's own latch (game.smashArmed):");
     for (const v0 of [1060, 1100, 1200, 1300, 1450]) {
+      restart();
       game.world.hazards.length = 0;
       for (const a of game.world.anchors) a.y = -99999;
       player.state = "glide"; player.anchor = null; player.y = 0;
@@ -245,8 +260,22 @@ if (MODE === "bot") {
     meteorKill = !!opts.crashSound;
     return endRun.call(this, opts);
   };
+  // Speeds at every grab and release (perfect / not), for the retune.
+  const grabSpeeds = [], perfectReleases = [], plainReleases = [];
+  const origGrab = Object.getPrototypeOf(player).grab;
+  const origRelease = Object.getPrototypeOf(player).release;
+  player.grab = function (...args) { grabSpeeds.push(this.speed); return origGrab.apply(this, args); };
+  player.release = function (...args) {
+    const perfect = this.inPerfectWindow;
+    const r = origRelease.apply(this, args);
+    (perfect ? perfectReleases : plainReleases).push(this.speed);
+    return r;
+  };
+  const pctl = (xs, q) => (xs.length ? [...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.floor(q * xs.length))] : 0);
+  const fmt = (xs) => `p50 ${String(Math.round(pctl(xs, 0.5))).padStart(4)} p90 ${String(Math.round(pctl(xs, 0.9))).padStart(4)} (${xs.length})`;
   for (const P of [1, 0.5, 0.15]) {
     restart();
+    grabSpeeds.length = 0; perfectReleases.length = 0; plainReleases.length = 0;
     let frames = 0, armedFrames = 0, fastFrames = 0, runs = 0, smashes = 0, meteorDeaths = 0, otherDeaths = 0;
     let holding = false, swingFrames = 0, lastRelease = -1e9, goPerfect = true, sloppyDelay = 0;
     let seed = 12345;
@@ -286,8 +315,12 @@ if (MODE === "bot") {
       for (const h of game.world.hazards) if (h.destroyed && !seen.has(h)) { seen.add(h); smashes++; }
     }
     const pct = (a) => ((100 * a) / frames).toFixed(1) + "%";
+    const per100 = (n) => ((100 * n) / (frames / 120)).toFixed(1);
     console.log(
-      `perfect-release rate ${String(Math.round(P * 100)).padStart(3)}% | ${runs} runs in ${SECONDS}s | at smash speed ${pct(fastFrames).padStart(6)} | smash charged ${pct(armedFrames).padStart(6)} | meteors smashed ${String(smashes).padStart(3)} | killed by meteor ${String(meteorDeaths).padStart(3)} | other deaths ${otherDeaths}`
+      `perfect-release rate ${String(Math.round(P * 100)).padStart(3)}% | ${runs} runs in ${SECONDS}s | at smash speed ${pct(fastFrames).padStart(6)} | smash charged ${pct(armedFrames).padStart(6)} | meteors smashed ${String(smashes).padStart(3)} | killed by meteor ${String(meteorDeaths).padStart(3)} (${per100(meteorDeaths)}/100s) | other deaths ${otherDeaths} (${per100(otherDeaths)}/100s)`
+    );
+    console.log(
+      `      grab speed ${fmt(grabSpeeds)} | perfect release ${fmt(perfectReleases)} p75 ${Math.round(pctl(perfectReleases, 0.75))} | plain release ${fmt(plainReleases)} p75 ${Math.round(pctl(plainReleases, 0.75))}`
     );
   }
 }

@@ -11,7 +11,9 @@ export const CONFIG = {
     seaLevel: 980, // y of the cloud-sea death floor (fall past this = run over)
     skyCeiling: -1700, // soft upper bound for generated anchors
     gravityAir: 300, // gentle gravity while gliding / airborne
-    gravitySwing: 1750, // strong gravity while tethered (energetic swing)
+    // Stronger gravity while tethered: a deliberate energy source relative to
+    // gravityAir, so swings build speed that a glide alone never would.
+    gravitySwing: 1750,
     metersPerPixel: 0.05, // distance scoring scale
   },
 
@@ -22,8 +24,10 @@ export const CONFIG = {
     minSpeed: 140,
     maxSpeed: 1900,
     // Reach this speed and meteors shatter on contact instead of ending the
-    // run — a clean perfect release gets you there.
-    smashSpeed: 1050,
+    // run — a clean perfect release gets you there (bot-measured median
+    // perfect release 1400–1800 px/s; about a quarter of sloppy releases
+    // reach it). Retuned from 1050 when the swing stopped losing energy.
+    smashSpeed: 1200,
     // Reaching smash speed charges the smash for this long. Drag bleeds a
     // launch below smashSpeed within 0.1–0.5 s, far too briefly to reach the
     // meteor you were aiming at, so the charge outlives the speed itself.
@@ -48,7 +52,16 @@ export const CONFIG = {
     grabRange: 440, // max distance to attach to an anchor
     minRope: 70,
     maxRope: 340,
-    reelRate: 90, // rope shortens this many px/s while holding (adds lift)
+    // Rope shortens this many px/s while holding. Reeling in conserves angular
+    // momentum (L²ω), so it is a real pump: speed grows by reelRate/L per
+    // second (10%/s on a 300 px rope, 20%/s on 150 px). The old integrator
+    // silently ate this, which is why 90 once looked harmless.
+    reelRate: 30,
+    // Quadratic air drag on the swing speed (px⁻¹): a = -swingDrag·v·|v|. The
+    // swing is otherwise lossless, so this sets the soft terminal speed —
+    // fractional loss is swingDrag·v per second (6%/s at 1000 px/s for 6e-5).
+    // 0 = pure energy conservation (the physics probes set it).
+    swingDrag: 6e-5,
     releaseBoost: 1.07, // velocity multiplier on a normal release
     perfectBoost: 1.45, // velocity multiplier on a perfect release
     perfectBonusSpeed: 130, // additive speed on perfect

@@ -123,6 +123,7 @@ if (!game) throw new Error("game instance not exposed on window.GALE");
 
 const player = game.player;
 const world = game.world;
+const CFG = globalThis.window.GALE_CONFIG;
 let t = 0;
 function frame(n = 1) {
   for (let i = 0; i < n; i++) {
@@ -315,7 +316,7 @@ game.barrier = true; game.smashHintShown = false;
 player.y = sea - 6; player.vy = 320; player.vx = 760;
 let peak = 0;
 for (let i = 0; i < 120 && game.state === "playing"; i++) { clearAnchors(); frame(); peak = Math.max(peak, player.speed); }
-check("a fast barrier bounce does not arm the smash", game.state === "playing" && !game.barrier && !game.smashArmed && game.smashHintShown === false && peak < 1050, `peak speed ${peak.toFixed(0)}`);
+check("a fast barrier bounce does not arm the smash", game.state === "playing" && !game.barrier && !game.smashArmed && game.smashHintShown === false && peak < CFG.player.smashSpeed, `peak speed ${peak.toFixed(0)}`);
 stage();
 player.y = sea - 6; player.vy = 320;
 for (let i = 0; i < 60 && game.state === "playing"; i++) { clearAnchors(); frame(); }

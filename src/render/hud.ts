@@ -20,6 +20,10 @@ import {
 
 const PALETTE = theme; // HUD reads the live theme for cohesive colour grading
 
+// Full scale of the speed bar. Sits above smashSpeed so the smash tick stays
+// on the bar, below maxSpeed so ordinary flight still shows movement.
+const SPEED_BAR_MAX = 1500;
+
 // Touch devices don't have a keyboard — skip keyboard-only hints. Guarded for
 // the headless test harnesses, which don't define matchMedia.
 const COARSE_POINTER =
@@ -220,7 +224,7 @@ export class Hud {
     this.drawDashButton(ctx, cam, d);
 
     // --- Speed pips (bottom-left) ---
-    const spd = clamp(d.speed / 1200, 0, 1);
+    const spd = clamp(d.speed / SPEED_BAR_MAX, 0, 1);
     const barW = 120;
     const spX = 26 + ins.left;
     const spY = cam.h - 36 - ins.bottom;
@@ -235,7 +239,7 @@ export class Hud {
     // drawDashButton leaves textAlign centred; the speed label is left-aligned.
     ctx.textAlign = "left";
     // Threshold tick: reach this mark to charge the smash.
-    const tickX = spX + barW * clamp(CONFIG.player.smashSpeed / 1200, 0, 1);
+    const tickX = spX + barW * clamp(CONFIG.player.smashSpeed / SPEED_BAR_MAX, 0, 1);
     ctx.fillStyle = hexA(PALETTE.text, 0.55);
     ctx.fillRect(tickX - 1, spY - 3, 2, 14);
     // The smash window, draining under the speed bar once it is charged.

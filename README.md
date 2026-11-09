@@ -88,7 +88,8 @@ src/
 Open `src/core/config.ts` — every number is a labelled knob. A few high-leverage
 ones:
 
-- `world.gravitySwing` / `tether.reelRate` — how energetic and climby swings feel.
+- `world.gravitySwing` / `tether.reelRate` / `tether.swingDrag` — how energetic,
+  climby and self-limiting swings feel.
 - `tether.idealLaunchAngleDeg` / `perfectToleranceDeg` — where and how forgiving
   the **perfect** window is.
 - `tether.perfectBoost` / `releaseBoost` — how rewarding good timing is.
@@ -101,15 +102,38 @@ Colours live in the `PALETTE` object in the same file.
 
 ## How the swing works
 
-While tethered, the player is integrated under gravity each fixed step, then a
-**rigid distance constraint** snaps it back onto a circle around the anchor and
-removes the radial velocity component — leaving pure tangential (swinging)
-motion. Holding shortens the rope, which does work against gravity and adds
-energy (lift). On release, the current tangential velocity _is_ your launch
-vector, so timing the release governs the launch's shape and power.
+The tether is a **pendulum solved in polar coordinates** around the anchor:
+the state while tethered is the rope length, the angle from straight below
+the anchor and the angular velocity, integrated with velocity Verlet each fixed
+step. Position and velocity are written back from that every step, so the rope
+is exact by construction and no energy leaks into a position snap or a velocity
+projection. The only things that change the swing's energy are gravity, the
+anchor's own motion (a moving anchor is a moving pivot, and hands its velocity
+to the player), reeling in, and an explicit air-drag knob.
+
+- **Grabbing keeps your speed.** The hook is a frictionless redirect, not a
+  rope snapping taut: the player's whole speed relative to the anchor becomes
+  swing speed, in the sense of rotation it was already moving. (A real rope
+  would delete the component along the rope — the old code did exactly that,
+  and chaining straight out of a release into the next anchor kept as little as
+  6% of the kinetic energy.)
+- **Reeling in pumps.** Holding shortens the rope and conserves angular
+  momentum (L²ω), so the player speeds up by L_old / L_new — the real
+  shortening-pendulum effect. `tether.reelRate` sets how fast.
+- **Air drag** (`tether.swingDrag`, quadratic) is the only deliberate loss
+  while swinging, so speed settles instead of running away. Set it to 0 for
+  pure energy conservation; `scripts/tether-probe.mjs` does, and checks that
+  a glide → grab → swing → release → glide → grab chain conserves energy to
+  well under 1% once the deliberate energy sources (`gravitySwing` vs
+  `gravityAir`, lift, release boosts) are also zeroed.
+
+On release, the current velocity _is_ your launch vector (plus the release or
+PERFECT boost), so timing the release governs the launch's shape and power.
 
 Physics runs on a fixed `1/120s` timestep (`config.fixedDt`) for stability,
-independent of render frame rate.
+independent of render frame rate. `window.GALE_CONFIG` exposes the live tuning
+table so the headless probes can sweep knobs (`GALE_KNOBS='{"tether.swingDrag":0}'`)
+without a rebuild.
 
 ---
 
@@ -120,6 +144,14 @@ npm run dev       # dev server with hot reload
 npm run build     # type-check + production build to dist/
 npm run preview   # preview the production build
 node scripts/smoke.mjs   # headless runtime smoke test (run after build)
+
+# Headless checks against the built bundle (all run after `npm run build`):
+node scripts/tether-probe.mjs    # swing physics: energy kept at the grab, no drift, reel pump, moving anchors
+node scripts/powerups-probe.mjs  # power-ups, orbs, barrier, objectives, restarts (49 checks)
+node scripts/smash-probe.mjs decay|ahead|bot   # smash-speed decay, meteor-ahead outcomes, play-bot stats
+node scripts/swing-strip.mjs     # contact sheets of a swing, a loop and a moving anchor → screenshots/
+node scripts/shatter-strip.mjs   # contact sheet of a meteor smash → screenshots/
+node scripts/powerups-shot.mjs   # staged frames of pickups, HUD, game over → screenshots/
 ```
 
 ---

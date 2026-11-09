@@ -10,6 +10,9 @@ const game = new Game(canvas);
 
 // Debug handle: poke at the live game from the console (e.g. GALE.player).
 (window as unknown as Record<string, unknown>).GALE = game;
+// The live tuning table too: the physics reads CONFIG.* every step, so the
+// headless probes can sweep knobs (GALE_KNOBS) without a rebuild.
+(window as unknown as Record<string, unknown>).GALE_CONFIG = CONFIG;
 
 // Safe-area insets are published as CSS custom properties (--sat/--sar/…) that
 // resolve to env(safe-area-inset-*). Read them back so the HUD can dodge

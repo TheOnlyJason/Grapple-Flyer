@@ -804,9 +804,7 @@ export class Game {
       // meteor shatters and the player keeps most of their momentum.
       if (this.smashCharge > 0) {
         this.smashHazard(h, 40, 6);
-        const keep = 1 - CONFIG.player.smashSpeedLoss;
-        this.player.vx *= keep;
-        this.player.vy *= keep;
+        this.player.scaleVelocity(1 - CONFIG.player.smashSpeedLoss);
         this.objectives.report("smash", 1);
         this.hud.popup(h.x, h.y - 24, "SMASH +40", theme.collectible, 1.15);
         continue;

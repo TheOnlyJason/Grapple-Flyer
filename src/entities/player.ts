@@ -42,6 +42,12 @@ export class Player {
 
   anchor: Anchor | null = null;
   ropeLen = 0;
+  // Pendulum state while tethered: angle from straight below the anchor
+  // (positive toward +x) and angular velocity. x/y/vx/vy are written back
+  // from these every step, so everything outside the swing keeps reading
+  // plain world position and velocity.
+  swingPhi = 0;
+  swingOmega = 0;
 
   inPerfectWindow = false;
   perfectQuality = 0;
@@ -142,13 +148,41 @@ export class Player {
     return best;
   }
 
-  private grab(anchor: Anchor) {
+  // `t0` is the time the anchor's current pose belongs to (the previous
+  // step: the world moves anchors after the player steps).
+  private grab(anchor: Anchor, t0: number) {
     this.latchArm = this.nextLatchArm;
     this.nextLatchArm = this.nextLatchArm === "right" ? "left" : "right";
     this.anchor = anchor;
-    const d = Math.hypot(anchor.x - this.x, anchor.y - this.y);
+    const rx = this.x - anchor.x;
+    const ry = this.y - anchor.y;
     // Match the rope to the current distance so latch-on doesn't snap position.
-    this.ropeLen = Math.max(d, 1e-3);
+    // (findGrabTarget already rejects anchors closer than 6 px.)
+    const L = Math.max(Math.hypot(rx, ry), 6);
+    this.ropeLen = L;
+    this.swingPhi = Math.atan2(rx, ry);
+    // The hook is a frictionless redirect, not a rope snapping taut: the
+    // player's whole speed relative to the anchor becomes swing speed, in the
+    // sense of rotation the player was already moving. Nothing is lost.
+    const tx = ry / L;
+    const ty = -rx / L; // tangent of increasing phi
+    const ux = this.vx;
+    const uy = this.vy - anchor.vyAt(t0);
+    const u = Math.hypot(ux, uy);
+    if (u < 1e-6) {
+      this.swingOmega = 0;
+    } else {
+      const ut = ux * tx + uy * ty;
+      const s =
+        Math.abs(ut) > 1e-3 * u
+          ? Math.sign(ut) // keep turning the way we were going
+          : Math.abs(tx) > 1e-3
+          ? Math.sign(tx) // dead-on radial: take the tangent that heads forward
+          : this.swingPhi !== 0
+          ? -Math.sign(this.swingPhi) // level with the anchor: swing downward
+          : 1;
+      this.swingOmega = (s * u) / L;
+    }
     this.state = "swing";
     this.swingTime = 0;
     anchor.used = true;
@@ -227,7 +261,7 @@ export class Player {
         if (holding && this.grabLockout <= 0) {
           const target = this.findGrabTarget(anchors, view);
           if (target) {
-            this.grab(target);
+            this.grab(target, time - dt);
             this.stepSwing(dt, holding, time);
             break;
           }
@@ -271,44 +305,65 @@ export class Player {
     this.y += this.vy * dt;
   }
 
-  private stepSwing(dt: number, holding: boolean, _time: number) {
+  // Pendulum step in polar form (velocity Verlet). The rope is exact by
+  // construction, so no energy leaks into a position snap or a velocity
+  // projection: the only things that change the swing's energy are gravity,
+  // the pivot's motion, reeling in (which conserves angular momentum, so the
+  // rope getting shorter really does speed the player up) and the explicit
+  // air drag knob. `time` is the end of this step; the anchor's pose at the
+  // start of it is `time - dt`.
+  private stepSwing(dt: number, holding: boolean, time: number) {
     const a = this.anchor;
     if (!a) return;
     this.swingTime += dt;
+    const T = CONFIG.tether;
+    const g = CONFIG.world.gravitySwing;
+    const t0 = time - dt;
+    let L = this.ropeLen;
+    let phi = this.swingPhi;
+    let omega = this.swingOmega;
+    // A pivot accelerating upward feels like extra gravity, and vice versa.
+    const acc = (p: number, t: number) => (-((g - a.ayAt(t)) / L) * Math.sin(p));
 
-    // Gravity drives the pendulum.
-    this.vy += CONFIG.world.gravitySwing * dt;
-
-    // Reel in slightly while held: pumps energy and lets the player climb.
-    if (holding && this.ropeLen > CONFIG.tether.minRope) {
-      this.ropeLen = Math.max(
-        CONFIG.tether.minRope,
-        this.ropeLen - CONFIG.tether.reelRate * dt
-      );
+    omega += 0.5 * dt * acc(phi, t0);
+    if (holding && L > T.minRope) {
+      const Ln = Math.max(T.minRope, L - T.reelRate * dt);
+      omega *= (L / Ln) * (L / Ln); // L²ω is conserved: tangential speed scales by L/Ln
+      L = Ln;
     }
+    phi += omega * dt;
+    if (phi > Math.PI) phi -= TAU;
+    else if (phi <= -Math.PI) phi += TAU;
+    omega += 0.5 * dt * acc(phi, time);
+    if (T.swingDrag > 0) {
+      // Exact step of ω' = -c·L·ω|ω| (quadratic air drag on the swing speed).
+      omega /= 1 + T.swingDrag * L * Math.abs(omega) * dt;
+    }
+    const vmax = CONFIG.player.maxSpeed / L;
+    if (omega > vmax) omega = vmax;
+    else if (omega < -vmax) omega = -vmax;
 
-    // Integrate, then enforce the rigid-rope distance constraint.
-    this.x += this.vx * dt;
-    this.y += this.vy * dt;
+    this.ropeLen = L;
+    this.swingPhi = phi;
+    this.swingOmega = omega;
 
-    let dx = this.x - a.x;
-    let dy = this.y - a.y;
-    const d = Math.hypot(dx, dy) || 1e-6;
-    const nx = dx / d;
-    const ny = dy / d;
+    // Write back where the anchor will be once the world has moved it this step.
+    const sin = Math.sin(phi);
+    const cos = Math.cos(phi);
+    this.x = a.x + L * sin;
+    this.y = a.yAt(time) + L * cos;
+    this.vx = L * omega * cos;
+    this.vy = a.vyAt(time) - L * omega * sin;
 
-    // Position correction back onto the circle.
-    this.x = a.x + nx * this.ropeLen;
-    this.y = a.y + ny * this.ropeLen;
-
-    // Remove the radial velocity component -> motion stays tangent (swinging).
-    const vrad = this.vx * nx + this.vy * ny;
-    this.vx -= vrad * nx;
-    this.vy -= vrad * ny;
-
-    this.clampSpeed();
     this.evaluatePerfect();
     if (this.inPerfectWindow) a.perfectGlow = 1;
+  }
+
+  /** Scale the player's speed (e.g. the momentum a meteor smash scrubs); keeps the swing consistent. */
+  scaleVelocity(k: number) {
+    this.vx *= k;
+    this.vy *= k;
+    if (this.state === "swing") this.swingOmega *= k;
   }
 
   private stepDash(dt: number) {
