@@ -15,6 +15,18 @@ export const CONFIG = {
     // gravityAir, so swings build speed that a glide alone never would.
     gravitySwing: 1750,
     metersPerPixel: 0.05, // distance scoring scale
+    // The flight band the world is built around follows the player: aimed
+    // this far above them (a grab needs the anchor above the player and
+    // inside the view — about 40–290 px up on a phone), closing the gap by
+    // bandFollow per segment, with anchors scattered ±bandScatter around it.
+    bandAbove: 150,
+    bandFollow: 0.2,
+    bandScatter: 160,
+    bandAverage: 3, // seconds over which the player's altitude is averaged
+    // An anchor's height is settled as it is about to scroll into view: this
+    // far above where the player will be when they reach it (a grab needs
+    // the anchor above the player and on screen — up to ~290 px on a phone).
+    anchorAbove: [70, 290],
   },
 
   player: {
@@ -80,6 +92,12 @@ export const CONFIG = {
     // onto it (the clip that prompted this turned a PERFECT into a vertical
     // rocket). Other anchors can be grabbed at once.
     regrabCooldown: 0.6,
+    // ...and for this long after letting go nothing at all can be grabbed:
+    // a press that lands as the finger lifts, or a reflex re-tap during the
+    // launch, would otherwise hook whatever is in range and re-pose the
+    // player mid-flight. Longer than grabBuffer, so such a press expires
+    // unanswered; a deliberate press for the next anchor comes later anyway.
+    releaseGrabDelay: 0.2,
     // The "classic" swing model (the pre-pendulum rod) kept its own reel rate.
     classicReelRate: 90,
     // A press grabs only if an anchor is in reach at that moment — or comes

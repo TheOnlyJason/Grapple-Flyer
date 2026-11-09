@@ -4,17 +4,29 @@ import { makeScratch } from "../render/rcache";
 
 export type AnchorKind = "normal" | "moving";
 
+/** Something placed relative to an anchor that must follow it when its height settles. */
+export interface Attached {
+  x: number;
+  y: number;
+  baseY: number;
+}
+
 // A tether target floating in the sky.
 export class Anchor {
   x: number;
   y: number;
-  readonly baseY: number;
+  baseY: number;
   readonly kind: AnchorKind;
   private amp = 0;
   private phase = 0;
   private speed = 0;
 
   used = false; // tethered to at least once (objective tracking)
+  // The world places anchors in x when it builds a segment but settles their
+  // height only as they are about to scroll into view (see World.settleAnchors);
+  // whatever was hung on the anchor meanwhile (orbs, a pickup) moves with it.
+  pending = false;
+  attached: Attached[] = [];
   pulse = 0; // grab feedback, decays to 0
   highlight = 0; // 0..1 grab-candidate emphasis (cyan), set by player each frame
   perfectGlow = 0; // 0..1 perfect-release window (gold), set while tethered

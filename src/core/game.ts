@@ -412,7 +412,13 @@ export class Game {
       // the 700px spawn / 500px cull buffers dwarf per-frame camera movement.
       // ensure() before the step loop so anchors exist for the physics steps;
       // cull() after it, once the camera has settled for this frame.
-      this.world.ensure(this.camera.right, this.player.y);
+      this.world.ensure(
+        this.camera.right,
+        this.player.y,
+        this.player.state === "glide" ? this.player.vy : 0,
+        this.player.x,
+        Math.max(0, this.player.vx)
+      );
       this.acc += dt;
       let steps = 0;
       while (this.acc >= CONFIG.fixedDt && steps < 8) {

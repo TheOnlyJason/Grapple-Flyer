@@ -170,6 +170,7 @@ function placeGlide(x0, y0, vx, vy) {
   quiet();
   frame();
   player.state = "glide"; player.anchor = null; player.inPerfectWindow = false;
+  player.grabLockout = 0; player.lastAnchor = null; player.lastAnchorCooldown = 0; // a fresh flight, not a launch just made
   player.x = x0; player.y = y0; player.vx = vx; player.vy = vy;
   player.trail.length = 0;
   game.smashCharge = 0; game.barrier = false; game.magnetTime = 0;
@@ -417,13 +418,22 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
   for (let i = 0; i < 6; i++) { quiet(); frame(); if (player.state === "swing") regrabbed = true; }
   check("a re-press right after a release does not re-grab the anchor just left", launched && !regrabbed && player.vx > 0, `state ${player.state}, v (${player.vx.toFixed(0)}, ${player.vy.toFixed(0)})`);
   up(); quiet(); frame();
-  // ...but another anchor in reach is grabbed at once.
+  // For releaseGrabDelay nothing at all is grabbable (a press as the finger
+  // lifts is not an aim); after it, another anchor is — while the one just
+  // left is still off limits.
   const b = new Anchor(player.x + 160, player.y - 200);
-  world.anchors.push(b);
+  const both = () => { world.anchors.length = 0; world.anchors.push(a, b); world.genX = player.x + 1e6; };
+  down();
+  let grabbedEarly = false;
+  for (let i = 0; i < 6; i++) { both(); frame(); if (player.state === "swing") grabbedEarly = true; }
+  check("right after a release a press grabs nothing at all", !grabbedEarly, `state ${player.state}`);
+  up(); both(); frame();
+  const delayFrames = Math.ceil(CFG.tether.releaseGrabDelay * 120) + 2;
+  for (let i = 0; i < delayFrames; i++) { both(); frame(); player.x = a.x + 118; player.y = a.y + 90; player.vx = 600; player.vy = -300; b.x = player.x + 160; b.y = player.y - 200; }
   down();
   let grabbedOther = false;
-  for (let i = 0; i < 6; i++) { world.anchors.length = 0; world.anchors.push(a, b); world.genX = player.x + 1e6; frame(); if (player.state === "swing") { grabbedOther = player.anchor === b; break; } }
-  check("a different anchor can be grabbed right away", grabbedOther, `anchor is ${player.anchor === b ? "the new one" : player.anchor === a ? "the old one" : "none"}`);
+  for (let i = 0; i < 6; i++) { both(); frame(); if (player.state === "swing") { grabbedOther = player.anchor === b; break; } }
+  check("once the delay has passed a different anchor is grabbed, not the one just left", grabbedOther, `anchor is ${player.anchor === b ? "the new one" : player.anchor === a ? "the old one" : "none"}`);
   up();
   // After the cooldown the old anchor is fair game again.
   placeGlide(a.x - 200, a.y + 150, 400, 0);

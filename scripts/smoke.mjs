@@ -182,9 +182,18 @@ for (let c = 0; c < 6; c++) {
   if (!inReach() && game.state === "playing") {
     const spin0 = game.player.flipSpin;
     dispatch("pointerdown", { clientX: 400, clientY: 300, pointerId: 1 });
-    tick(30);
-    assert(game.player.state !== "swing", "a hold in open sky grabbed an anchor");
-    assert(game.player.flipSpin !== spin0, "a hold in open sky did not start a backflip");
+    let grabbed = false;
+    for (let i = 0; i < 30; i++) {
+      tick(1);
+      if (game.player.state === "swing") grabbed = true;
+    }
+    // An anchor that scrolls into reach inside the 0.15 s grab grace turns
+    // the press into a grab by design, and a crash ends the run and freezes
+    // the player; neither is a control failure. Only a hold that stayed in
+    // open sky for the whole window must have flipped.
+    if (game.state === "playing" && !grabbed) {
+      assert(game.player.flipSpin !== spin0, "a hold in open sky did not start a backflip");
+    }
     dispatch("pointerup", { clientX: 400, clientY: 300, pointerId: 1 });
     tick(30);
   }
@@ -192,8 +201,16 @@ for (let c = 0; c < 6; c++) {
 // 5) Trigger a dash via keyboard.
 dispatch("keydown", { code: "KeyD" });
 tick(60);
-// 6) Run long enough to likely die and reach gameover, then restart.
-tick(1200);
+// 6) Let the run end (a hands-off glide sinks into the cloud sea; a lucky
+//    lift can stretch it, and a fast crash skids for a few seconds before the
+//    game-over screen, so wait for the state rather than a fixed span), then
+//    restart.
+let waited = 0;
+while ((game.state === "playing" || game.state === "crashing") && waited < 6000) {
+  tick(10);
+  waited += 10;
+}
+assert(game.state === "gameover", `run did not reach game over within ${waited} frames (state=${game.state})`);
 dispatch("pointerdown", { clientX: 400, clientY: 300, pointerId: 1 });
 tick(5);
 dispatch("pointerup", { clientX: 400, clientY: 300, pointerId: 1 });

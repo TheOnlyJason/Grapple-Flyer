@@ -70,7 +70,7 @@ export class Player {
   dashTime = 0;
   /** Remaining hazard invulnerability after a wind dash (rocks can't kill). */
   hazardInvuln = 0;
-  private grabLockout = 0; // seconds the tether refuses to attach (after a barrier bounce)
+  private grabLockout = 0; // seconds the tether refuses to attach (after a release, slip or barrier bounce)
   // The anchor just released or slipped from, and how long it stays off
   // limits: a re-press right after a launch must not haul the player back
   // onto the rope they just left (other anchors are fair game at once).
@@ -498,10 +498,16 @@ export class Player {
     this.perfectQuality = 0;
   }
 
-  /** Let go of the current anchor and keep it off limits for a moment. */
+  /**
+   * Let go of the current anchor: it stays off limits for a moment, and for
+   * a shorter moment nothing can be grabbed at all — a press that lands as
+   * the finger lifts, or a reflex re-tap right after a launch, is not an aim
+   * at the next anchor, and grabbing one then re-poses the player mid-flight.
+   */
   private forgetAnchor() {
     this.lastAnchor = this.anchor;
     this.lastAnchorCooldown = CONFIG.tether.regrabCooldown;
+    this.grabLockout = Math.max(this.grabLockout, CONFIG.tether.releaseGrabDelay);
     this.anchor = null;
   }
 

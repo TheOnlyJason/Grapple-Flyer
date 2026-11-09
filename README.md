@@ -35,6 +35,12 @@ play entirely from the keyboard.
 | Mute / unmute | — | `M` |
 | Start / restart | tap | any key |
 
+Only anchors **above** you can be grabbed (a rope to one at your own height
+would have nothing to swing on). Right after you let go there is a short
+moment (0.2 s) in which a press grabs nothing — a tap as the finger lifts is
+not an aim — and the anchor you just left stays off limits for 0.6 s, so a
+reflex re-tap cannot haul you back onto it mid-launch.
+
 ### The loop
 
 1. **Glide** forward, losing altitude slowly. Scan for the next anchor (it lights
@@ -105,6 +111,9 @@ ones:
   backflip turns, what it costs, what it pays.
 - `player.cruiseSpeed` / `forwardDrag` — glide pace and how long launches persist.
 - `world.seaLevel` — how much altitude headroom you have before the run ends.
+- `world.anchorAbove` — how far above the player's predicted position an
+  anchor settles as it comes into view (see below); `world.band*` — how the
+  flight band that clouds, rocks and orbs are built around follows the player.
 
 Colours live in the `PALETTE` object in the same file.
 
@@ -140,10 +149,33 @@ to the player), reeling in, and an explicit air-drag knob.
 On release, the current velocity _is_ your launch vector (plus the release or
 PERFECT boost), so timing the release governs the launch's shape and power.
 
+The swing cannot carry you above the anchor: at `tether.maxSwingAngleDeg`
+(90°, the anchor's own height) the hook **slips**. The speed is kept but the
+direction is not the circle's tangent there — that would be straight up, a
+rocket that stalls — it is redirected forward-up at `tether.slipLaunchAngleDeg`
+(-62°, just outside the PERFECT window, so a timed release still beats it).
+
 Physics runs on a fixed `1/120s` timestep (`config.fixedDt`) for stability,
 independent of render frame rate. `window.GALE_CONFIG` exposes the live tuning
 table so the headless probes can sweep knobs (`GALE_KNOBS='{"tether.swingDrag":0}'`)
 without a rebuild.
+
+---
+
+## How the world is built
+
+Segments are generated 1.5–2k px ahead of the camera. Everything in a segment
+is placed around a **flight band** that drifts toward the player's altitude
+averaged over a few seconds (`world.bandAbove`, `bandFollow`, `bandScatter`,
+`bandAverage`) and follows the player up without limit — a run that keeps its
+energy climbs, and a ceiling on the anchors would strand the player above
+everything. Anchors get their x then, but their **height only as they are
+about to scroll into view** (`World.settleAnchors`): `world.anchorAbove` px
+above where the player will be when they reach it, predicted from a glide's
+sink rate over the lead distance. Orbs and pickups hung on an anchor move
+with it. The play-bot (`scripts/smash-probe.mjs bot`) reports the anchor
+supply: the share of the glide with something grabbable and the longest
+stretch without.
 
 ---
 
