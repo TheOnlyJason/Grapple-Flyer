@@ -17,7 +17,7 @@ import {
   POWERUP_NAME,
 } from "../entities/powerup";
 import { makeScratch, Scratch, VersionCache } from "../render/rcache";
-import { World } from "../systems/world";
+import { World, FlightProbe } from "../systems/world";
 import { Particles } from "../systems/particles";
 import { Objectives } from "../systems/objectives";
 import { Background } from "../render/background";
@@ -55,6 +55,13 @@ export class Game {
   private hud = new Hud();
 
   private state: GameState = "menu";
+  /** The world's live view of the player, refreshed every rendered frame. */
+  private readonly probe: FlightProbe = {
+    x: 0,
+    y: 0,
+    gliding: true,
+    predictY: (targetX) => this.player.predictGlideY(targetX),
+  };
   private timeInState = 0;
   private time = 0;
   private acc = 0;
@@ -412,13 +419,10 @@ export class Game {
       // the 700px spawn / 500px cull buffers dwarf per-frame camera movement.
       // ensure() before the step loop so anchors exist for the physics steps;
       // cull() after it, once the camera has settled for this frame.
-      this.world.ensure(
-        this.camera.right,
-        this.player.y,
-        this.player.state === "glide" ? this.player.vy : 0,
-        this.player.x,
-        Math.max(0, this.player.vx)
-      );
+      this.probe.x = this.player.x;
+      this.probe.y = this.player.y;
+      this.probe.gliding = this.player.state === "glide";
+      this.world.ensure(this.camera.right, this.probe);
       this.acc += dt;
       let steps = 0;
       while (this.acc >= CONFIG.fixedDt && steps < 8) {

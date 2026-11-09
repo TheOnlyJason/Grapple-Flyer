@@ -171,11 +171,16 @@ averaged over a few seconds (`world.bandAbove`, `bandFollow`, `bandScatter`,
 energy climbs, and a ceiling on the anchors would strand the player above
 everything. Anchors get their x then, but their **height only as they are
 about to scroll into view** (`World.settleAnchors`): `world.anchorAbove` px
-above where the player will be when they reach it, predicted from a glide's
-sink rate over the lead distance. Orbs and pickups hung on an anchor move
-with it. The play-bot (`scripts/smash-probe.mjs bot`) reports the anchor
-supply: the share of the glide with something grabbable and the longest
-stretch without.
+above where the player will be when they reach it. That altitude comes from
+the player's own glide step run forward to the anchor's x
+(`Player.predictGlideY`, sharing `glideStep` with the glide itself): a
+launch climbs for a second or two and then sinks, and a plain sink rate put
+anchors under the climb's apex and over the sink. While the player swings or
+dashes the launch to come is unknowable, so settling waits until the anchor
+is nearly on screen. An anchor never settles inside a rock; orbs and pickups
+hung on it move with it (and an orb that lands in a rock is dropped). The
+play-bot (`scripts/smash-probe.mjs bot`) reports the anchor supply: the
+share of the glide with something grabbable and the longest stretch without.
 
 ---
 

@@ -10,6 +10,19 @@ import { PowerUp, POWERUP_KINDS } from "../entities/powerup";
 const SPAWN_BUFFER = 700;
 // Anchors settle their height this far before the camera's right edge.
 const SETTLE_AHEAD = 150;
+// While the player swings or dashes, hold a pending anchor's height until it
+// is this close to the view's edge, so a glide may have begun by then.
+const SETTLE_AHEAD_BUSY = 60;
+
+/** The game's live view of the player, for settling anchors. */
+export interface FlightProbe {
+  x: number;
+  y: number;
+  /** True in a glide; a swing or dash makes the altitude ahead unknowable. */
+  gliding: boolean;
+  /** Where a glide from now is when it reaches world-x `targetX`. */
+  predictY(targetX: number): number;
+}
 const CULL_BUFFER = 500;
 // On a restart, how far past the right screen edge the old world is kept.
 // It must exceed the furthest anything can hang to the LEFT of the segment
@@ -38,13 +51,10 @@ export class World {
   // for only ~7% of a glide (bot-measured), with 8 s stretches of nothing.
   private chainY = 0;
   // The player's altitude smoothed over a few seconds (segments are built
-  // 1.5–2k px ahead, so the instantaneous altitude is noise), where they
-  // are and how fast they fly, and how fast they are sinking right now (a
-  // glide's downward speed, 0 otherwise) — all for the generator.
+  // 1.5–2k px ahead, so the instantaneous altitude is noise) — for the
+  // generator; and the game's live view of the player — for settling anchors.
   private playerYAvg = 0;
-  private playerVy = 0; // a glide's vertical speed (signed), 0 while swinging/dashing
-  private playerX = 0;
-  private playerVx = 360;
+  private probe: FlightProbe = { x: 0, y: 0, gliding: true, predictY: () => 0 };
   /** World-x where the current run began: the difficulty ramp is measured from here. */
   private runOriginX = 0;
   /** World-x past which the next power-up pickup spawns. */
@@ -78,10 +88,8 @@ export class World {
     this.anchors.push(first);
     this.lastAnchorX = first.x;
     this.chainY = first.y;
-    this.playerY = startY;
+    this.probe = { x: startX, y: startY, gliding: true, predictY: () => startY };
     this.playerYAvg = startY;
-    this.playerVy = 0;
-    this.playerX = startX;
     this.genX = startX + 280;
   }
 
@@ -183,7 +191,7 @@ export class World {
     this.lastAnchorX = originX;
     for (const a of this.anchors) if (a.x > this.lastAnchorX) this.lastAnchorX = a.x;
     const last = this.anchors[this.anchors.length - 1];
-    this.chainY = last ? last.baseY : this.playerY - CONFIG.world.bandAbove;
+    this.chainY = last ? last.baseY : this.probe.y - CONFIG.world.bandAbove;
     // A dropped pickup must not push the next one a whole gap further out.
     this.nextPowerX = Math.min(this.nextPowerX, this.genX + CONFIG.powerups.firstAt);
   }
@@ -192,20 +200,13 @@ export class World {
     return clamp((this.genX - this.runOriginX) / 13000, 0, 1);
   }
 
-  /** The player's altitude, so a lofted player still finds anchors to grab. */
-  private playerY = 0;
-
-  ensure(
-    cameraRight: number,
-    playerY = this.playerY,
-    playerVy = 0,
-    playerX = this.playerX,
-    playerVx = this.playerVx
-  ) {
-    this.playerY = playerY;
-    this.playerVy = playerVy;
-    this.playerX = playerX;
-    this.playerVx = playerVx;
+  /**
+   * Build what the camera is about to need and settle the anchors about to
+   * come into view. `probe` is the game's live view of the player (omitted
+   * by the attract screen, which keeps the last one).
+   */
+  ensure(cameraRight: number, probe?: FlightProbe) {
+    if (probe) this.probe = probe;
     while (this.genX < cameraRight + SPAWN_BUFFER) {
       this.generateSegment();
     }
@@ -217,19 +218,26 @@ export class World {
    * HEIGHT only as they are about to scroll into view, from where the player
    * will be by the time they reach them. A grab needs the anchor above the
    * player and on screen; the player's altitude six seconds out is anyone's
-   * guess, while two seconds out a glide's sink rate predicts it well.
-   * Whatever was hung on the anchor meanwhile (orbs, a pickup) moves with it.
+   * guess, while the glide ahead to the anchor's x is the player's own glide
+   * step run forward (a launch climbs hundreds of px and then sinks; a sink
+   * rate alone put anchors under the climb's apex and over the sink). While
+   * the player swings or dashes the launch to come is unknown, so settling
+   * waits until the anchor is nearly on screen in the hope of a glide by
+   * then. Whatever was hung on the anchor meanwhile (orbs, a pickup) moves
+   * with it.
    */
   private settleAnchors(cameraRight: number) {
     const W = CONFIG.world;
     const bottom = this.altitudeBounds().bottom;
+    const ahead = this.probe.gliding ? SETTLE_AHEAD : SETTLE_AHEAD_BUSY;
     for (const a of this.anchors) {
-      if (!a.pending || a.x > cameraRight + SETTLE_AHEAD) continue;
+      if (!a.pending || a.x > cameraRight + ahead) continue;
       a.pending = false;
-      const lead = clamp((a.x - this.playerX) / Math.max(250, this.playerVx), 0, 4);
-      const vy = clamp(this.playerVy, -150, 320);
-      const predicted = this.playerY + vy * lead * 0.8;
-      const y = Math.min(bottom, predicted + this.rng.range(-W.anchorAbove[1], -W.anchorAbove[0]));
+      const predicted = this.probe.predictY(a.x);
+      let y = Math.min(bottom, predicted + this.rng.range(-W.anchorAbove[1], -W.anchorAbove[0]));
+      // Rocks were placed around the flight band before the anchor's height
+      // was known: an anchor must not settle inside one.
+      for (let tries = 0; tries < 4 && this.insideHazardAt(a.x, y, 70); tries++) y -= 130;
       const dy = y - a.baseY;
       if (dy === 0) continue;
       a.baseY = y;
@@ -239,9 +247,9 @@ export class World {
         it.y += dy;
         if (it instanceof Collectible) {
           // An orb may not sit in a rock or in the cloud sea.
-          if (it.y > W.seaLevel - 60 || this.insideHazard(it.x, it.y, 22)) it.collected = true;
+          if (it.y > W.seaLevel - 60 || this.insideHazardAt(it.x, it.y, 22)) it.collected = true;
         } else if (it instanceof PowerUp) {
-          for (let tries = 0; tries < 4 && this.insideHazard(it.x, it.baseY, 60); tries++) {
+          for (let tries = 0; tries < 4 && this.insideHazardAt(it.x, it.baseY, 60); tries++) {
             it.baseY -= 150;
             it.y -= 150;
           }
@@ -433,6 +441,19 @@ export class World {
     return orb;
   }
 
+  /**
+   * True if (x, y) with padding `r` overlaps a rock near world-x `x`, however
+   * long ago it was built. For settling: the rocks around an anchor may be
+   * many segments old by the time its height is fixed, so the generator's
+   * recent-rocks shortcut below would miss them.
+   */
+  private insideHazardAt(x: number, y: number, r: number): boolean {
+    for (const h of this.hazards) {
+      if (Math.abs(h.x - x) < 600 && h.hits(x, y, r)) return true;
+    }
+    return false;
+  }
+
   /** True if (x, y) with padding `r` overlaps one of the most recent rocks. */
   private insideHazard(x: number, y: number, r: number): boolean {
     const hs = this.hazards;
@@ -448,7 +469,7 @@ export class World {
     magnet?: { x: number; y: number; range: number; strength: number }
   ) {
     // Smooth the player's altitude over a few seconds for the generator.
-    this.playerYAvg += (this.playerY - this.playerYAvg) * Math.min(1, dt / CONFIG.world.bandAverage);
+    this.playerYAvg += (this.probe.y - this.playerYAvg) * Math.min(1, dt / CONFIG.world.bandAverage);
     for (const a of this.anchors) a.update(dt, time);
     for (const c of this.clouds) c.update(dt);
     for (const h of this.hazards) h.update(dt);
