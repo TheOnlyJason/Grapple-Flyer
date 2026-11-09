@@ -158,6 +158,7 @@ export class Game {
 
     this.world.reset(this.rng, this.startX, CONFIG.world.startY);
     this.player.reset(this.startX, CONFIG.world.startY, this.storage.data.character);
+    this.player.swingModel = this.storage.data.swingModel;
     this.camera.snapTo(this.player.x, this.player.y);
     this.world.ensure(this.camera.right);
   }
@@ -239,6 +240,35 @@ export class Game {
     const dx = this.input.pointer.x - b.x;
     const dy = this.input.pointer.y - b.y;
     return dx * dx + dy * dy <= b.r * b.r;
+  }
+
+  private hitRect(r: { x: number; y: number; w: number; h: number }): boolean {
+    const p = this.input.pointer;
+    return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+  }
+
+  /** Abandon the current run (nothing is recorded) and start a fresh one in place. */
+  private restartRun() {
+    if (this.state !== "playing" && this.state !== "paused") return;
+    this.clearSmash();
+    this.magnetTime = 0;
+    this.barrier = false;
+    this.sound.setMusicPaused(false);
+    this.sound.setWind(0);
+    // Hand off exactly as a run's end does, then start straight away.
+    this.state = "gameover";
+    this.timeInState = 0;
+    this.player.trail.length = 0;
+    this.attractGlideX = this.player.x;
+    this.attractGlideStartTime = this.time;
+    this.player.animateMenuGlide(0, 0, this.attractGlideX);
+    this.startRun();
+  }
+
+  private toggleSwingModel() {
+    const next = this.storage.data.swingModel === "pendulum" ? "classic" : "pendulum";
+    this.storage.setSwingModel(next);
+    this.player.setSwingModel(next, this.time);
   }
 
   private hitPauseButton(): boolean {
@@ -416,6 +446,17 @@ export class Game {
     if (this.state === "crashing") return;
 
     if (this.state === "paused") {
+      if (this.input.pointerJustDown) {
+        const b = this.hud.pauseMenuButtons(this.camera);
+        if (this.hitRect(b.restart)) {
+          this.restartRun();
+          return;
+        }
+        if (this.hitRect(b.swing)) {
+          this.toggleSwingModel();
+          return;
+        }
+      }
       if (
         this.input.tapped.has("Escape") ||
         this.input.tapped.has("KeyP") ||
@@ -612,6 +653,18 @@ export class Game {
             color: theme.anchorRing,
           });
           if (e.moving) this.objectives.report("moving", 1);
+          break;
+        }
+        case "slip": {
+          // The hook let go at the top of the swing: a soft cue, nothing scored.
+          this.sound.slip();
+          this.particles.emit(e.x, e.y, {
+            count: 6,
+            speed: [40, 160],
+            life: [0.2, 0.45],
+            size: [1.5, 3],
+            color: theme.anchor,
+          });
           break;
         }
         case "release": {
@@ -982,6 +1035,7 @@ export class Game {
       hintAlpha: this.state === "playing" ? hintAlpha : 0,
       character: this.storage.data.character,
       characterName: characterName(this.storage.data.character),
+      swingModel: this.storage.data.swingModel,
     };
   }
 }

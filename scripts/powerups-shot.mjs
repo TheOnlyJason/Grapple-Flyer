@@ -209,6 +209,14 @@ clearStage();
   save("objective-gone");
 }
 
+// 6c. The pause screen with its restart and swing-model buttons.
+clearStage();
+hold(); tick(2);
+game.togglePause();
+tick(1);
+save("paused");
+game.togglePause();
+
 // 7. Game over with orbs banked.
 clearStage();
 game.runOrbs = 27;

@@ -62,6 +62,12 @@ export const CONFIG = {
     // fractional loss is swingDrag·v per second (6%/s at 1000 px/s for 6e-5).
     // 0 = pure energy conservation (the physics probes set it).
     swingDrag: 6e-5,
+    // The swing cannot carry the player above the anchor: reaching this angle
+    // from straight-below while still holding makes the hook slip (the player
+    // flies on with the speed they have, no boost) — no loop-the-loops.
+    maxSwingAngleDeg: 90,
+    // The "classic" swing model (the pre-pendulum rod) kept its own reel rate.
+    classicReelRate: 90,
     releaseBoost: 1.07, // velocity multiplier on a normal release
     perfectBoost: 1.45, // velocity multiplier on a perfect release
     perfectBonusSpeed: 130, // additive speed on perfect

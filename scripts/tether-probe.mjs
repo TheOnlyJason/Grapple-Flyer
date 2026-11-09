@@ -191,6 +191,7 @@ const setKnobs = (k) => {
   }
 };
 const saved = JSON.parse(JSON.stringify({ world: CFG.world, player: CFG.player, tether: CFG.tether }));
+const NO_CAP = { "tether.maxSwingAngleDeg": 1e9 }; // the pure-physics checks loop on purpose
 const restoreKnobs = () => { Object.assign(CFG.world, saved.world); Object.assign(CFG.player, saved.player); Object.assign(CFG.tether, saved.tether); };
 const deg = (d) => (d * Math.PI) / 180;
 const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi, player.swingOmega].every(Number.isFinite);
@@ -242,7 +243,7 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
 
 // --- 2. A free swing does not drift -------------------------------------------------
 {
-  setKnobs({ "tether.swingDrag": 0, "tether.reelRate": 0 });
+  setKnobs({ ...NO_CAP, "tether.swingDrag": 0, "tether.reelRate": 0 });
   const g = CFG.world.gravitySwing;
   for (const [L, v, label] of [[70, 1900, "L70 v1900"], [150, 1100, "L150 v1100 (loops)"], [300, 600, "L300 v600"], [420, 300, "L420 v300"]]) {
     const a = stageAnchor(12000, -600);
@@ -264,7 +265,7 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
 
 // --- 3. Reeling in pumps by the rope ratio (angular momentum) -----------------------
 {
-  setKnobs({ "tether.swingDrag": 0, "tether.reelRate": 90, "world.gravitySwing": 0 });
+  setKnobs({ ...NO_CAP, "tether.swingDrag": 0, "tether.reelRate": 90, "world.gravitySwing": 0 });
   const a = stageAnchor(15000, -600);
   placeSwing(a, 300, 0.3, 600 / 300);
   quiet();
@@ -330,7 +331,7 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
 
 // --- 6. Degenerate grabs -----------------------------------------------------------------
 {
-  setKnobs({ "tether.swingDrag": 0, "tether.reelRate": 0 });
+  setKnobs({ ...NO_CAP, "tether.swingDrag": 0, "tether.reelRate": 0 });
   // Zero velocity, anchor above-ahead: hangs, then gravity swings it.
   let a = stageAnchor(24000 + 150, -400 - 150);
   placeGlide(24000, -400, 0, 0);
@@ -352,6 +353,77 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
   check("grab from above the anchor keeps heading forward", player.state === "swing" && finite() && player.vx > 0 && Math.abs(player.swingPhi) > Math.PI / 2, `φ ${(player.swingPhi * 180 / Math.PI).toFixed(0)}° vx ${player.vx.toFixed(0)}`);
   up();
   restoreKnobs();
+}
+
+// --- 7. The cap: the hook slips at the anchor's height ------------------------------------
+{
+  setKnobs({ "tether.swingDrag": 0, "tether.reelRate": 0 });
+  const a = stageAnchor(28000, -600);
+  placeSwing(a, 150, 0, 1300 / 150); // would loop
+  quiet();
+  let maxPhi = 0, slipSpeed = 0, preSpeed = 0, slipped = false, slipY = 0;
+  for (let i = 0; i < 240 && !slipped; i++) {
+    preSpeed = Math.hypot(player.vx, player.vy);
+    quiet(); frame();
+    if (player.state === "swing") maxPhi = Math.max(maxPhi, Math.abs(player.swingPhi));
+    else { slipped = true; slipSpeed = Math.hypot(player.vx, player.vy); slipY = player.y; }
+  }
+  check("a swing that would loop slips at the anchor's height instead", slipped && maxPhi <= Math.PI / 2 + 1e-9 && Math.abs(slipY - a.y) < 1.5, `max φ ${(maxPhi * 180 / Math.PI).toFixed(1)}°, slipped at y−anchor.y = ${(slipY - a.y).toFixed(1)}`);
+  check("the slip keeps the speed (no boost, no loss)", slipped && Math.abs(slipSpeed - preSpeed) / preSpeed < 0.02, `${preSpeed.toFixed(0)} → ${slipSpeed.toFixed(0)}`);
+  // Still holding: no re-grab, even with the anchor in reach.
+  let regrabbed = false;
+  for (let i = 0; i < 120; i++) { quiet(); frame(); if (player.state === "swing") regrabbed = true; }
+  check("a held finger does not re-grab after the slip", !regrabbed, `state ${player.state}`);
+  // Lift and press again: grabs.
+  up(); quiet(); frame();
+  player.x = a.x - 200; player.y = a.y + 150; player.vx = 500; player.vy = 0; game.camera.snapTo(player.x, player.y);
+  down();
+  let grabbed = false;
+  for (let i = 0; i < 10 && !grabbed; i++) { quiet(); frame(); grabbed = player.state === "swing"; }
+  check("a fresh press grabs again", grabbed);
+  up();
+  restoreKnobs();
+}
+
+// --- 8. The classic model is still the old rod ----------------------------------------------
+{
+  setKnobs({ "tether.swingDrag": 0 });
+  player.swingModel = "classic";
+  // Level flight into an anchor 30° up: the old projection keeps sin(30°) = 50% of speed.
+  const v0 = 700;
+  const a = stageAnchor(30000 + 300 * Math.cos(deg(30)), -300 - 300 * Math.sin(deg(30)));
+  placeGlide(30000, -300, v0, 0);
+  down(); quiet(); frame();
+  const kept = Math.hypot(player.vx, player.vy) / v0;
+  check("classic grab projects the velocity like before (keeps ~50% here)", player.state === "swing" && kept > 0.42 && kept < 0.58, `kept ${(100 * kept).toFixed(0)}% of speed`);
+  // and it can loop (no cap applied to the classic rod)
+  up(); quiet(); frame();
+  const b = stageAnchor(31000, -600);
+  placeSwing(b, 150, 0, 1300 / 150);
+  let above = false;
+  for (let i = 0; i < 120; i++) { quiet(); frame(); if (player.state === "swing" && player.y < b.y - 10) above = true; }
+  check("classic rod is unchanged (it may still loop)", above && player.state === "swing", `state ${player.state}`);
+  up();
+  player.swingModel = "pendulum";
+  restoreKnobs();
+}
+
+// --- 9. Restart run from the pause screen ------------------------------------------------------
+{
+  const a = stageAnchor(33000 + 300, -400 - 200);
+  placeGlide(33000, -400, 500, 0);
+  quiet(); frame(5);
+  game.runOrbs = 7;
+  const runsBefore = game.storage.data.runs;
+  const clockBefore = game.time;
+  const camBefore = game.camera.x;
+  game.togglePause();
+  check("paused", game.state === "paused");
+  game.restartRun();
+  frame(2);
+  check("restart starts a fresh run in place", game.state === "playing" && game.runOrbs === 0 && Math.abs(game.camera.x - camBefore) < 60 && game.time > clockBefore, `state ${game.state} orbs ${game.runOrbs} camera moved ${(game.camera.x - camBefore).toFixed(0)}`);
+  check("an abandoned run is not recorded", game.storage.data.runs === runsBefore);
+  check("music resumes after a restart from pause", game.sound.musicPaused === false);
 }
 
 console.log(failures ? `\n${failures} FAILED` : "\nall checks passed");

@@ -324,6 +324,10 @@ export class Sound {
   release() {
     this.blip(520, 0.22, "sawtooth", 0.1, 180);
   }
+  // The hook slipping off at the top of a swing: a soft falling tone.
+  slip() {
+    this.blip(420, 0.18, "triangle", 0.08, 140);
+  }
   perfect() {
     this.blip(660, 0.18, "triangle", 0.16, 990);
     this.blip(990, 0.26, "sine", 0.12, 1320);

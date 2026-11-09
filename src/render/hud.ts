@@ -67,6 +67,7 @@ export interface HudData {
   hintAlpha: number;
   character: CharacterId;
   characterName: string;
+  swingModel: "pendulum" | "classic"; // shown on the pause screen's toggle
 }
 
 interface Popup {
@@ -149,6 +150,21 @@ export class Hud {
     return { x: cam.w - ins.right - r - 20, y: ins.top + r + 20, r };
   }
 
+  /** The two pause-screen buttons (also the hit-test rectangles). */
+  pauseMenuButtons(cam: Camera): {
+    restart: { x: number; y: number; w: number; h: number };
+    swing: { x: number; y: number; w: number; h: number };
+  } {
+    const w = clamp(cam.w * 0.3, 220, 300);
+    const h = 44;
+    const x = cam.w / 2 - w / 2;
+    const top = cam.h * 0.42 + 88;
+    return {
+      restart: { x, y: top, w, h },
+      swing: { x, y: top + h + 14, w, h },
+    };
+  }
+
   playButton(cam: Camera): { x: number; y: number; r: number } {
     const r = clamp(cam.w * 0.055, 36, 48);
     // Bottom-anchored cap: the button and its TAP TO PLAY label must always
@@ -215,7 +231,7 @@ export class Hud {
     // --- Objectives (top-right) ---
     this.drawObjectives(ctx, cam, d);
 
-    if (paused) this.drawPauseOverlay(ctx, cam);
+    if (paused) this.drawPauseOverlay(ctx, cam, d);
 
     // --- Pause / resume (top-right corner, above overlay) ---
     this.drawPauseButton(ctx, cam, paused);
@@ -369,11 +385,12 @@ export class Hud {
     }
   }
 
-  private drawPauseOverlay(ctx: CanvasRenderingContext2D, cam: Camera) {
+  private drawPauseOverlay(ctx: CanvasRenderingContext2D, cam: Camera, d: HudData) {
     ctx.fillStyle = hexA("#0a0d24", 0.42);
     ctx.fillRect(0, 0, cam.w, cam.h);
 
     ctx.textAlign = "center";
+    ctx.textBaseline = "top";
     this.text(
       ctx,
       "PAUSED",
@@ -395,6 +412,35 @@ export class Hud {
       hexA(PALETTE.textDim, pulse),
       true
     );
+
+    // Restart the run, and the swing-physics switch (for comparing the two
+    // models in play; remembered between sessions).
+    const b = this.pauseMenuButtons(cam);
+    this.pauseButtonBox(ctx, b.restart, "RESTART RUN", PALETTE.text);
+    this.pauseButtonBox(
+      ctx,
+      b.swing,
+      d.swingModel === "pendulum" ? "SWING: NEW  ·  tap for classic" : "SWING: CLASSIC  ·  tap for new",
+      d.swingModel === "pendulum" ? PALETTE.collectible : PALETTE.anchorPerfect
+    );
+    ctx.textBaseline = "top";
+  }
+
+  private pauseButtonBox(
+    ctx: CanvasRenderingContext2D,
+    r: { x: number; y: number; w: number; h: number },
+    label: string,
+    color: string
+  ) {
+    ctx.fillStyle = hexA(PALETTE.text, 0.12);
+    this.roundRect(ctx, r.x, r.y, r.w, r.h, 12);
+    ctx.fill();
+    ctx.strokeStyle = hexA(color, 0.7);
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    this.text(ctx, label, r.x + r.w / 2, r.y + r.h / 2, 13, "800", color);
   }
 
   private drawObjectives(ctx: CanvasRenderingContext2D, cam: Camera, d: HudData) {

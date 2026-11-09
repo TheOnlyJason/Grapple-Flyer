@@ -4,6 +4,7 @@ import { getPlayerSprite, isPlayerSpriteReady, PLAYER_SPRITE } from "../render/p
 import { drawMonkey, computeLatchArmAngle, monkeyShoulder, type LatchArm } from "../render/drawMonkey";
 import { drawNyanCat, NYAN_RAINBOW } from "../render/drawNyanCat";
 import type { CharacterId } from "../characters/registry";
+import type { SwingModel } from "../core/storage";
 import { angleDelta, clamp, rad, TAU } from "../core/math";
 import { makeScratch, Scratch } from "../render/rcache";
 import { Anchor, hexA } from "./anchor";
@@ -21,6 +22,7 @@ export interface ReleaseInfo {
 export type PlayerEvent =
   | { type: "grab"; x: number; y: number; moving: boolean }
   | { type: "release"; info: ReleaseInfo }
+  | { type: "slip"; x: number; y: number } // the hook let go at the top of the swing
   | { type: "dash"; x: number; y: number };
 
 interface TrailPoint {
@@ -48,6 +50,12 @@ export class Player {
   // plain world position and velocity.
   swingPhi = 0;
   swingOmega = 0;
+  // Which swing to simulate. "pendulum" conserves energy; "classic" is the
+  // original rod that bled it (kept so the two can be compared in play).
+  swingModel: SwingModel = "pendulum";
+  // After the hook slips, the held finger must be lifted and pressed again
+  // before it can grab — otherwise it would re-latch the same anchor at once.
+  private holdConsumed = false;
 
   inPerfectWindow = false;
   perfectQuality = 0;
@@ -82,6 +90,7 @@ export class Player {
     this.dashTime = 0;
     this.hazardInvuln = 0;
     this.grabLockout = 0;
+    this.holdConsumed = false;
     this.smashGlow = false;
     this.latchArm = "right";
     this.nextLatchArm = "right";
@@ -101,6 +110,7 @@ export class Player {
     this.dashTime = 0;
     this.hazardInvuln = 0;
     this.grabLockout = 0;
+    this.holdConsumed = false;
     this.smashGlow = false;
     this.latchArm = "right";
     this.nextLatchArm = "right";
@@ -160,29 +170,7 @@ export class Player {
     // (findGrabTarget already rejects anchors closer than 6 px.)
     const L = Math.max(Math.hypot(rx, ry), 6);
     this.ropeLen = L;
-    this.swingPhi = Math.atan2(rx, ry);
-    // The hook is a frictionless redirect, not a rope snapping taut: the
-    // player's whole speed relative to the anchor becomes swing speed, in the
-    // sense of rotation the player was already moving. Nothing is lost.
-    const tx = ry / L;
-    const ty = -rx / L; // tangent of increasing phi
-    const ux = this.vx;
-    const uy = this.vy - anchor.vyAt(t0);
-    const u = Math.hypot(ux, uy);
-    if (u < 1e-6) {
-      this.swingOmega = 0;
-    } else {
-      const ut = ux * tx + uy * ty;
-      const s =
-        Math.abs(ut) > 1e-3 * u
-          ? Math.sign(ut) // keep turning the way we were going
-          : Math.abs(tx) > 1e-3
-          ? Math.sign(tx) // dead-on radial: take the tangent that heads forward
-          : this.swingPhi !== 0
-          ? -Math.sign(this.swingPhi) // level with the anchor: swing downward
-          : 1;
-      this.swingOmega = (s * u) / L;
-    }
+    if (this.swingModel === "pendulum") this.syncSwingToVelocity(anchor, t0);
     this.state = "swing";
     this.swingTime = 0;
     anchor.used = true;
@@ -255,10 +243,11 @@ export class Player {
       this.hazardInvuln = Math.max(0, this.hazardInvuln - dt);
     }
     if (this.grabLockout > 0) this.grabLockout = Math.max(0, this.grabLockout - dt);
+    if (!holding) this.holdConsumed = false;
 
     switch (this.state) {
       case "glide": {
-        if (holding && this.grabLockout <= 0) {
+        if (holding && this.grabLockout <= 0 && !this.holdConsumed) {
           const target = this.findGrabTarget(anchors, view);
           if (target) {
             this.grab(target, time - dt);
@@ -312,7 +301,52 @@ export class Player {
   // rope getting shorter really does speed the player up) and the explicit
   // air drag knob. `time` is the end of this step; the anchor's pose at the
   // start of it is `time - dt`.
+  /**
+   * Set the pendulum state from the current position and velocity. The hook
+   * is a frictionless redirect, not a rope snapping taut: the player's whole
+   * speed relative to the anchor becomes swing speed, in the sense of
+   * rotation the player was already moving. Nothing is lost.
+   */
+  private syncSwingToVelocity(anchor: Anchor, t0: number) {
+    const rx = this.x - anchor.x;
+    const ry = this.y - anchor.y;
+    const L = this.ropeLen;
+    this.swingPhi = Math.atan2(rx, ry);
+    const tx = ry / L;
+    const ty = -rx / L; // tangent of increasing phi
+    const ux = this.vx;
+    const uy = this.vy - anchor.vyAt(t0);
+    const u = Math.hypot(ux, uy);
+    if (u < 1e-6) {
+      this.swingOmega = 0;
+      return;
+    }
+    const ut = ux * tx + uy * ty;
+    const s =
+      Math.abs(ut) > 1e-3 * u
+        ? Math.sign(ut) // keep turning the way we were going
+        : Math.abs(tx) > 1e-3
+        ? Math.sign(tx) // dead-on radial: take the tangent that heads forward
+        : this.swingPhi !== 0
+        ? -Math.sign(this.swingPhi) // level with the anchor: swing downward
+        : 1;
+    this.swingOmega = (s * u) / L;
+  }
+
+  /** Switch swing models mid-flight (the pause-screen toggle); keeps the motion continuous. */
+  setSwingModel(model: SwingModel, time: number) {
+    if (model === this.swingModel) return;
+    this.swingModel = model;
+    if (model === "pendulum" && this.state === "swing" && this.anchor) {
+      this.syncSwingToVelocity(this.anchor, time);
+    }
+  }
+
   private stepSwing(dt: number, holding: boolean, time: number) {
+    if (this.swingModel === "classic") {
+      this.stepSwingClassic(dt, holding);
+      return;
+    }
     const a = this.anchor;
     if (!a) return;
     this.swingTime += dt;
@@ -343,6 +377,13 @@ export class Player {
     if (omega > vmax) omega = vmax;
     else if (omega < -vmax) omega = -vmax;
 
+    // The swing cannot carry the player above the anchor. Reaching the cap
+    // while still rising, the hook slips: the player keeps the speed they
+    // have and flies on from the cap angle.
+    const cap = rad(T.maxSwingAngleDeg);
+    const slipped = Math.abs(phi) >= cap && Math.sign(omega) === Math.sign(phi);
+    if (slipped) phi = Math.sign(phi) * cap;
+
     this.ropeLen = L;
     this.swingPhi = phi;
     this.swingOmega = omega;
@@ -355,6 +396,61 @@ export class Player {
     this.vx = L * omega * cos;
     this.vy = a.vyAt(time) - L * omega * sin;
 
+    if (slipped) {
+      this.slip(a);
+      return;
+    }
+    this.evaluatePerfect();
+    if (this.inPerfectWindow) a.perfectGlow = 1;
+  }
+
+  // The hook lets go at the top of the swing: free flight with the current
+  // velocity, no boost, and the held finger has to press again to grab.
+  private slip(anchor: Anchor) {
+    this.events.push({ type: "slip", x: anchor.x, y: anchor.y });
+    this.anchor = null;
+    this.state = "glide";
+    this.inPerfectWindow = false;
+    this.perfectQuality = 0;
+    this.holdConsumed = true;
+    this.grabLockout = 0.25;
+  }
+
+  // The original swing, kept verbatim for comparison: semi-implicit Euler, a
+  // position snap onto the rope circle and a velocity projection onto the
+  // tangent. It bleeds energy at the grab and every step, which is why it
+  // was replaced; "classic" in the pause menu selects it.
+  private stepSwingClassic(dt: number, holding: boolean) {
+    const a = this.anchor;
+    if (!a) return;
+    this.swingTime += dt;
+
+    this.vy += CONFIG.world.gravitySwing * dt;
+
+    if (holding && this.ropeLen > CONFIG.tether.minRope) {
+      this.ropeLen = Math.max(
+        CONFIG.tether.minRope,
+        this.ropeLen - CONFIG.tether.classicReelRate * dt
+      );
+    }
+
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+
+    const dx = this.x - a.x;
+    const dy = this.y - a.y;
+    const d = Math.hypot(dx, dy) || 1e-6;
+    const nx = dx / d;
+    const ny = dy / d;
+
+    this.x = a.x + nx * this.ropeLen;
+    this.y = a.y + ny * this.ropeLen;
+
+    const vrad = this.vx * nx + this.vy * ny;
+    this.vx -= vrad * nx;
+    this.vy -= vrad * ny;
+
+    this.clampSpeed();
     this.evaluatePerfect();
     if (this.inPerfectWindow) a.perfectGlow = 1;
   }

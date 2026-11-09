@@ -9,7 +9,11 @@ interface SaveData {
   totalPerfect: number;
   orbs: number; // banked currency
   character: CharacterId;
+  swingModel: SwingModel; // "pendulum" (energy-conserving) or "classic" (the old rod)
 }
+
+export type SwingModel = "pendulum" | "classic";
+export const isSwingModel = (v: unknown): v is SwingModel => v === "pendulum" || v === "classic";
 
 const KEY = "gale.save.v1";
 
@@ -27,6 +31,7 @@ const DEFAULT: SaveData = {
   totalPerfect: 0,
   orbs: 0,
   character: "plane",
+  swingModel: "pendulum",
 };
 
 export class Storage {
@@ -45,6 +50,7 @@ export class Storage {
           ...DEFAULT,
           ...parsed,
           character: isCharacterId(parsed.character) ? parsed.character : "plane",
+          swingModel: isSwingModel(parsed.swingModel) ? parsed.swingModel : "pendulum",
         };
         // Saves from before orbs existed (or a hand-edited value) bank nothing.
         this.data.orbs = cleanOrbs(parsed.orbs);
@@ -76,6 +82,11 @@ export class Storage {
 
   setCharacter(id: CharacterId) {
     this.data.character = id;
+    this.save();
+  }
+
+  setSwingModel(model: SwingModel) {
+    this.data.swingModel = model;
     this.save();
   }
 }
