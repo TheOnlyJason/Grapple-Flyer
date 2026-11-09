@@ -68,6 +68,10 @@ export const CONFIG = {
     maxSwingAngleDeg: 90,
     // The "classic" swing model (the pre-pendulum rod) kept its own reel rate.
     classicReelRate: 90,
+    // A press grabs only if an anchor is in reach at that moment — or comes
+    // into reach within this many seconds. Holding never latches onto an
+    // anchor by itself: that is what makes grabbing a deliberate act.
+    grabBuffer: 0.15,
     releaseBoost: 1.07, // velocity multiplier on a normal release
     perfectBoost: 1.45, // velocity multiplier on a perfect release
     perfectBonusSpeed: 130, // additive speed on perfect
@@ -142,6 +146,14 @@ export const CONFIG = {
     perfectPoints: 250,
     collectPoints: 60,
     skimPointsPerSec: 40,
+    flipPoints: 100, // the n-th backflip in one hold scores n × this
+  },
+
+  // Tricks: press and hold in open sky (no anchor in reach) to backflip.
+  tricks: {
+    flipRate: 10, // rad/s of rotation while holding (a full flip every ~0.63 s)
+    flipSpeedLoss: 0.08, // speed scrubbed by each completed flip
+    settleRate: 14, // how fast the character rights itself after letting go
   },
 } as const;
 

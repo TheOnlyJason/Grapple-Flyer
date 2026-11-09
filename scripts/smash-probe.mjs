@@ -154,6 +154,7 @@ if (process.env.GALE_KNOBS) {
 const SMASH = CFG.player.smashSpeed;
 const armedNow = () => ("smashArmed" in game ? game.smashArmed : player.speed >= SMASH);
 function restart() {
+  while (game.state === "crashing") frame(); // a sea skid at smash speeds lasts 3.5–4 s
   for (let i = 0; i < 400 && game.state !== "playing"; i++) {
     if (i % 60 === 30) dispatch("pointerdown", { clientX: 640, clientY: 360, pointerId: 1 });
     if (i % 60 === 32) dispatch("pointerup", { clientX: 640, clientY: 360, pointerId: 1 });

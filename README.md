@@ -28,7 +28,8 @@ play entirely from the keyboard.
 | Action | Touch / Mouse | Keyboard |
 | --- | --- | --- |
 | **Glide** | do nothing | — |
-| **Tether & swing** | tap **and hold** | hold `Space` / `↑` / `W` |
+| **Tether & swing** | **press** when an anchor is lit cyan, and hold | press `Space` / `↑` / `W` and hold |
+| **Backflip** | **hold** in open sky (no anchor in reach) | hold the same key |
 | **Slingshot launch** | release | release the hold key |
 | **Wind Dash** (gauge full) | tap the **DASH** button | `Shift` / `D` |
 | Mute / unmute | — | `M` |
@@ -38,8 +39,14 @@ play entirely from the keyboard.
 
 1. **Glide** forward, losing altitude slowly. Scan for the next anchor (it lights
    up cyan when it's the one you'll grab).
-2. **Hold** to tether. Gravity swings you in an arc and your descent becomes
-   rotational energy. Holding also reels the rope in slightly, giving you lift.
+2. **Press** while it is lit to tether. Only a fresh press grabs (with a
+   0.15 s grace so a press a hair early still lands); a hold that is already
+   running never latches onto the next anchor on its own. Gravity swings you
+   in an arc and your descent becomes rotational energy. Holding also reels
+   the rope in slightly, giving you lift.
+   - **Hold in open sky** instead and you backflip: each full turn scores
+     100 × n (BACKFLIP, DOUBLE FLIP, TRIPLE FLIP…) and scrubs 8% of your
+     speed, so flips trade momentum for points.
 3. **Release** to slingshot. Let go as the rope glows **gold** (pointing up &
    forward) for a **PERFECT** launch: bonus speed, score, Wind Gauge, and a
    screen pop.
@@ -93,6 +100,9 @@ ones:
 - `tether.idealLaunchAngleDeg` / `perfectToleranceDeg` — where and how forgiving
   the **perfect** window is.
 - `tether.perfectBoost` / `releaseBoost` — how rewarding good timing is.
+- `tether.grabBuffer` — how early a press may land before an anchor is in reach.
+- `tricks.flipRate` / `flipSpeedLoss` / `scoring.flipPoints` — how fast a
+  backflip turns, what it costs, what it pays.
 - `player.cruiseSpeed` / `forwardDrag` — glide pace and how long launches persist.
 - `world.seaLevel` — how much altitude headroom you have before the run ends.
 

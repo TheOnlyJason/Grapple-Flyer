@@ -400,12 +400,19 @@ export class Game {
 
     this.handleStateInput();
 
+    // A fresh press while playing is a grab attempt (or a backflip in open
+    // sky). The press that started the run does not count (timeInState is
+    // still 0 on that frame), nor does a press that landed on the dash button.
+    if (this.state === "playing" && this.timeInState > 0 && this.input.pressed && !this.dashLatch) {
+      this.player.pressTether();
+    }
+
     if (this.state !== "paused") {
       // World streaming runs once per rendered frame, not per 120 Hz sub-step:
       // the 700px spawn / 500px cull buffers dwarf per-frame camera movement.
       // ensure() before the step loop so anchors exist for the physics steps;
       // cull() after it, once the camera has settled for this frame.
-      this.world.ensure(this.camera.right);
+      this.world.ensure(this.camera.right, this.player.y);
       this.acc += dt;
       let steps = 0;
       while (this.acc >= CONFIG.fixedDt && steps < 8) {
@@ -653,6 +660,16 @@ export class Game {
             color: theme.anchorRing,
           });
           if (e.moving) this.objectives.report("moving", 1);
+          break;
+        }
+        case "flip": {
+          const points = CONFIG.scoring.flipPoints * e.n;
+          this.bonus += points;
+          this.objectives.report("flip", 1);
+          const name = e.n === 1 ? "BACKFLIP" : e.n === 2 ? "DOUBLE FLIP" : e.n === 3 ? "TRIPLE FLIP" : `${e.n}× FLIP`;
+          this.hud.popup(e.x, e.y - 34, `${name} +${points}`, theme.anchorPerfect, 1 + Math.min(0.4, 0.1 * e.n));
+          this.sound.flip(e.n);
+          this.camera.addShake(2);
           break;
         }
         case "slip": {
@@ -1031,7 +1048,7 @@ export class Game {
       muted: !this.sound.enabled,
       newBest: this.newBest,
       perfectCount: this.perfectCount,
-      hint: "Hold to swing  ·  release to slingshot",
+      hint: "Press near an anchor to swing  ·  hold in open sky to backflip",
       hintAlpha: this.state === "playing" ? hintAlpha : 0,
       character: this.storage.data.character,
       characterName: characterName(this.storage.data.character),

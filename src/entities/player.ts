@@ -23,6 +23,7 @@ export type PlayerEvent =
   | { type: "grab"; x: number; y: number; moving: boolean }
   | { type: "release"; info: ReleaseInfo }
   | { type: "slip"; x: number; y: number } // the hook let go at the top of the swing
+  | { type: "flip"; n: number; x: number; y: number } // the n-th backflip of one hold completed
   | { type: "dash"; x: number; y: number };
 
 interface TrailPoint {
@@ -53,9 +54,15 @@ export class Player {
   // Which swing to simulate. "pendulum" conserves energy; "classic" is the
   // original rod that bled it (kept so the two can be compared in play).
   swingModel: SwingModel = "pendulum";
-  // After the hook slips, the held finger must be lifted and pressed again
-  // before it can grab — otherwise it would re-latch the same anchor at once.
-  private holdConsumed = false;
+  // Grabbing is a deliberate act: only a fresh press grabs, and only if an
+  // anchor is in reach at that moment (or within tether.grabBuffer seconds).
+  // `wantsGrab` is the remaining grace after a press.
+  private wantsGrab = 0;
+  // Backflip: holding in open sky spins the character. `flipSpin` is the
+  // extra rotation drawn on top of the flight angle (negative = backward).
+  flipping = false;
+  flipSpin = 0;
+  private flipsInHold = 0;
 
   inPerfectWindow = false;
   perfectQuality = 0;
@@ -90,7 +97,10 @@ export class Player {
     this.dashTime = 0;
     this.hazardInvuln = 0;
     this.grabLockout = 0;
-    this.holdConsumed = false;
+    this.wantsGrab = 0;
+    this.flipping = false;
+    this.flipSpin = 0;
+    this.flipsInHold = 0;
     this.smashGlow = false;
     this.latchArm = "right";
     this.nextLatchArm = "right";
@@ -110,7 +120,10 @@ export class Player {
     this.dashTime = 0;
     this.hazardInvuln = 0;
     this.grabLockout = 0;
-    this.holdConsumed = false;
+    this.wantsGrab = 0;
+    this.flipping = false;
+    this.flipSpin = 0;
+    this.flipsInHold = 0;
     this.smashGlow = false;
     this.latchArm = "right";
     this.nextLatchArm = "right";
@@ -215,6 +228,7 @@ export class Player {
       this.anchor = null;
     }
     this.state = "dash";
+    this.flipping = false;
     this.inPerfectWindow = false; // a dash out of the window must not leave the aura gold
     this.perfectQuality = 0;
     this.dashTime = CONFIG.wind.dashDuration;
@@ -243,18 +257,27 @@ export class Player {
       this.hazardInvuln = Math.max(0, this.hazardInvuln - dt);
     }
     if (this.grabLockout > 0) this.grabLockout = Math.max(0, this.grabLockout - dt);
-    if (!holding) this.holdConsumed = false;
+    if (!holding) {
+      this.wantsGrab = 0;
+      this.flipping = false;
+      this.flipsInHold = 0;
+    }
 
     switch (this.state) {
       case "glide": {
-        if (holding && this.grabLockout <= 0 && !this.holdConsumed) {
+        if (holding && this.wantsGrab > 0 && this.grabLockout <= 0) {
           const target = this.findGrabTarget(anchors, view);
           if (target) {
+            this.wantsGrab = 0;
+            this.flipping = false;
+            this.flipSpin = 0;
             this.grab(target, time - dt);
             this.stepSwing(dt, holding, time);
             break;
           }
+          this.wantsGrab = Math.max(0, this.wantsGrab - dt);
         }
+        if (this.flipping) this.stepFlip(dt);
         this.stepGlide(dt);
         break;
       }
@@ -273,8 +296,40 @@ export class Player {
       }
     }
 
+    if (!this.flipping && this.flipSpin !== 0) {
+      // Right the character the short way round.
+      let s = this.flipSpin % TAU;
+      if (s > Math.PI) s -= TAU;
+      else if (s <= -Math.PI) s += TAU;
+      s -= s * Math.min(1, dt * CONFIG.tricks.settleRate);
+      this.flipSpin = Math.abs(s) < 0.002 ? 0 : s;
+    }
     this.updateAngle(dt);
     this.recordTrail();
+  }
+
+  /**
+   * A fresh press (pointer or key). Grabs the anchor in reach, if there is
+   * one now or within the grace; otherwise — in open sky — the hold becomes
+   * a backflip. Called once per press by the game, never for a held finger.
+   */
+  pressTether() {
+    if (this.state !== "glide" || !this.alive) return;
+    this.wantsGrab = CONFIG.tether.grabBuffer;
+    this.flipping = true;
+    this.flipsInHold = 0;
+  }
+
+  // Spin backward while held; each full turn scores and scrubs some speed.
+  private stepFlip(dt: number) {
+    const before = Math.floor(-this.flipSpin / TAU);
+    this.flipSpin -= CONFIG.tricks.flipRate * dt;
+    const after = Math.floor(-this.flipSpin / TAU);
+    if (after > before) {
+      this.flipsInHold += 1;
+      this.scaleVelocity(1 - CONFIG.tricks.flipSpeedLoss);
+      this.events.push({ type: "flip", n: this.flipsInHold, x: this.x, y: this.y });
+    }
   }
 
   private stepGlide(dt: number) {
@@ -353,6 +408,7 @@ export class Player {
     const T = CONFIG.tether;
     const g = CONFIG.world.gravitySwing;
     const t0 = time - dt;
+    const L0 = this.ropeLen;
     let L = this.ropeLen;
     let phi = this.swingPhi;
     let omega = this.swingOmega;
@@ -393,8 +449,10 @@ export class Player {
     const cos = Math.cos(phi);
     this.x = a.x + L * sin;
     this.y = a.yAt(time) + L * cos;
-    this.vx = L * omega * cos;
-    this.vy = a.vyAt(time) - L * omega * sin;
+    // World velocity = anchor velocity + tangential swing + the reel's inward pull.
+    const reel = (L0 - L) / dt;
+    this.vx = L * omega * cos - reel * sin;
+    this.vy = a.vyAt(time) - L * omega * sin - reel * cos;
 
     if (slipped) {
       this.slip(a);
@@ -412,7 +470,6 @@ export class Player {
     this.state = "glide";
     this.inPerfectWindow = false;
     this.perfectQuality = 0;
-    this.holdConsumed = true;
     this.grabLockout = 0.25;
   }
 
@@ -926,7 +983,7 @@ export class Player {
 
     ctx.save();
     ctx.translate(this.x, this.y);
-    ctx.rotate(this.angle);
+    ctx.rotate(this.angle + this.flipSpin);
 
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
@@ -963,7 +1020,7 @@ export class Player {
 
     ctx.save();
     ctx.translate(this.x, this.y);
-    ctx.rotate(this.angle);
+    ctx.rotate(this.angle + this.flipSpin);
 
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
@@ -1027,7 +1084,7 @@ export class Player {
 
     ctx.save();
     ctx.translate(this.x, this.y);
-    ctx.rotate(this.angle);
+    ctx.rotate(this.angle + this.flipSpin);
 
     ctx.save();
     ctx.globalCompositeOperation = "lighter";

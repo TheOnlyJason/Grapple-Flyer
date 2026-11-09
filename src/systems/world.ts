@@ -170,7 +170,11 @@ export class World {
     return clamp((this.genX - this.runOriginX) / 13000, 0, 1);
   }
 
-  ensure(cameraRight: number) {
+  /** The player's altitude, so a lofted player still finds anchors to grab. */
+  private playerY = 0;
+
+  ensure(cameraRight: number, playerY = this.playerY) {
+    this.playerY = playerY;
     while (this.genX < cameraRight + SPAWN_BUFFER) {
       this.generateSegment();
     }
@@ -192,19 +196,24 @@ export class World {
     // outgrows a good slingshot, and the rescue spawns EARLY in the segment
     // at a mid-altitude band the player can actually reach.
     const drought = segEnd - this.lastAnchorX > 850;
+    // A big launch can loft the player above the anchor band; rather than
+    // leave them in empty sky for seconds, hang the next anchor near them.
+    const skyRescue = this.playerY < top;
     const emptyChance = lerp(0.08, 0.28, diff);
     let anchorCount = 0;
-    if (drought || !rng.chance(emptyChance)) {
+    if (drought || skyRescue || !rng.chance(emptyChance)) {
       anchorCount = rng.int(1, diff > 0.45 ? 2 : 1);
     }
 
     const segAnchors: Anchor[] = [];
     for (let i = 0; i < anchorCount; i++) {
-      const rescue = drought && i === 0;
+      const rescue = (drought || skyRescue) && i === 0;
       const ax = rescue
         ? rng.range(segStart + 40, Math.min(segEnd - 60, segStart + 260))
         : rng.range(segStart + 60, segEnd - 60);
-      const ay = rescue
+      const ay = skyRescue && i === 0
+        ? Math.max(CONFIG.world.skyCeiling - 600, rng.range(this.playerY - 120, this.playerY + 260))
+        : rescue
         ? rng.range(-650, Math.min(bottom, 350))
         : rng.range(top, bottom);
       const moving = rng.chance(lerp(0.06, 0.38, diff));

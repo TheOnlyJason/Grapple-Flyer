@@ -147,27 +147,47 @@ function tick(n, dtMs = 16.6) {
 // 1) Menu frames.
 tick(20);
 assert(game.state === "menu", `expected menu state, got ${game.state}`);
-// 2) Start the run + hold to swing (pointerdown).
+// 2) Start the run with a tap. Grabbing is a deliberate press: a press only
+//    grabs when an anchor is in reach, so wait for one, then press and hold.
 dispatch("pointerdown", { clientX: 400, clientY: 300, pointerId: 1 });
-tick(8);
+tick(2);
+dispatch("pointerup", { clientX: 400, clientY: 300, pointerId: 1 });
+tick(6);
 assert(game.state === "playing", `run did not start (state=${game.state})`);
 const startX = game.player.x;
+const inReach = () => !!game.player.findGrabTarget(game.world.anchors, game.camera);
 let sawSwing = false;
+for (let i = 0; i < 240 && !inReach(); i++) tick(1);
+dispatch("pointerdown", { clientX: 400, clientY: 300, pointerId: 1 });
 for (let i = 0; i < 112; i++) {
   tick(1);
   if (game.player.state === "swing") sawSwing = true;
 }
-assert(sawSwing, "player never entered the swing state while holding near an anchor");
+assert(sawSwing, "player never entered the swing state after pressing near an anchor");
 // 3) Release -> slingshot.
 dispatch("pointerup", { clientX: 400, clientY: 300, pointerId: 1 });
 tick(60);
 assert(game.player.x > startX, "player did not make forward progress");
-// 4) A few grab/release cycles.
+// 4) A few grab/release cycles, pressing when an anchor is in reach; and one
+//    hold in open sky, which should backflip rather than grab.
 for (let c = 0; c < 6; c++) {
+  for (let i = 0; i < 240 && !inReach(); i++) tick(1);
   dispatch("pointerdown", { clientX: 400, clientY: 300, pointerId: 1 });
   tick(45);
   dispatch("pointerup", { clientX: 400, clientY: 300, pointerId: 1 });
   tick(35);
+}
+{
+  for (let i = 0; i < 240 && inReach(); i++) tick(1); // wait for open sky
+  if (!inReach() && game.state === "playing") {
+    const spin0 = game.player.flipSpin;
+    dispatch("pointerdown", { clientX: 400, clientY: 300, pointerId: 1 });
+    tick(30);
+    assert(game.player.state !== "swing", "a hold in open sky grabbed an anchor");
+    assert(game.player.flipSpin !== spin0, "a hold in open sky did not start a backflip");
+    dispatch("pointerup", { clientX: 400, clientY: 300, pointerId: 1 });
+    tick(30);
+  }
 }
 // 5) Trigger a dash via keyboard.
 dispatch("keydown", { code: "KeyD" });

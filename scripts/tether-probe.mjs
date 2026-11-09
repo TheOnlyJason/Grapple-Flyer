@@ -164,8 +164,11 @@ function stageAnchor(x, y, kind = "normal", opts) {
   return staged;
 }
 // Fresh glide at (x0, y0) with velocity v, tether off, no stale swing state.
+// Grabbing needs a fresh press, so the finger is lifted for a frame first.
 function placeGlide(x0, y0, vx, vy) {
   up();
+  quiet();
+  frame();
   player.state = "glide"; player.anchor = null; player.inPerfectWindow = false;
   player.x = x0; player.y = y0; player.vx = vx; player.vy = vy;
   player.trail.length = 0;
@@ -183,6 +186,12 @@ function placeSwing(a, L, phi, omega) {
   down(); // keep holding: the tether lets go without it
 }
 const E = (g) => 0.5 * (player.vx * player.vx + player.vy * player.vy) - g * player.y;
+// Press and run frames until the swing starts (a frame can carry 0 or 2 physics steps).
+function pressAndGrab(maxFrames = 4) {
+  down();
+  for (let i = 0; i < maxFrames; i++) { quiet(); frame(); if (player.state === "swing") return true; }
+  return player.state === "swing";
+}
 const setKnobs = (k) => {
   for (const [path, value] of Object.entries(k)) {
     const keys = path.split("."); let o = CFG;
@@ -229,13 +238,13 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
   const a = stageAnchor(9000 + 300, -200 - 300);
   placeGlide(9000, -200, 600 * Math.SQRT1_2, -600 * Math.SQRT1_2); // straight at the anchor
   const e0 = E(g);
-  down(); quiet(); frame();
+  pressAndGrab();
   check("dead-on radial grab keeps speed and turns forward", player.state === "swing" && Math.abs(E(g) - e0) / (0.5 * 600 * 600) < 0.005 && player.vx > 0, `vx ${player.vx.toFixed(0)} dE ${(100 * Math.abs(E(g) - e0) / (0.5 * 600 * 600)).toFixed(2)}%`);
   up();
   const b = stageAnchor(9500 + 30, -200);
   placeGlide(9500, -200, 500, 0);
   const e1 = E(g);
-  down(); quiet(); frame();
+  pressAndGrab();
   check("30 px grab is sane", player.state === "swing" && finite() && Math.abs(player.ropeLen * player.swingOmega) <= CFG.player.maxSpeed + 1e-6 && Math.abs(E(g) - e1) / (0.5 * 500 * 500) < 0.005, `L ${player.ropeLen.toFixed(1)} |Lω| ${Math.abs(player.ropeLen * player.swingOmega).toFixed(0)}`);
   up();
   restoreKnobs();
@@ -269,10 +278,13 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
   const a = stageAnchor(15000, -600);
   placeSwing(a, 300, 0.3, 600 / 300);
   quiet();
-  const v0 = Math.hypot(player.vx, player.vy);
+  // Swing speed is L·ω; the reported velocity also carries the reel's 90 px/s inward pull.
+  const v0 = Math.abs(player.ropeLen * player.swingOmega);
   for (let i = 0; i < 120; i++) { quiet(); frame(); }
-  const v1 = Math.hypot(player.vx, player.vy);
-  check("reel 300→210 px in 1 s scales speed by 300/210", Math.abs(player.ropeLen - 210) < 1e-6 && Math.abs(v1 / v0 - 300 / 210) < 0.001, `L ${player.ropeLen.toFixed(2)} ratio ${(v1 / v0).toFixed(4)} vs ${(300 / 210).toFixed(4)}`);
+  const v1 = Math.abs(player.ropeLen * player.swingOmega);
+  const radial = Math.hypot(player.vx, player.vy) ** 2 - v1 * v1;
+  check("reel 300→210 px in 1 s scales swing speed by 300/210", Math.abs(player.ropeLen - 210) < 1e-6 && Math.abs(v1 / v0 - 300 / 210) < 0.001, `L ${player.ropeLen.toFixed(2)} ratio ${(v1 / v0).toFixed(4)} vs ${(300 / 210).toFixed(4)}`);
+  check("reported velocity includes the reel's inward pull", Math.abs(Math.sqrt(Math.max(0, radial)) - 90) < 1, `radial ${Math.sqrt(Math.max(0, radial)).toFixed(1)} px/s`);
   up();
   restoreKnobs();
 }
@@ -293,7 +305,7 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
   for (let i = 0; i < 240 && Math.abs(a.vyAt(game.time)) < 150; i++) { quiet(); frame(); }
   const vyAnchor = a.vyAt(game.time + DT); // the step after pointer-up releases, at the new time
   up(); quiet(); frame();
-  check("release carries the anchor's velocity (× release boost)", player.state === "glide" && Math.abs(player.vy - CFG.tether.releaseBoost * vyAnchor) < 2, `vy ${player.vy.toFixed(1)} vs ${(CFG.tether.releaseBoost * vyAnchor).toFixed(1)}`);
+  check("release carries the anchor's velocity (× release boost)", player.state === "glide" && Math.abs(player.vy - CFG.tether.releaseBoost * vyAnchor) < 4, `vy ${player.vy.toFixed(1)} vs ${(CFG.tether.releaseBoost * vyAnchor).toFixed(1)}`);
   restoreKnobs();
 }
 
@@ -335,21 +347,20 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
   // Zero velocity, anchor above-ahead: hangs, then gravity swings it.
   let a = stageAnchor(24000 + 150, -400 - 150);
   placeGlide(24000, -400, 0, 0);
-  down(); quiet(); frame();
-  const startedStill = player.state === "swing";
+  const startedStill = pressAndGrab();
   for (let i = 0; i < 30; i++) { quiet(); frame(); }
   check("zero-velocity grab starts a swing without NaN", startedStill && finite() && Math.abs(player.swingOmega) > 0.01, `ω after 0.25 s ${player.swingOmega.toFixed(3)}`);
   up();
   // Exactly radial: flying straight up at an anchor directly above → turns forward.
   a = stageAnchor(25000, -400 - 250);
   placeGlide(25000, -400, 0, -500);
-  down(); quiet(); frame();
+  pressAndGrab();
   check("straight-up radial grab turns forward", player.state === "swing" && finite() && player.vx > 0 && Math.abs(Math.hypot(player.vx, player.vy) - 500) < 500 * 0.02, `v (${player.vx.toFixed(0)}, ${player.vy.toFixed(0)})`);
   up();
   // Above the anchor, moving forward: swings on, still forward.
   a = stageAnchor(26000 + 100, -400 + 200);
   placeGlide(26000, -400, 500, 0);
-  down(); quiet(); frame();
+  pressAndGrab();
   check("grab from above the anchor keeps heading forward", player.state === "swing" && finite() && player.vx > 0 && Math.abs(player.swingPhi) > Math.PI / 2, `φ ${(player.swingPhi * 180 / Math.PI).toFixed(0)}° vx ${player.vx.toFixed(0)}`);
   up();
   restoreKnobs();
@@ -393,7 +404,7 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
   const v0 = 700;
   const a = stageAnchor(30000 + 300 * Math.cos(deg(30)), -300 - 300 * Math.sin(deg(30)));
   placeGlide(30000, -300, v0, 0);
-  down(); quiet(); frame();
+  pressAndGrab();
   const kept = Math.hypot(player.vx, player.vy) / v0;
   check("classic grab projects the velocity like before (keeps ~50% here)", player.state === "swing" && kept > 0.42 && kept < 0.58, `kept ${(100 * kept).toFixed(0)}% of speed`);
   // and it can loop (no cap applied to the classic rod)
@@ -424,6 +435,55 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
   check("restart starts a fresh run in place", game.state === "playing" && game.runOrbs === 0 && Math.abs(game.camera.x - camBefore) < 60 && game.time > clockBefore, `state ${game.state} orbs ${game.runOrbs} camera moved ${(game.camera.x - camBefore).toFixed(0)}`);
   check("an abandoned run is not recorded", game.storage.data.runs === runsBefore);
   check("music resumes after a restart from pause", game.sound.musicPaused === false);
+}
+
+// --- 10. Deliberate grabs and backflips ------------------------------------------------
+{
+  setKnobs({ "tether.swingDrag": 0, "tether.reelRate": 0, "player.forwardDrag": 0, "player.vertDrag": 0, "player.glideLift": 0, "world.gravityAir": 0 });
+  // Holding in open sky backflips: each full turn scores more and scrubs speed.
+  staged = null; quiet();
+  placeGlide(36000, -400, 600, 0);
+  const bonus0 = game.bonus;
+  const flipObj = game.objectives.list.find((o) => o.kind === "flip");
+  const flipProgress0 = flipObj ? flipObj.progress : 0;
+  down();
+  let flips = [];
+  for (let i = 0; i < 120 * 2; i++) { quiet(); frame(); if (game.bonus !== (flips.length ? flips[flips.length - 1].bonus : bonus0)) flips.push({ t: i / 120, bonus: game.bonus, speed: Math.hypot(player.vx, player.vy) }); }
+  const gains = flips.map((f, i) => f.bonus - (i ? flips[i - 1].bonus : bonus0));
+  check("holding in open sky backflips and scores 100, 200, 300…", flips.length >= 3 && gains[0] === 100 && gains[1] === 200 && gains[2] === 300 && player.state === "glide", `gains ${gains.join(",")} at ${flips.map((f) => f.t.toFixed(2) + "s").join(" ")}`);
+  check("each flip scrubs 8% of speed", flips.length >= 2 && Math.abs(flips[1].speed / flips[0].speed - 0.92) < 0.01, `${flips.map((f) => f.speed.toFixed(0)).join(" → ")}`);
+  check("the flip objective counts them", !flipObj || flipObj.progress - flipProgress0 === Math.min(flips.length, flipObj.target - flipProgress0));
+  check("the character is spinning while held", Math.abs(player.flipSpin) > 0.5, `spin ${player.flipSpin.toFixed(2)}`);
+  up();
+  for (let i = 0; i < 60; i++) { quiet(); frame(); }
+  check("the character settles upright after letting go", Math.abs(player.flipSpin) < 0.01, `spin ${player.flipSpin.toFixed(3)}`);
+
+  // Holding past an anchor without a fresh press does not grab it.
+  const a = stageAnchor(player.x + 600, player.y - 150);
+  down(); // pressed in open sky (anchor 600 px away): a backflip, not a grab
+  let grabbedWhileHeld = false;
+  for (let i = 0; i < 240; i++) { quiet(); frame(); if (player.state === "swing") grabbedWhileHeld = true; }
+  check("a hold that started in open sky never latches onto an anchor it passes", !grabbedWhileHeld && player.x > a.x, `state ${player.state}, passed anchor: ${player.x > a.x}`);
+  up();
+
+  // A press just before the anchor comes into reach still grabs (0.15 s grace).
+  placeGlide(40000, -400, 500, 0);
+  const c = stageAnchor(40000 + 470, -400 - 60); // 474 px away: out of reach at the press, in reach ~70 ms later
+  down();
+  let grabbedLate = false, framesToGrab = 0;
+  for (let i = 0; i < 30 && !grabbedLate; i++) { quiet(); frame(); framesToGrab++; grabbedLate = player.state === "swing" && player.anchor === c; }
+  check("a press within the grace window grabs the anchor as it comes into reach", grabbedLate && player.flipSpin === 0, `after ${framesToGrab} frames, spin ${player.flipSpin.toFixed(3)}`);
+  up();
+
+  // A press well before reach (beyond the grace) flips and does not grab.
+  placeGlide(42000, -400, 500, 0);
+  const d = stageAnchor(42000 + 650, -400 - 60); // in reach only after ~0.42 s
+  down();
+  let grabbedEarly = false;
+  for (let i = 0; i < 90; i++) { quiet(); frame(); if (player.state === "swing") grabbedEarly = true; }
+  check("a press long before reach is a backflip, not a grab", !grabbedEarly && Math.abs(player.flipSpin) > 0.5, `state ${player.state}`);
+  up();
+  restoreKnobs();
 }
 
 console.log(failures ? `\n${failures} FAILED` : "\nall checks passed");

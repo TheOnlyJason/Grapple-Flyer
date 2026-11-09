@@ -324,6 +324,11 @@ export class Sound {
   release() {
     this.blip(520, 0.22, "sawtooth", 0.1, 180);
   }
+  // A completed backflip: a quick whoosh that rises with the count.
+  flip(n: number) {
+    const f = 300 * Math.min(2, 1 + 0.25 * (n - 1));
+    this.blip(f, 0.22, "sine", 0.09, f * 2.6);
+  }
   // The hook slipping off at the top of a swing: a soft falling tone.
   slip() {
     this.blip(420, 0.18, "triangle", 0.08, 140);
