@@ -122,6 +122,11 @@ export class Player {
     return Math.hypot(this.vx, this.vy);
   }
 
+  /** The tether refuses to attach right now (just after a barrier or sea bounce). */
+  get grabLocked(): boolean {
+    return this.grabLockout > 0;
+  }
+
   // Pick the best anchor to tether to: nearest within range, biased forward.
   // When `view` (the camera's visible world rect) is given, only anchors the
   // player can actually SEE are eligible — latching onto something off-screen

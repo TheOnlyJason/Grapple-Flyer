@@ -252,6 +252,29 @@ export class Game {
     this.storage.setTutorialDone();
   }
 
+  /**
+   * The screen-y span (CSS px) of what the shown card is about — the plane,
+   * plus the glowing anchor, the anchor on the rope, or the lesson's rock —
+   * so the card can sit where it covers none of it.
+   */
+  private tutorialFocus(): { top: number; bottom: number } | null {
+    const key = this.tutorial.shown;
+    if (!key || this.state !== "playing") return null;
+    const p = this.player;
+    const cam = this.camera;
+    const ys = [p.y];
+    if (key === "grab" || key === "chain") {
+      const a = p.findGrabTarget(this.world.anchors, cam);
+      if (a) ys.push(a.y);
+    } else if ((key === "release" || key === "letgo") && p.anchor) {
+      ys.push(p.anchor.y);
+    } else if (key === "dash" && this.tutorialRock) {
+      ys.push(this.tutorialRock.y - this.tutorialRock.ry, this.tutorialRock.y + this.tutorialRock.ry);
+    }
+    const sy = ys.map((y) => (y - cam.y) * cam.zoom);
+    return { top: Math.min(...sy), bottom: Math.max(...sy) };
+  }
+
   /** The tutorial's half of a playing step: its bookkeeping and its staged rock. */
   private stepTutorial(dt: number) {
     const t = this.tutorial;
@@ -266,9 +289,11 @@ export class Game {
       hs.length = w;
     }
     if (t.wantsRock) {
-      if (!this.tutorialGaugeGiven) {
+      // Announced with the dash card, not on the release that began the
+      // lesson (where it would sit on top of PERFECT +250).
+      if (!this.tutorialGaugeGiven && t.want === "dash") {
         this.tutorialGaugeGiven = true;
-        this.hud.popup(p.x, p.y - 40, "WIND GAUGE FULL", theme.collectible, 1.15);
+        this.hud.popup(p.x, p.y - 70, "WIND GAUGE FULL", theme.collectible, 1.15);
       }
       if (this.wind < CONFIG.wind.dashCost) this.wind = CONFIG.wind.max;
       let rock = this.tutorialRock;
@@ -292,8 +317,10 @@ export class Game {
     // (off screen briskly, on screen gently, like a moving anchor) to stay a
     // reachable height above the glide until it is in reach.
     const target = p.state === "glide" && t.allowTether() ? p.findGrabTarget(this.world.anchors, this.camera) : null;
-    const grabGood = target !== null && target.y < p.y - 60 && target.x > p.x + 20;
-    if (t.wantsGrab && p.state === "glide") {
+    const grabGood = target !== null && !p.grabLocked && target.y < p.y - 60 && target.x > p.x + 20;
+    // (The closing cards keep one in reach too: when the safety net goes,
+    // the run must not end for want of an anchor.)
+    if ((t.wantsGrab || t.wantsSafeAnchor) && p.state === "glide") {
       this.tutorialWaitGrab = grabGood ? 0 : this.tutorialWaitGrab + dt;
       let a = this.tutorialAnchor;
       if (a && a.x < p.x - 120) a = this.tutorialAnchor = null;
@@ -312,6 +339,15 @@ export class Game {
       }
     } else {
       this.tutorialWaitGrab = 0;
+    }
+
+    // The dash lesson is over (done, or given up on) and its dash has run:
+    // a rock still standing must not be left in the path for when the
+    // safety net goes.
+    if (!t.inDashLesson && this.tutorialRock && !this.tutorialRock.destroyed) {
+      const i = this.world.hazards.indexOf(this.tutorialRock);
+      if (i >= 0) this.world.hazards.splice(i, 1);
+      this.tutorialRock = null;
     }
 
     const rock = this.tutorialRock;
@@ -1243,8 +1279,10 @@ export class Game {
       conserveMomentum: this.storage.data.conserveMomentum,
       tutorial: {
         active: this.tutorial.active,
+        focus: this.tutorialFocus(),
         key: this.tutorial.shown,
-        alpha: this.state === "playing" || this.state === "paused" ? this.tutorial.alpha : 0,
+        // Hidden while paused: the card band is where the pause buttons are.
+        alpha: this.state === "playing" ? this.tutorial.alpha : 0,
         holding: this.input.holding,
         gold: this.player.inPerfectWindow,
       },

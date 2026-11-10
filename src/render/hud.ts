@@ -79,7 +79,15 @@ export interface HudData {
   characterName: string;
   conserveMomentum: boolean; // shown on the pause screen's swing option
   /** The first-flight tutorial: the card to show (fading by alpha), and whether it is running. */
-  tutorial: { active: boolean; key: TutorialKey | null; alpha: number; holding: boolean; gold: boolean };
+  tutorial: {
+    active: boolean;
+    key: TutorialKey | null;
+    alpha: number;
+    holding: boolean;
+    gold: boolean;
+    /** Screen-y span of what the card is about (the card keeps clear of it). */
+    focus: { top: number; bottom: number } | null;
+  };
 }
 
 interface Popup {
@@ -93,6 +101,11 @@ interface Popup {
 }
 
 export class Hud {
+  // Which band the tutorial card took (see drawTutorial), per card.
+  private tutBandFor: TutorialKey | null = null;
+  private tutBandTop = false;
+  /** Where the last tutorial card was drawn (screen CSS px), for the probes. */
+  lastTutorialCard: { x: number; y: number; w: number; h: number } | null = null;
   private popups: Popup[] = [];
   flash = 0; // screen-wide flash on perfect / big moments
   // Last font set on ctx *within the current HUD pass*. Other draw code can
@@ -510,12 +523,31 @@ export class Hud {
     const sw = ctx.measureText(sub).width;
     const cw = glyph + Math.max(tw, sw) + 48;
     const ch = titleSize + 56;
-    // Low in the frame, between the speed bar and DASH: the camera keeps the
-    // plane near the middle and anchors, ropes and rocks above or level with
-    // it, so the strip above the HUD's bottom row is the sky nothing happens in.
-    const cy = cam.h - ins.bottom - 64 - ch / 2;
+    // Two places for a card: low in the frame between the speed bar and
+    // DASH (the usual one — the camera keeps the plane near the middle with
+    // its anchors above), or up top under SKIP. Whichever covers none of
+    // what the card is about wins (bottom on a tie), chosen once per card so
+    // it does not jump about while it waits.
+    const skipB = this.tutorialSkipButton(cam);
+    const bottomCy = cam.h - ins.bottom - 64 - ch / 2;
+    const topCy = skipB.y + skipB.h + 12 + ch / 2;
+    if (this.tutBandFor !== t.key) {
+      this.tutBandFor = t.key;
+      const f = t.focus;
+      const cover = (c: number) => {
+        if (!f) return 0;
+        const lo = Math.max(c - ch / 2, f.top - 28);
+        const hi = Math.min(c + ch / 2, f.bottom + 28);
+        return Math.max(0, hi - lo);
+      };
+      const cb = cover(bottomCy);
+      this.tutBandTop = cb > 0 && cover(topCy) < cb;
+    }
+    const top = this.tutBandTop;
+    const cy = top ? topCy : bottomCy;
     const x0 = cam.w / 2 - cw / 2;
     const y0 = cy - ch / 2;
+    this.lastTutorialCard = { x: x0, y: y0, w: cw, h: ch };
     ctx.fillStyle = hexA("#0a0d24", 0.3 * a);
     this.roundRect(ctx, x0, y0, cw, ch, 18);
     ctx.fill();
@@ -525,8 +557,8 @@ export class Hud {
     ctx.textBaseline = "top";
     // The release card's title turns gold with the rope: now.
     const titleCol = t.key === "release" && t.gold ? PALETTE.anchorPerfect : PALETTE.text;
-    this.text(ctx, title, textX, y0 + 16, titleSize, "800", hexA(titleCol, a), true);
-    this.text(ctx, sub, textX, y0 + 22 + titleSize, 15, "600", hexA(PALETTE.text, 0.85 * a), true);
+    this.text(ctx, title, textX, y0 + 16, titleSize, "800", hexA(titleCol, a), true, 0.5 * a);
+    this.text(ctx, sub, textX, y0 + 22 + titleSize, 15, "600", hexA(PALETTE.text, 0.85 * a), true, 0.5 * a);
 
     if (gesture) {
       const gx = x0 + 24 + 18;
@@ -568,8 +600,8 @@ export class Hud {
       ctx.beginPath();
       ctx.arc(b.x, b.y, b.r + 10 + pulse * 6, 0, Math.PI * 2);
       ctx.stroke();
-      const ax0 = x0 + cw + 10;
-      const ay0 = cy;
+      const ax0 = x0 + cw + 6;
+      const ay0 = top ? y0 + ch - 6 : cy;
       const ring = b.r + 22;
       const dx = b.x - ax0;
       const dy = b.y - ay0;
@@ -1029,11 +1061,12 @@ export class Hud {
     size: number,
     weight: string,
     color: string,
-    shadow = false
+    shadow = false,
+    shadowAlpha = 0.5
   ) {
     this.setFont(ctx, weight, size);
     if (shadow) {
-      ctx.fillStyle = hexA("#0a0d24", 0.5);
+      ctx.fillStyle = hexA("#0a0d24", shadowAlpha);
       ctx.fillText(s, x + 2, y + 2);
     }
     ctx.fillStyle = color;

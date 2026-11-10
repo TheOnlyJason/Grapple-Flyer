@@ -7,6 +7,8 @@
 import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+// GALE_SIZE=WxH plays at that viewport (default 1280x720).
+const [VW, VH] = (process.env.GALE_SIZE || "1280x720").split("x").map(Number);
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const assetsDir = path.join(root, "..", "dist", "assets");
@@ -18,6 +20,8 @@ if (!bundle) {
 
 // --- Canvas 2D context mock (no-op, but gradients return usable objects) ---
 const gradient = { addColorStop() {} };
+// Every string the game draws, so the probe can check what is on screen.
+const drawn = [];
 const ctxMock = new Proxy(
   {},
   {
@@ -25,6 +29,7 @@ const ctxMock = new Proxy(
       if (prop === "createLinearGradient" || prop === "createRadialGradient")
         return () => gradient;
       if (prop === "measureText") return () => ({ width: 10 });
+      if (prop === "fillText") return (str) => { drawn.push(String(str)); };
       // data props read back as themselves; methods are no-ops.
       return typeof prop === "string" &&
         /^[a-z]/.test(prop) &&
@@ -51,14 +56,14 @@ const ctxMock = new Proxy(
 const handlers = new Map();
 function makeEl() {
   return {
-    width: 1280,
-    height: 720,
+    width: VW,
+    height: VH,
     style: {},
     classList: { add() {}, remove() {} },
     remove() {},
     setPointerCapture() {},
     releasePointerCapture() {},
-    getBoundingClientRect: () => ({ left: 0, top: 0, width: 1280, height: 720 }),
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: VW, height: VH }),
     getContext: () => ctxMock,
     addEventListener: (type, fn) => {
       const arr = handlers.get(type) || [];
@@ -82,8 +87,8 @@ globalThis.requestAnimationFrame = (cb) => {
 };
 globalThis.cancelAnimationFrame = () => {};
 globalThis.window = {
-  innerWidth: 1280,
-  innerHeight: 720,
+  innerWidth: VW,
+  innerHeight: VH,
   devicePixelRatio: 2,
   addEventListener: (type, fn) => {
     const arr = handlers.get(type) || [];
@@ -175,6 +180,7 @@ function playThrough(maxFrames = 6000) {
   const slowest = {};
   let holding = false, swingFrames = 0, perfects0 = game.perfectCount, frames = 0, deaths = 0;
   let cardFor = 0, lastWant = null, lessonRock = null;
+  const covered = new Set();
   let objectivesHiddenWhileActive = true, hintSuppressed = true;
   while (frames < maxFrames && tut.active) {
     frames++;
@@ -184,6 +190,10 @@ function playThrough(maxFrames = 6000) {
     const ready = cardFor >= REACT;
     if (want && seen[seen.length - 1] !== want) seen.push(want);
     if (want) slowest[want] = Math.min(slowest[want] ?? 1, game.timeScale);
+    if (want && tut.shown === want && tut.alpha > 0.95 && game.hud.lastTutorialCard) {
+      const f = game.buildHudData().tutorial.focus, c = game.hud.lastTutorialCard;
+      if (f && f.bottom > c.y && f.top < c.y + c.h) covered.add(want);
+    }
     const h = hud();
     if (h.tutorial.active && h.hintAlpha > 0) hintSuppressed = false;
     if (game.state !== "playing") { deaths++; break; }
@@ -196,7 +206,7 @@ function playThrough(maxFrames = 6000) {
     tick(1);
   }
   if (holding) up();
-  return { seen, slowest, frames, deaths, perfects: game.perfectCount - perfects0, hintSuppressed, lessonRock };
+  return { seen, slowest, frames, deaths, perfects: game.perfectCount - perfects0, hintSuppressed, lessonRock, covered: [...covered] };
 }
 
 // --- 1. A brand-new player: the first run is the tutorial ----------------------------------
@@ -205,7 +215,12 @@ check("menu first", game.state === "menu", game.state);
 check("a new save has not done the tutorial", game.storage.data.tutorialDone === false && game.storage.data.runs === 0);
 down(); tick(2); up(); tick(2);
 check("tapping play starts the tutorial run", game.state === "playing" && tut.active, `state ${game.state}, tutorial ${tut.active}`);
-check("objectives are hidden and SKIP is up while it runs", hud().tutorial.active === true);
+{
+  drawn.length = 0;
+  tick(2);
+  check("objectives are hidden and SKIP is up while it runs", !drawn.some((x) => x.startsWith("OBJECTIVES")) && drawn.includes("SKIP TUTORIAL"), `drew ${[...new Set(drawn)].slice(0, 8).join(" / ")}`);
+}
+const stored = () => JSON.parse(globalThis.localStorage.store["gale.save.v1"] || "{}");
 {
   // The tap that started the run must not be taken as the grab.
   let grabbedOnStart = false;
@@ -221,8 +236,14 @@ check("with a 0.4 s reaction, the release card still lands a PERFECT", run1.perf
 check("the info cards do not slow time", (run1.slowest.sea ?? 1) > 0.95 && (run1.slowest.done ?? 1) > 0.95);
 check("letting go on the release card is a PERFECT", run1.perfects >= 1, `${run1.perfects} perfect`);
 check("the 1.2 start hint stays hidden during the tutorial", run1.hintSuppressed);
+check("no card covers the plane or what it points at", run1.covered.length === 0, run1.covered.join(", ") || "clear");
 check("the run survives the tutorial", run1.deaths === 0 && game.state === "playing");
-check("finishing saves it and ends the slow motion", !tut.active && game.storage.data.tutorialDone === true && Math.abs(game.timeScale - 1) < 1e-9, `timeScale ${game.timeScale}`);
+check("finishing saves it and ends the slow motion", !tut.active && stored().tutorialDone === true && Math.abs(game.timeScale - 1) < 1e-9, `saved ${stored().tutorialDone}, timeScale ${game.timeScale}`);
+{
+  drawn.length = 0;
+  tick(2);
+  check("afterwards the objectives are back and SKIP is gone", drawn.some((x) => x.startsWith("OBJECTIVES")) && !drawn.includes("SKIP TUTORIAL"));
+}
 check("the dash lesson's dash smashes its rock", !!run1.lessonRock && run1.lessonRock.destroyed === true, run1.lessonRock ? `destroyed ${run1.lessonRock.destroyed}` : "no rock staged");
 
 // --- 2. Afterwards the run is real, and the next run has no tutorial --------------------------
@@ -258,14 +279,16 @@ check("the dash lesson's dash smashes its rock", !!run1.lessonRock && run1.lesso
   tapAt(game.hud.pauseMenuButtons(game.camera).restart);
   tick(2);
   check("Restart Run during the tutorial starts it over", game.state === "playing" && tut.active && tut.step === "grab", `step ${tut.step}`);
-  game.storage.data.tutorialDone = false; // as if it had never been finished
+  // As if it had never been finished, in the save itself.
+  game.storage.data.tutorialDone = false;
+  game.storage.save();
   for (let i = 0; i < 10; i++) tick(1);
   const r = game.hud.tutorialSkipButton(game.camera);
   let grabbedBySkip = false;
   down(r.x + r.w / 2, r.y + r.h / 2);
   for (let i = 0; i < 20; i++) { tick(1); if (player.state === "swing") grabbedBySkip = true; }
   up(r.x + r.w / 2, r.y + r.h / 2); tick(1);
-  check("SKIP ends the tutorial and saves it as done", !tut.active && game.storage.data.tutorialDone === true && game.timeScale === 1);
+  check("SKIP ends the tutorial and saves it as done", !tut.active && stored().tutorialDone === true && game.timeScale === 1, `saved ${stored().tutorialDone}`);
   check("the SKIP tap is not a grab", !grabbedBySkip);
 }
 
@@ -291,6 +314,52 @@ check("the dash lesson's dash smashes its rock", !!run1.lessonRock && run1.lesso
   const r = game.hud.tutorialSkipButton(game.camera);
   tapAt(r);
   check("SKIP during the dash card takes the rock away with it", !tut.active && rock && !game.world.hazards.includes(rock));
+}
+
+// --- 5b. The dash card: at the top (its rock is low), hidden while paused, and it gives up ---------
+{
+  player.y = game.world.seaLevel - 4; player.vy = 500;
+  for (let i = 0; i < 900 && game.state !== "gameover"; i++) tick(1);
+  tick(30);
+  tapAt(game.hud.howToPlayButton(game.camera));
+  tut.step = "dash";
+  let prompted = false;
+  for (let i = 0; i < 900 && !prompted; i++) { tick(1); prompted = tut.want === "dash"; }
+  for (let i = 0; i < 20; i++) tick(1); // let it fade in
+  const rock = game.tutorialRock;
+  const cam = game.camera;
+  const card = game.hud.lastTutorialCard;
+  const rTop = (rock.y - rock.ry - cam.y) * cam.zoom, rBot = (rock.y + rock.ry - cam.y) * cam.zoom;
+  check("the dash card does not cover its rock", prompted && !!card && (rBot < card.y || rTop > card.y + card.h), card ? `rock y ${rTop.toFixed(0)}..${rBot.toFixed(0)}, card y ${card.y.toFixed(0)}..${(card.y + card.h).toFixed(0)}` : "no card drawn");
+  key("Escape"); tick(2);
+  check("cards are hidden while paused", game.state === "paused" && hud().tutorial.alpha === 0);
+  key("Escape"); tick(2);
+  // Never tap DASH: the lesson moves on after 8 s and takes its rock away.
+  let movedOn = false;
+  for (let i = 0; i < 60 * 10 && !movedOn; i++) { tick(1); movedOn = tut.step === "sea" || tut.step === "done" || !tut.active; }
+  tick(5); // the rock goes on the next physics step
+  check("a dash card nobody answers gives up after 8 s and clears its rock", movedOn && !game.world.hazards.includes(rock), `step ${tut.step}, rock still listed ${game.world.hazards.includes(rock)}, is lesson rock ${rock === game.tutorialRock}, destroyed ${rock.destroyed}, dx ${(rock.x - player.x).toFixed(0)}, lesson rock now ${game.tutorialRock ? "set" : "null"}`);
+  // and the closing cards keep an anchor in reach for when the net goes
+  let anchorNear = false;
+  for (let i = 0; i < 60 * 7 && tut.active; i++) {
+    tick(1);
+    if (game.world.anchors.some((a) => a.x > player.x && a.x < player.x + 700 && a.y < player.y)) anchorNear = true;
+  }
+  check("when the safety net goes there is an anchor ahead", anchorNear && !tut.active);
+}
+
+// --- 5c. A finger kept down from the play tap still gets to grab -----------------------------------
+{
+  player.y = game.world.seaLevel - 4; player.vy = 500;
+  for (let i = 0; i < 900 && game.state !== "gameover"; i++) tick(1);
+  tick(30);
+  const hb = game.hud.howToPlayButton(game.camera);
+  down(hb.x + hb.w / 2, hb.y + hb.h / 2); // and never lift it
+  let grabbed = false;
+  for (let i = 0; i < 60 * 12 && !grabbed; i++) { tick(1); grabbed = player.state === "swing"; }
+  up(hb.x + hb.w / 2, hb.y + hb.h / 2); tick(2);
+  check("a finger held down from the start grabs once an anchor comes", tut.active !== undefined && grabbed);
+  if (tut.active) tapAt(game.hud.tutorialSkipButton(game.camera)); // back to a normal run
 }
 
 // --- 6. The tutorial cannot stall --------------------------------------------------------------

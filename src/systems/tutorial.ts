@@ -40,13 +40,13 @@ export interface TutorialFacts {
 
 // Time scale while a prompt waits for the player: slow enough to read and
 // act, never a full stop (a frozen world reads as a hang).
-const SLOW_GRAB = 0.12;
+const SLOW_GRAB = 0.1;
 // The gold window lasts about 0.15 s of game time, far less than a reaction:
 // time starts slowing at the bottom of the swing and all but stops inside
 // the window, so it waits for the player (about 2.5 s of real time).
 const SLOW_RELEASE_APPROACH = 0.3;
 const SLOW_RELEASE = 0.06;
-const SLOW_CHAIN = 0.25;
+const SLOW_CHAIN = 0.1;
 const SLOW_DASH = 0.1;
 // The dash prompt waits until the rock is this close (world px).
 const DASH_PROMPT_DIST = 440;
@@ -62,6 +62,12 @@ const LETGO_AFTER = 2.0;
 // Off the rope while the swing lesson is on (a dash out of it, say) this long
 // counts as a launch.
 const OFF_ROPE = 0.3;
+// A finger kept down from the tap that started the run counts as a hold after
+// this long (game seconds; nothing is slowed yet) — it is not the play tap.
+const HELD_START = 0.6;
+// The dash card waits this long (real seconds) for a tap on DASH, then the
+// lesson moves on rather than hold a player who has not found the button.
+const DASH_WAIT = 8;
 
 export class Tutorial {
   active = false;
@@ -77,6 +83,8 @@ export class Tutorial {
   private cardTime = 0;
   private swingTime = 0;
   private offRope = 0;
+  private heldFromStart = 0;
+  private dashCardReal = 0;
 
   /** Wanted time scale (the game eases toward it). */
   slow = 1;
@@ -98,6 +106,8 @@ export class Tutorial {
     this.cardTime = 0;
     this.swingTime = 0;
     this.offRope = 0;
+    this.heldFromStart = 0;
+    this.dashCardReal = 0;
     this.slow = 1;
     this.want = null;
     this.shown = null;
@@ -114,6 +124,16 @@ export class Tutorial {
   /** Waiting for a grab (the game makes sure a good anchor comes along). */
   get wantsGrab(): boolean {
     return this.active && (this.step === "grab" || this.step === "chain");
+  }
+
+  /** The closing cards: the safety net is about to go, so keep an anchor in reach. */
+  get wantsSafeAnchor(): boolean {
+    return this.active && (this.step === "sea" || this.step === "done");
+  }
+
+  /** The dash lesson is on, or its dash is still under way. */
+  get inDashLesson(): boolean {
+    return this.active && (this.step === "dash" || this.step === "dashing");
   }
 
   /** The dash lesson wants a full gauge and a rock to blast. */
@@ -160,7 +180,12 @@ export class Tutorial {
   update(dt: number, f: TutorialFacts) {
     this.justFinished = false;
     if (!this.active) return;
-    if (!f.holding) this.fresh = true;
+    if (!f.holding) {
+      this.fresh = true;
+    } else if (!this.fresh) {
+      this.heldFromStart += dt;
+      if (this.heldFromStart >= HELD_START) this.fresh = true;
+    }
 
     let want: TutorialKey | null = null;
     let slow = 1;
@@ -201,6 +226,12 @@ export class Tutorial {
         }
         break;
       case "dash":
+        if (this.dashCardReal >= DASH_WAIT) {
+          // Not found the button: move on (the game clears the rock).
+          this.step = "sea";
+          this.cardTime = 0;
+          break;
+        }
         if (f.playerState === "glide" && f.rockAhead !== null && f.rockAhead < DASH_PROMPT_DIST && f.rockAhead > 0) {
           want = "dash";
           slow = SLOW_DASH;
@@ -236,6 +267,7 @@ export class Tutorial {
 
   /** Ease the prompt in and out in real time (independent of the slow motion). */
   animate(dt: number) {
+    if (this.want === "dash") this.dashCardReal += dt;
     if (this.want === this.shown) {
       this.alpha = Math.min(1, this.alpha + dt * 5);
     } else {

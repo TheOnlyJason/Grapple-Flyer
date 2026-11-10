@@ -69,15 +69,19 @@ with an arrow to the button); a mouse click and hold reads the same.
 The grab cards only come up for a good anchor (above and ahead: the 1.2
 rope also grabs a level one, and that swing hangs dead); if none comes along
 for a moment the tutorial hangs one in reach. A swing that cannot reach gold
-gets a **Let go** card instead of leaving the player holding forever.
+gets a **Let go** card instead of leaving the player holding forever; a
+DASH card nobody answers moves on after 8 s; a finger kept down from the
+play tap counts as a hold after 0.6 s. Each card sits low in the frame or up
+under SKIP, whichever covers none of the plane, its anchor or the rock.
 Until the last card nothing ends the run: the cloud sea throws the player
 back up and rocks only break. **SKIP TUTORIAL** (top centre) ends it at
 once. It is saved as done when finished or skipped, never shows again on its
 own, and does not show for anyone who already has runs on their save.
 **HOW TO PLAY** on the menu and game-over screens replays it; Restart Run
 during it starts it over. The logic is `src/systems/tutorial.ts`; the cards
-are drawn by `Hud.drawTutorial`. With the tutorial done the game is exactly
-what it was (a headless replay against the 1.2 build matches frame for frame).
+are drawn by `Hud.drawTutorial`. With the tutorial done, play is unchanged
+from 1.2 (a headless replay against the 1.2 build matches frame for frame);
+the menu and game-over screens add the HOW TO PLAY and speaker buttons.
 
 ---
 
@@ -210,4 +214,4 @@ Pirate threat system (corrupted anchors), weather, daily seed runs (the RNG is
 already seedable), ghost replays, and cosmetic unlocks.
 
 Built with **Vite + TypeScript** and an HTML5 Canvas 2D renderer. No game-engine
-dependency; the bundle is ~39 kB gzipped.
+dependency; the bundle is ~43 kB gzipped.
