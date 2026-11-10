@@ -318,7 +318,7 @@ if (MODE === "bot") {
       if (player.speed >= SMASH) fastFrames++;
       if (player.state === "glide") {
         glideFrames++;
-        if (player.grabReady && player.findGrabTarget(game.world.anchors, game.camera)) { reachFrames++; gap = 0; }
+        if (player.grabLockout <= 0 && player.findGrabTarget(game.world.anchors, game.camera)) { reachFrames++; gap = 0; }
         else { gap++; if (gap > maxGap) maxGap = gap; }
       } else gap = 0;
       for (const h of game.world.hazards) if (h.destroyed && !seen.has(h)) { seen.add(h); smashes++; }

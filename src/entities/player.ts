@@ -4,7 +4,6 @@ import { getPlayerSprite, isPlayerSpriteReady, PLAYER_SPRITE } from "../render/p
 import { drawMonkey, computeLatchArmAngle, monkeyShoulder, type LatchArm } from "../render/drawMonkey";
 import { drawNyanCat, NYAN_RAINBOW } from "../render/drawNyanCat";
 import type { CharacterId } from "../characters/registry";
-import type { SwingModel } from "../core/storage";
 import { angleDelta, clamp, rad, TAU } from "../core/math";
 import { makeScratch, Scratch } from "../render/rcache";
 import { Anchor, hexA } from "./anchor";
@@ -22,8 +21,6 @@ export interface ReleaseInfo {
 export type PlayerEvent =
   | { type: "grab"; x: number; y: number; moving: boolean }
   | { type: "release"; info: ReleaseInfo }
-  | { type: "slip"; x: number; y: number } // the hook let go at the top of the swing
-  | { type: "flip"; n: number; x: number; y: number } // the n-th backflip of one hold completed
   | { type: "dash"; x: number; y: number };
 
 interface TrailPoint {
@@ -45,24 +42,19 @@ export class Player {
 
   anchor: Anchor | null = null;
   ropeLen = 0;
-  // Pendulum state while tethered: angle from straight below the anchor
-  // (positive toward +x) and angular velocity. x/y/vx/vy are written back
-  // from these every step, so everything outside the swing keeps reading
-  // plain world position and velocity.
+  /**
+   * The pause-menu option. Off: the classic rope (the 1.2 swing). On: a
+   * pendulum that conserves momentum — the grab keeps the player's speed and
+   * nothing but gravity, reeling, a moving pivot and tether.swingDrag changes
+   * it. Nothing else differs between the two.
+   */
+  conserveMomentum = false;
+  // Pendulum state while tethered with conserveMomentum on: angle from
+  // straight below the anchor (positive toward +x) and angular velocity.
+  // x/y/vx/vy are written back from these every step, so everything outside
+  // the swing keeps reading plain world position and velocity.
   swingPhi = 0;
   swingOmega = 0;
-  // Which swing to simulate. "pendulum" conserves energy; "classic" is the
-  // original rod that bled it (kept so the two can be compared in play).
-  swingModel: SwingModel = "pendulum";
-  // Grabbing is a deliberate act: only a fresh press grabs, and only if an
-  // anchor is in reach at that moment (or within tether.grabBuffer seconds).
-  // `wantsGrab` is the remaining grace after a press.
-  private wantsGrab = 0;
-  // Backflip: holding in open sky spins the character. `flipSpin` is the
-  // extra rotation drawn on top of the flight angle (negative = backward).
-  flipping = false;
-  flipSpin = 0;
-  private flipsInHold = 0;
 
   inPerfectWindow = false;
   perfectQuality = 0;
@@ -70,12 +62,7 @@ export class Player {
   dashTime = 0;
   /** Remaining hazard invulnerability after a wind dash (rocks can't kill). */
   hazardInvuln = 0;
-  private grabLockout = 0; // seconds the tether refuses to attach (after a release, slip or barrier bounce)
-  // The anchor just released or slipped from, and how long it stays off
-  // limits: a re-press right after a launch must not haul the player back
-  // onto the rope they just left (other anchors are fair game at once).
-  private lastAnchor: Anchor | null = null;
-  private lastAnchorCooldown = 0;
+  private grabLockout = 0; // seconds the tether refuses to attach (after a barrier bounce)
   smashGlow = false; // set by the game while the smash is charged: bigger aura + a mint ring
   /** Which arm grabs the anchor on the current swing. */
   latchArm: LatchArm = "right";
@@ -102,12 +89,6 @@ export class Player {
     this.dashTime = 0;
     this.hazardInvuln = 0;
     this.grabLockout = 0;
-    this.lastAnchor = null;
-    this.lastAnchorCooldown = 0;
-    this.wantsGrab = 0;
-    this.flipping = false;
-    this.flipSpin = 0;
-    this.flipsInHold = 0;
     this.smashGlow = false;
     this.latchArm = "right";
     this.nextLatchArm = "right";
@@ -127,12 +108,6 @@ export class Player {
     this.dashTime = 0;
     this.hazardInvuln = 0;
     this.grabLockout = 0;
-    this.lastAnchor = null;
-    this.lastAnchorCooldown = 0;
-    this.wantsGrab = 0;
-    this.flipping = false;
-    this.flipSpin = 0;
-    this.flipsInHold = 0;
     this.smashGlow = false;
     this.latchArm = "right";
     this.nextLatchArm = "right";
@@ -147,11 +122,6 @@ export class Player {
   // When `view` (the camera's visible world rect) is given, only anchors the
   // player can actually SEE are eligible — latching onto something off-screen
   // always reads as a bug, never as skill.
-  /** False for the moment after a release, slip or bounce in which no press grabs. */
-  get grabReady(): boolean {
-    return this.grabLockout <= 0;
-  }
-
   findGrabTarget(
     anchors: Anchor[],
     view?: { left: number; top: number; right: number; bottom: number }
@@ -160,30 +130,11 @@ export class Player {
     let bestScore = Infinity;
     const range = CONFIG.tether.grabRange;
     const VIS = 12; // anchor centre must be this far inside the screen edge
-    const minAbove = CONFIG.tether.grabMinAbove;
-    const headroom = CONFIG.tether.grabHeadroom;
-    const cap = rad(CONFIG.tether.maxSwingAngleDeg);
     for (const a of anchors) {
-      if (a === this.lastAnchor) continue; // just let go of it; see lastAnchorCooldown
       const dx = a.x - this.x;
       const dy = a.y - this.y;
       const d = Math.hypot(dx, dy);
       if (d > range || d < 6) continue;
-      // The swing cannot carry the player above the anchor, so an anchor at
-      // or below the player's own height has nothing to offer: grabbing it
-      // would slip on the very next step. Nor may the swing be about to hit
-      // the cap: from the pendulum state a grab would start in (angle from
-      // straight below, and its rate from the player's velocity), the cap
-      // must be more than grabHeadroom seconds away.
-      if (dy > -minAbove) continue;
-      const phi = Math.atan2(-dx, -dy);
-      const phiDot = (this.vx * -dy - this.vy * -dx) / (d * d);
-      if (
-        Math.sign(phiDot) === Math.sign(phi) &&
-        Math.abs(phi) + Math.abs(phiDot) * headroom >= cap
-      ) {
-        continue;
-      }
       if (
         view &&
         (a.x < view.left + VIS ||
@@ -195,6 +146,7 @@ export class Player {
       }
       let score = d;
       if (dx < 0) score += 500; // strongly discourage grabbing behind
+      if (dy > 0) score += 120; // mild bias toward anchors above
       if (score < bestScore) {
         bestScore = score;
         best = a;
@@ -209,13 +161,10 @@ export class Player {
     this.latchArm = this.nextLatchArm;
     this.nextLatchArm = this.nextLatchArm === "right" ? "left" : "right";
     this.anchor = anchor;
-    const rx = this.x - anchor.x;
-    const ry = this.y - anchor.y;
+    const d = Math.hypot(anchor.x - this.x, anchor.y - this.y);
     // Match the rope to the current distance so latch-on doesn't snap position.
-    // (findGrabTarget already rejects anchors closer than 6 px.)
-    const L = Math.max(Math.hypot(rx, ry), 6);
-    this.ropeLen = L;
-    if (this.swingModel === "pendulum") this.syncSwingToVelocity(anchor, t0);
+    this.ropeLen = Math.max(d, 1e-3);
+    if (this.conserveMomentum) this.syncSwingToVelocity(anchor, t0);
     this.state = "swing";
     this.swingTime = 0;
     anchor.used = true;
@@ -248,7 +197,7 @@ export class Player {
       info: { perfect, quality, speed: this.speed, x: this.x, y: this.y },
     });
 
-    this.forgetAnchor();
+    this.anchor = null;
     this.state = "glide";
     this.inPerfectWindow = false;
     this.perfectQuality = 0;
@@ -260,7 +209,6 @@ export class Player {
       this.anchor = null;
     }
     this.state = "dash";
-    this.flipping = false;
     this.inPerfectWindow = false; // a dash out of the window must not leave the aura gold
     this.perfectQuality = 0;
     this.dashTime = CONFIG.wind.dashDuration;
@@ -289,35 +237,17 @@ export class Player {
       this.hazardInvuln = Math.max(0, this.hazardInvuln - dt);
     }
     if (this.grabLockout > 0) this.grabLockout = Math.max(0, this.grabLockout - dt);
-    if (this.lastAnchorCooldown > 0) {
-      this.lastAnchorCooldown = Math.max(0, this.lastAnchorCooldown - dt);
-      if (this.lastAnchorCooldown === 0) this.lastAnchor = null;
-    }
-    if (!holding) {
-      this.wantsGrab = 0;
-      this.flipping = false;
-      this.flipsInHold = 0;
-    }
-    // The press's grace runs out at the same rate whatever the player is
-    // doing: a press made inside the release lockout, or just before a dash,
-    // expires unanswered instead of being kept on ice and hooking the first
-    // anchor the moment the lockout or the dash ends.
-    if (this.wantsGrab > 0) this.wantsGrab = Math.max(0, this.wantsGrab - dt);
 
     switch (this.state) {
       case "glide": {
-        if (holding && this.wantsGrab > 0 && this.grabLockout <= 0) {
+        if (holding && this.grabLockout <= 0) {
           const target = this.findGrabTarget(anchors, view);
           if (target) {
-            this.wantsGrab = 0;
-            this.flipping = false;
-            this.flipSpin = 0;
             this.grab(target, time - dt);
             this.stepSwing(dt, holding, time);
             break;
           }
         }
-        if (this.flipping) this.stepFlip(dt);
         this.stepGlide(dt);
         break;
       }
@@ -336,40 +266,8 @@ export class Player {
       }
     }
 
-    if (!this.flipping && this.flipSpin !== 0) {
-      // Right the character the short way round.
-      let s = this.flipSpin % TAU;
-      if (s > Math.PI) s -= TAU;
-      else if (s <= -Math.PI) s += TAU;
-      s -= s * Math.min(1, dt * CONFIG.tricks.settleRate);
-      this.flipSpin = Math.abs(s) < 0.002 ? 0 : s;
-    }
     this.updateAngle(dt);
     this.recordTrail();
-  }
-
-  /**
-   * A fresh press (pointer or key). Grabs the anchor in reach, if there is
-   * one now or within the grace; otherwise — in open sky — the hold becomes
-   * a backflip. Called once per press by the game, never for a held finger.
-   */
-  pressTether() {
-    if (this.state !== "glide" || !this.alive) return;
-    this.wantsGrab = CONFIG.tether.grabBuffer;
-    this.flipping = true;
-    this.flipsInHold = 0;
-  }
-
-  // Spin backward while held; each full turn scores and scrubs some speed.
-  private stepFlip(dt: number) {
-    const before = Math.floor(-this.flipSpin / TAU);
-    this.flipSpin -= CONFIG.tricks.flipRate * dt;
-    const after = Math.floor(-this.flipSpin / TAU);
-    if (after > before) {
-      this.flipsInHold += 1;
-      this.scaleVelocity(1 - CONFIG.tricks.flipSpeedLoss);
-      this.events.push({ type: "flip", n: this.flipsInHold, x: this.x, y: this.y });
-    }
   }
 
   private stepGlide(dt: number) {
@@ -389,13 +287,50 @@ export class Player {
     this.y += this.vy * dt;
   }
 
-  // Pendulum step in polar form (velocity Verlet). The rope is exact by
-  // construction, so no energy leaks into a position snap or a velocity
-  // projection: the only things that change the swing's energy are gravity,
-  // the pivot's motion, reeling in (which conserves angular momentum, so the
-  // rope getting shorter really does speed the player up) and the explicit
-  // air drag knob. `time` is the end of this step; the anchor's pose at the
-  // start of it is `time - dt`.
+  private stepSwing(dt: number, holding: boolean, time: number) {
+    if (this.conserveMomentum) {
+      this.stepPendulum(dt, holding, time);
+      return;
+    }
+    const a = this.anchor;
+    if (!a) return;
+    this.swingTime += dt;
+
+    // Gravity drives the pendulum.
+    this.vy += CONFIG.world.gravitySwing * dt;
+
+    // Reel in slightly while held: pumps energy and lets the player climb.
+    if (holding && this.ropeLen > CONFIG.tether.minRope) {
+      this.ropeLen = Math.max(
+        CONFIG.tether.minRope,
+        this.ropeLen - CONFIG.tether.reelRate * dt
+      );
+    }
+
+    // Integrate, then enforce the rigid-rope distance constraint.
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+
+    let dx = this.x - a.x;
+    let dy = this.y - a.y;
+    const d = Math.hypot(dx, dy) || 1e-6;
+    const nx = dx / d;
+    const ny = dy / d;
+
+    // Position correction back onto the circle.
+    this.x = a.x + nx * this.ropeLen;
+    this.y = a.y + ny * this.ropeLen;
+
+    // Remove the radial velocity component -> motion stays tangent (swinging).
+    const vrad = this.vx * nx + this.vy * ny;
+    this.vx -= vrad * nx;
+    this.vy -= vrad * ny;
+
+    this.clampSpeed();
+    this.evaluatePerfect();
+    if (this.inPerfectWindow) a.perfectGlow = 1;
+  }
+
   /**
    * Set the pendulum state from the current position and velocity. The hook
    * is a frictionless redirect, not a rope snapping taut: the player's whole
@@ -405,7 +340,8 @@ export class Player {
   private syncSwingToVelocity(anchor: Anchor, t0: number) {
     const rx = this.x - anchor.x;
     const ry = this.y - anchor.y;
-    const L = this.ropeLen;
+    const L = Math.max(Math.hypot(rx, ry), 1e-3);
+    this.ropeLen = L;
     this.swingPhi = Math.atan2(rx, ry);
     const tx = ry / L;
     const ty = -rx / L; // tangent of increasing phi
@@ -428,24 +364,22 @@ export class Player {
     this.swingOmega = (s * u) / L;
   }
 
-  /** Switch swing models mid-flight (the pause-screen toggle); keeps the motion continuous. */
-  setSwingModel(model: SwingModel, time: number) {
-    if (model === this.swingModel) return;
-    this.swingModel = model;
-    if (model === "pendulum" && this.state === "swing" && this.anchor) {
-      this.syncSwingToVelocity(this.anchor, time);
-      // The classic rod may have carried the player past the pendulum's cap.
-      // Snapping them back to it and flinging them would be a teleport; the
-      // hook simply lets go where they are, with the velocity they have.
-      if (Math.abs(this.swingPhi) >= rad(CONFIG.tether.maxSwingAngleDeg)) this.slip(this.anchor);
-    }
+  /** The pause-menu switch; flipping it mid-swing keeps the motion continuous. */
+  setConserveMomentum(on: boolean, time: number) {
+    if (on === this.conserveMomentum) return;
+    this.conserveMomentum = on;
+    if (on && this.state === "swing" && this.anchor) this.syncSwingToVelocity(this.anchor, time);
   }
 
-  private stepSwing(dt: number, holding: boolean, time: number) {
-    if (this.swingModel === "classic") {
-      this.stepSwingClassic(dt, holding);
-      return;
-    }
+  // The momentum-conserving swing: a pendulum in polar form, integrated with
+  // velocity Verlet. The rope is exact by construction, so no energy leaks
+  // into a position snap or a velocity projection: the only things that
+  // change the swing's energy are gravity, the pivot's motion, reeling in
+  // (which conserves angular momentum, so a shorter rope really is faster)
+  // and tether.swingDrag. Like the classic rope it has no cap: a fast swing
+  // can carry the player over the top of the anchor. `time` is the end of
+  // this step; the anchor's pose at the start of it is `time - dt`.
+  private stepPendulum(dt: number, holding: boolean, time: number) {
     const a = this.anchor;
     if (!a) return;
     this.swingTime += dt;
@@ -453,15 +387,15 @@ export class Player {
     const g = CONFIG.world.gravitySwing;
     const t0 = time - dt;
     const L0 = this.ropeLen;
-    let L = this.ropeLen;
+    let L = L0;
     let phi = this.swingPhi;
     let omega = this.swingOmega;
     // A pivot accelerating upward feels like extra gravity, and vice versa.
-    const acc = (p: number, t: number) => (-((g - a.ayAt(t)) / L) * Math.sin(p));
+    const acc = (p: number, t: number) => -((g - a.ayAt(t)) / L) * Math.sin(p);
 
     omega += 0.5 * dt * acc(phi, t0);
     if (holding && L > T.minRope) {
-      const Ln = Math.max(T.minRope, L - T.reelRate * dt);
+      const Ln = Math.max(T.minRope, L - T.conserveReelRate * dt);
       omega *= (L / Ln) * (L / Ln); // L²ω is conserved: tangential speed scales by L/Ln
       L = Ln;
     }
@@ -477,13 +411,6 @@ export class Player {
     if (omega > vmax) omega = vmax;
     else if (omega < -vmax) omega = -vmax;
 
-    // The swing cannot carry the player above the anchor. Reaching the cap
-    // while still rising, the hook slips: the player keeps the speed they
-    // have and flies on from the cap angle.
-    const cap = rad(T.maxSwingAngleDeg);
-    const slipped = Math.abs(phi) >= cap && Math.sign(omega) === Math.sign(phi);
-    if (slipped) phi = Math.sign(phi) * cap;
-
     this.ropeLen = L;
     this.swingPhi = phi;
     this.swingOmega = omega;
@@ -498,89 +425,15 @@ export class Player {
     this.vx = L * omega * cos - reel * sin;
     this.vy = a.vyAt(time) - L * omega * sin - reel * cos;
 
-    if (slipped) {
-      // At the cap the tangent is vertical: flying on with that velocity is
-      // a rocket straight up that stalls and leaves the player crawling. The
-      // hook slipping off flings the player forward instead — the same
-      // speed, redirected (as the grab itself is), up and ahead.
-      const s = Math.hypot(this.vx, this.vy);
-      const ang = rad(T.slipLaunchAngleDeg);
-      this.vx = s * Math.cos(ang);
-      this.vy = s * Math.sin(ang);
-      this.slip(a);
-      return;
-    }
     this.evaluatePerfect();
     if (this.inPerfectWindow) a.perfectGlow = 1;
   }
 
-  // The hook lets go at the top of the swing: free flight (forward-up, see
-  // stepSwing), no boost, and the held finger has to press again to grab.
-  private slip(anchor: Anchor) {
-    this.events.push({ type: "slip", x: anchor.x, y: anchor.y });
-    this.forgetAnchor();
-    this.state = "glide";
-    this.inPerfectWindow = false;
-    this.perfectQuality = 0;
-  }
-
-  /**
-   * Let go of the current anchor: it stays off limits for a moment, and for
-   * a shorter moment nothing can be grabbed at all — a press that lands as
-   * the finger lifts, or a reflex re-tap right after a launch, is not an aim
-   * at the next anchor, and grabbing one then re-poses the player mid-flight.
-   */
-  private forgetAnchor() {
-    this.lastAnchor = this.anchor;
-    this.lastAnchorCooldown = CONFIG.tether.regrabCooldown;
-    this.grabLockout = Math.max(this.grabLockout, CONFIG.tether.releaseGrabDelay);
-    this.anchor = null;
-  }
-
-  // The original swing, kept verbatim for comparison: semi-implicit Euler, a
-  // position snap onto the rope circle and a velocity projection onto the
-  // tangent. It bleeds energy at the grab and every step, which is why it
-  // was replaced; "classic" in the pause menu selects it.
-  private stepSwingClassic(dt: number, holding: boolean) {
-    const a = this.anchor;
-    if (!a) return;
-    this.swingTime += dt;
-
-    this.vy += CONFIG.world.gravitySwing * dt;
-
-    if (holding && this.ropeLen > CONFIG.tether.minRope) {
-      this.ropeLen = Math.max(
-        CONFIG.tether.minRope,
-        this.ropeLen - CONFIG.tether.classicReelRate * dt
-      );
-    }
-
-    this.x += this.vx * dt;
-    this.y += this.vy * dt;
-
-    const dx = this.x - a.x;
-    const dy = this.y - a.y;
-    const d = Math.hypot(dx, dy) || 1e-6;
-    const nx = dx / d;
-    const ny = dy / d;
-
-    this.x = a.x + nx * this.ropeLen;
-    this.y = a.y + ny * this.ropeLen;
-
-    const vrad = this.vx * nx + this.vy * ny;
-    this.vx -= vrad * nx;
-    this.vy -= vrad * ny;
-
-    this.clampSpeed();
-    this.evaluatePerfect();
-    if (this.inPerfectWindow) a.perfectGlow = 1;
-  }
-
-  /** Scale the player's speed (e.g. the momentum a meteor smash scrubs); keeps the swing consistent. */
+  /** Scale the player's speed (the momentum a meteor smash scrubs); keeps a pendulum swing consistent. */
   scaleVelocity(k: number) {
     this.vx *= k;
     this.vy *= k;
-    if (this.state === "swing") this.swingOmega *= k;
+    if (this.state === "swing" && this.conserveMomentum) this.swingOmega *= k;
   }
 
   private stepDash(dt: number) {
@@ -1047,7 +900,7 @@ export class Player {
 
     ctx.save();
     ctx.translate(this.x, this.y);
-    ctx.rotate(this.angle + this.flipSpin);
+    ctx.rotate(this.angle);
 
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
@@ -1084,7 +937,7 @@ export class Player {
 
     ctx.save();
     ctx.translate(this.x, this.y);
-    ctx.rotate(this.angle + this.flipSpin);
+    ctx.rotate(this.angle);
 
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
@@ -1148,7 +1001,7 @@ export class Player {
 
     ctx.save();
     ctx.translate(this.x, this.y);
-    ctx.rotate(this.angle + this.flipSpin);
+    ctx.rotate(this.angle);
 
     ctx.save();
     ctx.globalCompositeOperation = "lighter";

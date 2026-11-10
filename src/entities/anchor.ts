@@ -36,9 +36,9 @@ export class Anchor {
     }
   }
 
-  // Moving anchors follow y = baseY + amp·sin(speed·t + phase); the swing
-  // physics needs the pivot's motion in closed form so the player can ride
-  // it exactly (no finite differences, no one-step lag).
+  // Moving anchors follow y = baseY + amp·sin(speed·t + phase). The
+  // momentum-conserving swing needs the pivot's motion in closed form so the
+  // player can ride it exactly (no finite differences, no one-step lag).
   yAt(t: number): number {
     return this.kind === "moving"
       ? this.baseY + Math.sin(t * this.speed + this.phase) * this.amp

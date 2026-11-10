@@ -20,10 +20,6 @@ import {
 
 const PALETTE = theme; // HUD reads the live theme for cohesive colour grading
 
-// Full scale of the speed bar. Sits above smashSpeed so the smash tick stays
-// on the bar, below maxSpeed so ordinary flight still shows movement.
-const SPEED_BAR_MAX = 1500;
-
 // Touch devices don't have a keyboard — skip keyboard-only hints. Guarded for
 // the headless test harnesses, which don't define matchMedia.
 const COARSE_POINTER =
@@ -67,7 +63,7 @@ export interface HudData {
   hintAlpha: number;
   character: CharacterId;
   characterName: string;
-  swingModel: "pendulum" | "classic"; // shown on the pause screen's toggle
+  conserveMomentum: boolean; // shown on the pause screen's swing option
 }
 
 interface Popup {
@@ -150,19 +146,11 @@ export class Hud {
     return { x: cam.w - ins.right - r - 20, y: ins.top + r + 20, r };
   }
 
-  /** The two pause-screen buttons (also the hit-test rectangles). */
-  pauseMenuButtons(cam: Camera): {
-    restart: { x: number; y: number; w: number; h: number };
-    swing: { x: number; y: number; w: number; h: number };
-  } {
+  /** The pause screen's swing option (also its hit-test rectangle). */
+  momentumButton(cam: Camera): { x: number; y: number; w: number; h: number } {
     const w = clamp(cam.w * 0.3, 220, 300);
     const h = 44;
-    const x = cam.w / 2 - w / 2;
-    const top = cam.h * 0.42 + 88;
-    return {
-      restart: { x, y: top, w, h },
-      swing: { x, y: top + h + 14, w, h },
-    };
+    return { x: cam.w / 2 - w / 2, y: cam.h * 0.42 + 88, w, h };
   }
 
   playButton(cam: Camera): { x: number; y: number; r: number } {
@@ -240,7 +228,7 @@ export class Hud {
     this.drawDashButton(ctx, cam, d);
 
     // --- Speed pips (bottom-left) ---
-    const spd = clamp(d.speed / SPEED_BAR_MAX, 0, 1);
+    const spd = clamp(d.speed / 1200, 0, 1);
     const barW = 120;
     const spX = 26 + ins.left;
     const spY = cam.h - 36 - ins.bottom;
@@ -255,7 +243,7 @@ export class Hud {
     // drawDashButton leaves textAlign centred; the speed label is left-aligned.
     ctx.textAlign = "left";
     // Threshold tick: reach this mark to charge the smash.
-    const tickX = spX + barW * clamp(CONFIG.player.smashSpeed / SPEED_BAR_MAX, 0, 1);
+    const tickX = spX + barW * clamp(CONFIG.player.smashSpeed / 1200, 0, 1);
     ctx.fillStyle = hexA(PALETTE.text, 0.55);
     ctx.fillRect(tickX - 1, spY - 3, 2, 14);
     // The smash window, draining under the speed bar once it is charged.
@@ -390,7 +378,6 @@ export class Hud {
     ctx.fillRect(0, 0, cam.w, cam.h);
 
     ctx.textAlign = "center";
-    ctx.textBaseline = "top";
     this.text(
       ctx,
       "PAUSED",
@@ -413,25 +400,12 @@ export class Hud {
       true
     );
 
-    // Restart the run, and the swing-physics switch (for comparing the two
-    // models in play; remembered between sessions).
-    const b = this.pauseMenuButtons(cam);
-    this.pauseButtonBox(ctx, b.restart, "RESTART RUN", PALETTE.text);
-    this.pauseButtonBox(
-      ctx,
-      b.swing,
-      d.swingModel === "pendulum" ? "SWING: NEW  ·  tap for classic" : "SWING: CLASSIC  ·  tap for new",
-      d.swingModel === "pendulum" ? PALETTE.collectible : PALETTE.anchorPerfect
-    );
-    ctx.textBaseline = "top";
-  }
-
-  private pauseButtonBox(
-    ctx: CanvasRenderingContext2D,
-    r: { x: number; y: number; w: number; h: number },
-    label: string,
-    color: string
-  ) {
+    // The swing option: the classic rope, or a pendulum that keeps your
+    // momentum. Remembered between sessions.
+    const r = this.momentumButton(cam);
+    const on = d.conserveMomentum;
+    const color = on ? PALETTE.collectible : PALETTE.text;
+    const baseline = ctx.textBaseline;
     ctx.fillStyle = hexA(PALETTE.text, 0.12);
     this.roundRect(ctx, r.x, r.y, r.w, r.h, 12);
     ctx.fill();
@@ -440,7 +414,8 @@ export class Hud {
     ctx.stroke();
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    this.text(ctx, label, r.x + r.w / 2, r.y + r.h / 2, 13, "800", color);
+    this.text(ctx, on ? "CONSERVE MOMENTUM: ON" : "CONSERVE MOMENTUM: OFF", r.x + r.w / 2, r.y + r.h / 2, 13, "800", color);
+    ctx.textBaseline = baseline;
   }
 
   private drawObjectives(ctx: CanvasRenderingContext2D, cam: Camera, d: HudData) {

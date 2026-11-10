@@ -9,11 +9,9 @@ interface SaveData {
   totalPerfect: number;
   orbs: number; // banked currency
   character: CharacterId;
-  swingModel: SwingModel; // "pendulum" (energy-conserving) or "classic" (the old rod)
+  /** The pause-menu swing option: false = the classic rope, true = a momentum-conserving pendulum. */
+  conserveMomentum: boolean;
 }
-
-export type SwingModel = "pendulum" | "classic";
-export const isSwingModel = (v: unknown): v is SwingModel => v === "pendulum" || v === "classic";
 
 const KEY = "gale.save.v1";
 
@@ -31,7 +29,7 @@ const DEFAULT: SaveData = {
   totalPerfect: 0,
   orbs: 0,
   character: "plane",
-  swingModel: "pendulum",
+  conserveMomentum: false,
 };
 
 export class Storage {
@@ -50,7 +48,7 @@ export class Storage {
           ...DEFAULT,
           ...parsed,
           character: isCharacterId(parsed.character) ? parsed.character : "plane",
-          swingModel: isSwingModel(parsed.swingModel) ? parsed.swingModel : "pendulum",
+          conserveMomentum: parsed.conserveMomentum === true,
         };
         // Saves from before orbs existed (or a hand-edited value) bank nothing.
         this.data.orbs = cleanOrbs(parsed.orbs);
@@ -85,8 +83,8 @@ export class Storage {
     this.save();
   }
 
-  setSwingModel(model: SwingModel) {
-    this.data.swingModel = model;
+  setConserveMomentum(on: boolean) {
+    this.data.conserveMomentum = on;
     this.save();
   }
 }

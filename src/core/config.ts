@@ -11,9 +11,7 @@ export const CONFIG = {
     seaLevel: 980, // y of the cloud-sea death floor (fall past this = run over)
     skyCeiling: -1700, // soft upper bound for generated anchors
     gravityAir: 300, // gentle gravity while gliding / airborne
-    // Stronger gravity while tethered: a deliberate energy source relative to
-    // gravityAir, so swings build speed that a glide alone never would.
-    gravitySwing: 1750,
+    gravitySwing: 1750, // strong gravity while tethered (energetic swing)
     metersPerPixel: 0.05, // distance scoring scale
   },
 
@@ -24,10 +22,8 @@ export const CONFIG = {
     minSpeed: 140,
     maxSpeed: 1900,
     // Reach this speed and meteors shatter on contact instead of ending the
-    // run — a clean perfect release gets you there (bot-measured median
-    // perfect release 1400–1800 px/s; about a quarter of sloppy releases
-    // reach it). Retuned from 1050 when the swing stopped losing energy.
-    smashSpeed: 1200,
+    // run — a clean perfect release gets you there.
+    smashSpeed: 1050,
     // Reaching smash speed charges the smash for this long. Drag bleeds a
     // launch below smashSpeed within 0.1–0.5 s, far too briefly to reach the
     // meteor you were aiming at, so the charge outlives the speed itself.
@@ -52,51 +48,15 @@ export const CONFIG = {
     grabRange: 440, // max distance to attach to an anchor
     minRope: 70,
     maxRope: 340,
-    // Rope shortens this many px/s while holding. Reeling in conserves angular
-    // momentum (L²ω), so it is a real pump: speed grows by reelRate/L per
-    // second (10%/s on a 300 px rope, 20%/s on 150 px). The old integrator
-    // silently ate this, which is why 90 once looked harmless.
-    reelRate: 30,
-    // Quadratic air drag on the swing speed (px⁻¹): a = -swingDrag·v·|v|. The
-    // swing is otherwise lossless, so this sets the soft terminal speed —
-    // fractional loss is swingDrag·v per second (6%/s at 1000 px/s for 6e-5).
-    // 0 = pure energy conservation (the physics probes set it).
+    reelRate: 90, // rope shortens this many px/s while holding (adds lift)
+    // The "Conserve momentum" swing (pause menu, off by default) is a
+    // pendulum that keeps the player's speed: the grab turns the whole
+    // velocity into swing, and reeling in conserves angular momentum (L²ω),
+    // so it pumps for real — hence its own, slower reel.
+    conserveReelRate: 30,
+    // Quadratic air drag on that swing's speed (px⁻¹), its only deliberate
+    // loss: a = -swingDrag·v·|v|, 6%/s at 1000 px/s. 0 = pure conservation.
     swingDrag: 6e-5,
-    // The swing cannot carry the player above the anchor: reaching this angle
-    // from straight-below while still holding makes the hook slip (the player
-    // flies on with the speed they have, no boost) — no loop-the-loops.
-    maxSwingAngleDeg: 90,
-    // Where the slip flings the player (screen angle, negative = up). At the
-    // cap the swing's own velocity is straight up — a rocket that stalls —
-    // so the hook slipping off redirects the speed forward-up instead. Just
-    // outside the PERFECT window (-44 ± 17), so a timed release still wins.
-    slipLaunchAngleDeg: -62,
-    // An anchor must be at least this far above the player to be grabbable:
-    // the swing cannot lift the player above the anchor, so a rope to one
-    // at or below their height would slip on the very next step.
-    grabMinAbove: 10,
-    // A grab whose swing would reach the cap within this many seconds is
-    // refused too: hooking an anchor only to slip off it a frame later is
-    // the yank this rule exists to prevent (a rising glide at a near-level
-    // anchor, or an anchor just passed).
-    grabHeadroom: 0.15,
-    // After a release or slip the anchor just left stays ungrabbable for
-    // this long, so a re-press during the launch cannot haul the player back
-    // onto it (the clip that prompted this turned a PERFECT into a vertical
-    // rocket). Other anchors can be grabbed at once.
-    regrabCooldown: 0.6,
-    // ...and for this long after letting go nothing at all can be grabbed:
-    // a press that lands as the finger lifts, or a reflex re-tap during the
-    // launch, would otherwise hook whatever is in range and re-pose the
-    // player mid-flight. Longer than grabBuffer, so such a press expires
-    // unanswered; a deliberate press for the next anchor comes later anyway.
-    releaseGrabDelay: 0.2,
-    // The "classic" swing model (the pre-pendulum rod) kept its own reel rate.
-    classicReelRate: 90,
-    // A press grabs only if an anchor is in reach at that moment — or comes
-    // into reach within this many seconds. Holding never latches onto an
-    // anchor by itself: that is what makes grabbing a deliberate act.
-    grabBuffer: 0.15,
     releaseBoost: 1.07, // velocity multiplier on a normal release
     perfectBoost: 1.45, // velocity multiplier on a perfect release
     perfectBonusSpeed: 130, // additive speed on perfect
@@ -171,14 +131,6 @@ export const CONFIG = {
     perfectPoints: 250,
     collectPoints: 60,
     skimPointsPerSec: 40,
-    flipPoints: 100, // the n-th backflip in one hold scores n × this
-  },
-
-  // Tricks: press and hold in open sky (no anchor in reach) to backflip.
-  tricks: {
-    flipRate: 10, // rad/s of rotation while holding (a full flip every ~0.63 s)
-    flipSpeedLoss: 0.08, // speed scrubbed by each completed flip
-    settleRate: 14, // how fast the character rights itself after letting go
   },
 } as const;
 

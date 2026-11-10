@@ -1,7 +1,8 @@
 // Contact sheets of the tether in motion, for eyeballing the swing physics:
 //   node scripts/swing-strip.mjs
 // Writes screenshots/swing-<name>.png: 4x4 crops every 50 ms around the anchor
-// for an ordinary swing, a loop-the-loop on a short rope, and a moving anchor.
+// for an ordinary swing, a loop-the-loop on a short rope, and a moving anchor,
+// all with the pause-menu option Conserve momentum on (the pendulum).
 import { readdirSync, mkdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -92,6 +93,7 @@ function tick(n, dtMs = 1000 / 120) {
 }
 
 const player = game.player;
+player.conserveMomentum = true; // these sheets show the pendulum
 const world = game.world;
 const CFG = globalThis.window.GALE_CONFIG;
 tick(20);
@@ -151,35 +153,6 @@ quiet();
 placeSwing(a, 150, 0, 1300 / 150);
 sheet("loop", a, 3);
 dispatch("pointerup", { clientX: 400, clientY: 300, pointerId: 1 });
-
-// 2b. A backflip: press and hold in open sky, crops follow the player.
-{
-  staged = null; quiet();
-  dispatch("pointerup", { clientX: 400, clientY: 300, pointerId: 1 });
-  quiet(); tick(1);
-  player.state = "glide"; player.anchor = null; player.y = -300; player.vy = 0; player.vx = 700; player.flipSpin = 0;
-  game.camera.snapTo(player.x, player.y);
-  dispatch("pointerdown", { clientX: 400, clientY: 300, pointerId: 1 });
-  const COLS = 4, ROWS = 4, CW = 520, CH = 340;
-  const canvas = createCanvas(COLS * CW, ROWS * CH);
-  const c = canvas.getContext("2d");
-  for (let shot = 0; shot < COLS * ROWS; shot++) {
-    for (let i = 0; i < 6; i++) { quiet(); player.y = -300; player.vy = 0; tick(1); }
-    if (shot === 11) dispatch("pointerup", { clientX: 400, clientY: 300, pointerId: 1 }); // let go after ~1.4 flips
-    const cam = game.camera;
-    const sx = (player.x - cam.x) * cam.zoom - CW / 2;
-    const sy = (player.y - cam.y) * cam.zoom - CH / 2;
-    const col = shot % COLS, row = Math.floor(shot / COLS);
-    c.drawImage(gameCanvas, sx * DPR, sy * DPR, CW * DPR, CH * DPR, col * CW, row * CH, CW, CH);
-    c.fillStyle = "#fff"; c.font = "bold 18px sans-serif";
-    c.fillText(`+${Math.round(shot * 50)}ms  v=${Math.round(player.speed)}  spin=${(player.flipSpin * 180 / Math.PI).toFixed(0)}°  ${shot >= 12 ? "(released)" : "(holding)"}`, col * CW + 10, row * CH + 24);
-    c.strokeStyle = "#444"; c.strokeRect(col * CW + 0.5, row * CH + 0.5, CW - 1, CH - 1);
-  }
-  const out = path.join(outDir, `swing-flip.png`);
-  writeFileSync(out, canvas.toBuffer("image/png"));
-  console.log("wrote", path.relative(path.join(root, ".."), out));
-  dispatch("pointerup", { clientX: 400, clientY: 300, pointerId: 1 });
-}
 
 // 3. Riding a moving anchor through its fastest stretch.
 a = staged = new Anchor(player.x + 400, player.y - 150, "moving", { amp: 130, phase: 0, speed: 1.6 });

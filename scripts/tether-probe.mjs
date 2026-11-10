@@ -1,10 +1,16 @@
-// Tether physics probe: the swing must obey Newton.   node scripts/tether-probe.mjs
-// Checks, against the real built bundle: the grab keeps the player's energy,
-// a free swing does not drift, reeling in speeds the player up by exactly the
-// rope ratio (angular momentum), a moving anchor hands its velocity over, and
-// a whole glide → grab → swing → release → glide → grab chain conserves energy
-// once every deliberate energy knob (boosts, drag, lift, gravity asymmetry) is
-// zeroed. Knobs are set through window.GALE_CONFIG; nothing is rebuilt.
+// Tether probe for the two swings.   node scripts/tether-probe.mjs
+// The default is the classic rope (the 1.2 swing); the pause-menu option
+// "Conserve momentum" swaps in a pendulum that must obey Newton. Checks,
+// against the real built bundle, for the option: the grab keeps the player's
+// energy, a free swing does not drift, reeling in speeds the player up by
+// exactly the rope ratio (angular momentum), a moving anchor hands its
+// velocity over, a whole glide → grab → swing → release → glide → grab chain
+// conserves energy once every deliberate energy knob is zeroed, and a fast
+// swing still loops over the top (no cap). For both: the option is off by
+// default, off is the old projecting rope, holding grabs (as in 1.2) and a
+// hold in open sky does nothing else, the switch is seamless mid-swing and
+// the pause screen flips and saves it. Knobs are set through
+// window.GALE_CONFIG; nothing is rebuilt.
 import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -148,6 +154,9 @@ function check(name, ok, detail = "") {
 frame(20);
 down(); frame(); up(); frame(2);
 if (game.state !== "playing") throw new Error("expected playing, got " + game.state);
+check("Conserve momentum is off by default (the 1.2 swing)", game.storage.data.conserveMomentum === false && game.player.conserveMomentum === false);
+// Sections 1–7 are about the option's pendulum.
+game.player.conserveMomentum = true;
 const Anchor = world.anchors[0].constructor;
 let staged = null;
 function quiet() {
@@ -170,7 +179,7 @@ function placeGlide(x0, y0, vx, vy) {
   quiet();
   frame();
   player.state = "glide"; player.anchor = null; player.inPerfectWindow = false;
-  player.grabLockout = 0; player.lastAnchor = null; player.lastAnchorCooldown = 0; // a fresh flight, not a launch just made
+  player.grabLockout = 0; // a fresh flight, not a barrier bounce just made
   player.x = x0; player.y = y0; player.vx = vx; player.vy = vy;
   player.trail.length = 0;
   game.smashCharge = 0; game.barrier = false; game.magnetTime = 0;
@@ -201,7 +210,6 @@ const setKnobs = (k) => {
   }
 };
 const saved = JSON.parse(JSON.stringify({ world: CFG.world, player: CFG.player, tether: CFG.tether }));
-const NO_CAP = { "tether.maxSwingAngleDeg": 1e9 }; // the pure-physics checks loop on purpose
 const restoreKnobs = () => { Object.assign(CFG.world, saved.world); Object.assign(CFG.player, saved.player); Object.assign(CFG.tether, saved.tether); };
 const deg = (d) => (d * Math.PI) / 180;
 const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi, player.swingOmega].every(Number.isFinite);
@@ -210,7 +218,7 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
 // Glide made lossless and given the swing's gravity, so E = ½v² − g·y is one
 // quantity across the grab. reel and drag off.
 {
-  setKnobs({ "tether.swingDrag": 0, "tether.reelRate": 0, "player.forwardDrag": 0, "player.vertDrag": 0, "player.glideLift": 0, "world.gravityAir": CFG.world.gravitySwing });
+  setKnobs({ "tether.swingDrag": 0, "tether.conserveReelRate": 0, "player.forwardDrag": 0, "player.vertDrag": 0, "player.glideLift": 0, "world.gravityAir": CFG.world.gravitySwing });
   const g = CFG.world.gravitySwing;
   let worst = 0, cases = 0, bad = [];
   const v0 = 700;
@@ -253,7 +261,7 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
 
 // --- 2. A free swing does not drift -------------------------------------------------
 {
-  setKnobs({ ...NO_CAP, "tether.swingDrag": 0, "tether.reelRate": 0 });
+  setKnobs({ "tether.swingDrag": 0, "tether.conserveReelRate": 0 });
   const g = CFG.world.gravitySwing;
   for (const [L, v, label] of [[70, 1900, "L70 v1900"], [150, 1100, "L150 v1100 (loops)"], [300, 600, "L300 v600"], [420, 300, "L420 v300"]]) {
     const a = stageAnchor(12000, -600);
@@ -275,7 +283,7 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
 
 // --- 3. Reeling in pumps by the rope ratio (angular momentum) -----------------------
 {
-  setKnobs({ ...NO_CAP, "tether.swingDrag": 0, "tether.reelRate": 90, "world.gravitySwing": 0 });
+  setKnobs({ "tether.swingDrag": 0, "tether.conserveReelRate": 90, "world.gravitySwing": 0 });
   const a = stageAnchor(15000, -600);
   placeSwing(a, 300, 0.3, 600 / 300);
   quiet();
@@ -292,7 +300,7 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
 
 // --- 4. A moving anchor hands its velocity over --------------------------------------
 {
-  setKnobs({ "tether.swingDrag": 0, "tether.reelRate": 0, "world.gravitySwing": 0, "world.gravityAir": 0, "player.vertDrag": 0, "player.forwardDrag": 0, "player.glideLift": 0 });
+  setKnobs({ "tether.swingDrag": 0, "tether.conserveReelRate": 0, "world.gravitySwing": 0, "world.gravityAir": 0, "player.vertDrag": 0, "player.forwardDrag": 0, "player.glideLift": 0 });
   const a = stageAnchor(18000, -600, "moving", { amp: 130, phase: 0, speed: 1.6 });
   placeSwing(a, 200, 0, 0);
   let worstV = 0, worstL = 0;
@@ -312,7 +320,7 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
 
 // --- 5. End to end: with every deliberate energy knob zeroed, Newton holds ------------
 {
-  setKnobs({ "world.gravitySwing": 300, "world.gravityAir": 300, "player.forwardDrag": 0, "player.vertDrag": 0, "player.glideLift": 0, "tether.swingDrag": 0, "tether.reelRate": 0, "tether.releaseBoost": 1, "tether.perfectBoost": 1, "tether.perfectBonusSpeed": 0 });
+  setKnobs({ "world.gravitySwing": 300, "world.gravityAir": 300, "player.forwardDrag": 0, "player.vertDrag": 0, "player.glideLift": 0, "tether.swingDrag": 0, "tether.conserveReelRate": 0, "tether.releaseBoost": 1, "tether.perfectBoost": 1, "tether.perfectBonusSpeed": 0 });
   const g = 300;
   const x0 = 21000, y0 = -300;
   const a1 = stageAnchor(x0 + 320, y0 - 160);
@@ -344,7 +352,7 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
 
 // --- 6. Degenerate grabs -----------------------------------------------------------------
 {
-  setKnobs({ ...NO_CAP, "tether.swingDrag": 0, "tether.reelRate": 0 });
+  setKnobs({ "tether.swingDrag": 0, "tether.conserveReelRate": 0 });
   // Zero velocity, anchor above-ahead: hangs, then gravity swings it.
   let a = stageAnchor(24000 + 150, -400 - 150);
   placeGlide(24000, -400, 0, 0);
@@ -358,198 +366,138 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
   pressAndGrab();
   check("straight-up radial grab turns forward", player.state === "swing" && finite() && player.vx > 0 && Math.abs(Math.hypot(player.vx, player.vy) - 500) < 500 * 0.02, `v (${player.vx.toFixed(0)}, ${player.vy.toFixed(0)})`);
   up();
-  // Above (or level with) the anchor: the swing could not lift the player
-  // past it, so the press is refused and the glide carries on untouched.
-  a = stageAnchor(26000 + 100, -400 + 200);
-  placeGlide(26000, -400, 500, 0);
-  const grabbedFromAbove = pressAndGrab();
-  check("a press above the anchor's height is refused", !grabbedFromAbove && player.state === "glide" && player.vx > 0, `state ${player.state} vx ${player.vx.toFixed(0)}`);
-  up();
-  a = stageAnchor(26500 + 200, -400 + 4);
-  placeGlide(26500, -400, 500, 0);
-  const grabbedLevel = pressAndGrab();
-  check("a press at an anchor level with the player is refused", !grabbedLevel && player.state === "glide", `state ${player.state}`);
-  up();
   restoreKnobs();
 }
 
-// --- 7. The cap: the hook slips at the anchor's height ------------------------------------
+// --- 7. No cap: like the classic rope, a fast swing carries over the top ---------------------
 {
-  setKnobs({ "tether.swingDrag": 0, "tether.reelRate": 0 });
+  setKnobs({ "tether.swingDrag": 0, "tether.conserveReelRate": 0 });
   const a = stageAnchor(28000, -600);
-  placeSwing(a, 150, 0, 1300 / 150); // would loop
-  quiet();
-  let maxPhi = 0, slipSpeed = 0, preSpeed = 0, slipped = false, slipY = 0;
-  for (let i = 0; i < 240 && !slipped; i++) {
-    preSpeed = Math.hypot(player.vx, player.vy);
+  // 1300 px/s at the bottom of a 150 px rope clears the top (needs √(5gL) ≈ 1146).
+  placeSwing(a, 150, 0, 1300 / 150);
+  let over = false, highest = 0;
+  for (let i = 0; i < 120 && player.state === "swing"; i++) {
     quiet(); frame();
-    if (player.state === "swing") maxPhi = Math.max(maxPhi, Math.abs(player.swingPhi));
-    else { slipped = true; slipSpeed = Math.hypot(player.vx, player.vy); slipY = player.y; }
+    highest = Math.max(highest, a.y - player.y);
+    if (Math.abs(player.swingPhi) > deg(170)) over = true;
   }
-  check("a swing that would loop slips at the anchor's height instead", slipped && maxPhi <= Math.PI / 2 + 1e-9 && Math.abs(slipY - a.y) < 1.5, `max φ ${(maxPhi * 180 / Math.PI).toFixed(1)}°, slipped at y−anchor.y = ${(slipY - a.y).toFixed(1)}`);
-  check("the slip keeps the speed (no boost, no loss)", slipped && Math.abs(slipSpeed - preSpeed) / preSpeed < 0.02, `${preSpeed.toFixed(0)} → ${slipSpeed.toFixed(0)}`);
-  const slipAng = (Math.atan2(player.vy, player.vx) * 180) / Math.PI;
-  check("the slip flings forward-up, not straight up", slipped && player.vx > 0 && Math.abs(slipAng - CFG.tether.slipLaunchAngleDeg) < 0.5, `launch ${slipAng.toFixed(1)}° (knob ${CFG.tether.slipLaunchAngleDeg}°), v (${player.vx.toFixed(0)}, ${player.vy.toFixed(0)})`);
-  // Still holding: no re-grab, even with the anchor in reach.
-  let regrabbed = false;
-  for (let i = 0; i < 120; i++) { quiet(); frame(); if (player.state === "swing") regrabbed = true; }
-  check("a held finger does not re-grab after the slip", !regrabbed, `state ${player.state}`);
-  // Lift and press again: grabs.
-  up(); quiet(); frame();
-  player.x = a.x - 200; player.y = a.y + 150; player.vx = 500; player.vy = 0; game.camera.snapTo(player.x, player.y);
-  down();
-  let grabbed = false;
-  for (let i = 0; i < 10 && !grabbed; i++) { quiet(); frame(); grabbed = player.state === "swing"; }
-  check("a fresh press grabs again", grabbed);
+  check("a fast swing loops over the top of the anchor (no cap, no slip)", over && player.state === "swing" && finite(), `highest ${highest.toFixed(0)} px above the anchor, state ${player.state}`);
   up();
   restoreKnobs();
 }
 
-// --- 7b. The anchor just left is off limits for a moment ------------------------------------
-{
-  setKnobs({ "tether.swingDrag": 0, "tether.reelRate": 0 });
-  const a = stageAnchor(28600, -600);
-  const b = new Anchor(a.x, a.y);
-  // A PERFECT-window release from `a`, flying up and forward.
-  const releaseFromA = () => {
-    placeSwing(a, 150, deg(45), 900 / 150);
-    quiet(); frame();
-    up(); quiet(); frame();
-    return player.state === "glide" && player.vx > 0 && player.vy < 0;
-  };
-  // World setups, applied every frame: `a` and a second anchor `b` kept just
-  // ahead of and above the player; `a` alone with the player parked below
-  // and to its left; `a` and `b` with the player parked past `a`.
-  const both = () => { world.anchors.length = 0; world.anchors.push(a, b); world.genX = player.x + 1e6; b.x = player.x + 160; b.y = player.y - 200; };
-  const onlyA = () => { world.anchors.length = 0; world.anchors.push(a); world.genX = player.x + 1e6; player.x = a.x - 200; player.y = a.y + 150; player.vx = 400; player.vy = 0; };
-  const nearB = () => { world.anchors.length = 0; world.anchors.push(a, b); world.genX = player.x + 1e6; player.x = a.x + 118; player.y = a.y + 90; player.vx = 600; player.vy = -300; b.x = player.x + 160; b.y = player.y - 200; };
-  const delayFrames = Math.ceil(CFG.tether.releaseGrabDelay * 120) + 2;
-  const graceFrames = Math.ceil(CFG.tether.grabBuffer * 120) + 2;
-
-  let launched = releaseFromA();
-  down();
-  let regrabbed = false;
-  for (let i = 0; i < 6; i++) { quiet(); frame(); if (player.state === "swing") regrabbed = true; }
-  check("a re-press right after a release does not re-grab the anchor just left", launched && !regrabbed && player.vx > 0, `state ${player.state}, v (${player.vx.toFixed(0)}, ${player.vy.toFixed(0)})`);
-  // The press is not kept on ice either: held through the delay with another
-  // anchor in reach, it expires (the hold is a backflip) instead of hooking
-  // `b` the moment the delay ends.
-  let grabbedLate = false;
-  for (let i = 0; i < delayFrames + graceFrames; i++) { both(); frame(); if (player.state === "swing") grabbedLate = true; }
-  check("a press made inside the delay expires instead of grabbing when the delay ends", !grabbedLate && player.flipping, `state ${player.state}, flipping ${player.flipping}`);
-  up(); both(); frame();
-  // Past the delay but inside the cooldown, `a` is refused even when it is
-  // the only anchor in reach.
-  onlyA(); frame();
-  down();
-  let regrabbedLater = false;
-  for (let i = 0; i < 6; i++) { onlyA(); frame(); if (player.state === "swing") regrabbedLater = true; }
-  check("inside the cooldown the anchor just left is refused even when it is the only one in reach", !regrabbedLater && player.lastAnchor === a, `state ${player.state}`);
-  up(); onlyA(); frame();
-  // Once the cooldown has run out `a` is fair game again (nothing reset by hand).
-  for (let i = 0; i < Math.ceil(CFG.tether.regrabCooldown * 120) + 12; i++) { onlyA(); frame(); }
-  check("the old anchor is grabbable again once the cooldown has run out", player.lastAnchor === null && pressAndGrab() && player.anchor === a);
-  up();
-  // A fresh release: once the delay has passed a different anchor is grabbed
-  // while the one just left is still off limits.
-  launched = releaseFromA();
-  for (let i = 0; i < delayFrames; i++) { nearB(); frame(); }
-  down();
-  let grabbedOther = false;
-  for (let i = 0; i < 6; i++) { nearB(); frame(); if (player.state === "swing") { grabbedOther = player.anchor === b; break; } }
-  check("once the delay has passed a different anchor is grabbed, not the one just left", launched && grabbedOther, `anchor is ${player.anchor === b ? "the new one" : player.anchor === a ? "the old one" : "none"}`);
-  up();
-  restoreKnobs();
-}
-
-// --- 8. The classic model is still the old rod ----------------------------------------------
+// --- 8. Off (the default) is the classic rope ------------------------------------------------
 {
   setKnobs({ "tether.swingDrag": 0 });
-  player.swingModel = "classic";
-  // Level flight into an anchor 30° up: the old projection keeps sin(30°) = 50% of speed.
+  // Level flight into an anchor 30° up: the rope's projection keeps sin(30°) = 50% of
+  // speed; the option keeps all of it.
   const v0 = 700;
-  const a = stageAnchor(30000 + 300 * Math.cos(deg(30)), -300 - 300 * Math.sin(deg(30)));
-  placeGlide(30000, -300, v0, 0);
-  pressAndGrab();
-  const kept = Math.hypot(player.vx, player.vy) / v0;
-  check("classic grab projects the velocity like before (keeps ~50% here)", player.state === "swing" && kept > 0.42 && kept < 0.58, `kept ${(100 * kept).toFixed(0)}% of speed`);
-  // and it can loop (no cap applied to the classic rod)
-  up(); quiet(); frame();
+  const kept = {};
+  for (const on of [false, true]) {
+    player.conserveMomentum = on;
+    const x0 = on ? 30500 : 30000;
+    stageAnchor(x0 + 300 * Math.cos(deg(30)), -300 - 300 * Math.sin(deg(30)));
+    placeGlide(x0, -300, v0, 0);
+    pressAndGrab();
+    kept[on] = player.state === "swing" ? Math.hypot(player.vx, player.vy) / v0 : 0;
+    up();
+  }
+  check("off: the grab projects the velocity like 1.2 (keeps ~50% here)", kept[false] > 0.42 && kept[false] < 0.58, `kept ${(100 * kept[false]).toFixed(0)}% of speed`);
+  check("on: the same grab keeps the speed", kept[true] > 0.97, `kept ${(100 * kept[true]).toFixed(0)}% of speed`);
+  player.conserveMomentum = false;
+  quiet(); frame();
   const b = stageAnchor(31000, -600);
   placeSwing(b, 150, 0, 1300 / 150);
   let above = false;
   for (let i = 0; i < 120; i++) { quiet(); frame(); if (player.state === "swing" && player.y < b.y - 10) above = true; }
-  check("classic rod is unchanged (it may still loop)", above && player.state === "swing", `state ${player.state}`);
+  check("off: the classic rope can loop too", above && player.state === "swing", `state ${player.state}`);
   up();
-  player.swingModel = "pendulum";
+  player.conserveMomentum = true;
   restoreKnobs();
 }
 
-// --- 9. Restart run from the pause screen ------------------------------------------------------
+// --- 9. Hold to grab, as in 1.2; a hold in open sky does nothing else ------------------------
 {
-  const a = stageAnchor(33000 + 300, -400 - 200);
-  placeGlide(33000, -400, 500, 0);
-  quiet(); frame(5);
-  game.runOrbs = 7;
-  const runsBefore = game.storage.data.runs;
-  const clockBefore = game.time;
-  const camBefore = game.camera.x;
-  game.togglePause();
-  check("paused", game.state === "paused");
-  game.restartRun();
-  frame(2);
-  check("restart starts a fresh run in place", game.state === "playing" && game.runOrbs === 0 && Math.abs(game.camera.x - camBefore) < 60 && game.time > clockBefore, `state ${game.state} orbs ${game.runOrbs} camera moved ${(game.camera.x - camBefore).toFixed(0)}`);
-  check("an abandoned run is not recorded", game.storage.data.runs === runsBefore);
-  check("music resumes after a restart from pause", game.sound.musicPaused === false);
+  setKnobs({ "tether.swingDrag": 0, "tether.conserveReelRate": 0 });
+  for (const on of [false, true]) {
+    const label = on ? "on" : "off";
+    player.conserveMomentum = on;
+    staged = null; // open sky
+    placeGlide(33000 + (on ? 4000 : 0), -400, 500, 0);
+    world.clouds.length = 0; // no skim points either
+    const bonus0 = game.bonus;
+    down();
+    let swung = false;
+    for (let i = 0; i < 60; i++) { quiet(); world.clouds.length = 0; frame(); if (player.state === "swing") swung = true; }
+    check(`${label}: a hold in open sky just glides (no trick, no bonus points)`, !swung && player.state === "glide" && !("flipSpin" in player) && game.bonus === bonus0, `state ${player.state}, bonus +${(game.bonus - bonus0).toFixed(0)}`);
+    // Still holding: an anchor that comes into reach is latched, as in 1.2.
+    stageAnchor(player.x + 200, player.y - 150);
+    let grabbed = false;
+    for (let i = 0; i < 6; i++) { quiet(); frame(); if (player.state === "swing") { grabbed = true; break; } }
+    check(`${label}: a held finger latches onto an anchor as it comes into reach`, grabbed, `state ${player.state}`);
+    up();
+  }
+  player.conserveMomentum = true;
+  restoreKnobs();
 }
 
-// --- 10. Deliberate grabs and backflips ------------------------------------------------
+// --- 10. Switching mid-swing is seamless -----------------------------------------------------
 {
-  setKnobs({ "tether.swingDrag": 0, "tether.reelRate": 0, "player.forwardDrag": 0, "player.vertDrag": 0, "player.glideLift": 0, "world.gravityAir": 0 });
-  // Holding in open sky backflips: each full turn scores more and scrubs speed.
-  staged = null; quiet();
-  placeGlide(36000, -400, 600, 0);
-  const bonus0 = game.bonus;
-  const flipObj = game.objectives.list.find((o) => o.kind === "flip");
-  const flipProgress0 = flipObj ? flipObj.progress : 0;
-  down();
-  let flips = [];
-  for (let i = 0; i < 120 * 2; i++) { quiet(); frame(); if (game.bonus !== (flips.length ? flips[flips.length - 1].bonus : bonus0)) flips.push({ t: i / 120, bonus: game.bonus, speed: Math.hypot(player.vx, player.vy) }); }
-  const gains = flips.map((f, i) => f.bonus - (i ? flips[i - 1].bonus : bonus0));
-  check("holding in open sky backflips and scores 100, 200, 300…", flips.length >= 3 && gains[0] === 100 && gains[1] === 200 && gains[2] === 300 && player.state === "glide", `gains ${gains.join(",")} at ${flips.map((f) => f.t.toFixed(2) + "s").join(" ")}`);
-  check("each flip scrubs 8% of speed", flips.length >= 2 && Math.abs(flips[1].speed / flips[0].speed - 0.92) < 0.01, `${flips.map((f) => f.speed.toFixed(0)).join(" → ")}`);
-  check("the flip objective counts them", !flipObj || flipObj.progress - flipProgress0 === Math.min(flips.length, flipObj.target - flipProgress0));
-  check("the character is spinning while held", Math.abs(player.flipSpin) > 0.5, `spin ${player.flipSpin.toFixed(2)}`);
-  up();
-  for (let i = 0; i < 60; i++) { quiet(); frame(); }
-  check("the character settles upright after letting go", Math.abs(player.flipSpin) < 0.01, `spin ${player.flipSpin.toFixed(3)}`);
-
-  // Holding past an anchor without a fresh press does not grab it.
-  const a = stageAnchor(player.x + 600, player.y - 150);
-  down(); // pressed in open sky (anchor 600 px away): a backflip, not a grab
-  let grabbedWhileHeld = false;
-  for (let i = 0; i < 240; i++) { quiet(); frame(); if (player.state === "swing") grabbedWhileHeld = true; }
-  check("a hold that started in open sky never latches onto an anchor it passes", !grabbedWhileHeld && player.x > a.x, `state ${player.state}, passed anchor: ${player.x > a.x}`);
-  up();
-
-  // A press just before the anchor comes into reach still grabs (0.15 s grace).
-  placeGlide(40000, -400, 500, 0);
-  const c = stageAnchor(40000 + 470, -400 - 60); // 474 px away: out of reach at the press, in reach ~70 ms later
-  down();
-  let grabbedLate = false, framesToGrab = 0;
-  for (let i = 0; i < 30 && !grabbedLate; i++) { quiet(); frame(); framesToGrab++; grabbedLate = player.state === "swing" && player.anchor === c; }
-  check("a press within the grace window grabs the anchor as it comes into reach", grabbedLate && player.flipSpin === 0, `after ${framesToGrab} frames, spin ${player.flipSpin.toFixed(3)}`);
-  up();
-
-  // A press well before reach (beyond the grace) flips and does not grab.
-  placeGlide(42000, -400, 500, 0);
-  const d = stageAnchor(42000 + 650, -400 - 60); // in reach only after ~0.42 s
-  down();
-  let grabbedEarly = false;
-  for (let i = 0; i < 90; i++) { quiet(); frame(); if (player.state === "swing") grabbedEarly = true; }
-  check("a press long before reach is a backflip, not a grab", !grabbedEarly && Math.abs(player.flipSpin) > 0.5, `state ${player.state}`);
+  setKnobs({ "tether.swingDrag": 0, "tether.conserveReelRate": 0, "tether.reelRate": 0 });
+  player.conserveMomentum = true;
+  const a = stageAnchor(40000, -600);
+  placeSwing(a, 200, 0.4, 700 / 200);
+  for (let i = 0; i < 10; i++) { quiet(); frame(); }
+  player.setConserveMomentum(false, game.time);
+  for (let i = 0; i < 10; i++) { quiet(); frame(); }
+  const ropeErr = Math.abs(Math.hypot(player.x - a.x, player.y - a.y) - player.ropeLen);
+  check("turned off mid-swing: the classic rope carries on", player.conserveMomentum === false && player.state === "swing" && finite() && ropeErr < 1e-6, `rope error ${ropeErr.toExponential(1)} px`);
+  const v1 = Math.hypot(player.vx, player.vy);
+  const x1 = player.x, y1 = player.y;
+  player.setConserveMomentum(true, game.time);
+  const syncErr = Math.abs(player.ropeLen * Math.abs(player.swingOmega) - v1);
+  check("turned on mid-swing: the pendulum starts from the same position and speed", player.x === x1 && player.y === y1 && syncErr < 1e-6 * v1, `speed ${v1.toFixed(1)} vs ${(player.ropeLen * Math.abs(player.swingOmega)).toFixed(1)}`);
+  quiet(); frame();
+  check("…and keeps swinging smoothly", player.state === "swing" && finite() && Math.abs(Math.hypot(player.vx, player.vy) - v1) < 40, `speed ${v1.toFixed(0)} → ${Math.hypot(player.vx, player.vy).toFixed(0)}`);
   up();
   restoreKnobs();
+}
+
+// --- 11. A smash's speed scrub mid-swing sticks ----------------------------------------------
+{
+  setKnobs({ "tether.swingDrag": 0, "tether.conserveReelRate": 0, "world.gravitySwing": 0 });
+  player.conserveMomentum = true;
+  const a = stageAnchor(42000, -600);
+  placeSwing(a, 200, 0.3, 800 / 200);
+  quiet(); frame();
+  const v0 = player.speed;
+  player.scaleVelocity(0.5);
+  quiet(); frame();
+  check("on: a speed scrub mid-swing sticks (the pendulum is scaled too)", Math.abs(player.speed / v0 - 0.5) < 0.01, `${v0.toFixed(0)} → ${player.speed.toFixed(0)}`);
+  up();
+  restoreKnobs();
+}
+
+// --- 12. The pause screen flips the option and the save keeps it --------------------------------
+{
+  staged = null;
+  placeGlide(44000, -400, 400, 0);
+  player.conserveMomentum = game.storage.data.conserveMomentum; // what the game believes
+  const before = game.storage.data.conserveMomentum;
+  dispatch("keydown", { code: "Escape" }); frame(); dispatch("keyup", { code: "Escape" }); frame();
+  check("Esc pauses", game.state === "paused", game.state);
+  const r = game.hud.momentumButton(game.camera);
+  const tap = () => {
+    dispatch("pointerdown", { clientX: r.x + r.w / 2, clientY: r.y + r.h / 2, pointerId: 1 }); frame();
+    dispatch("pointerup", { clientX: r.x + r.w / 2, clientY: r.y + r.h / 2, pointerId: 1 }); frame();
+  };
+  tap();
+  const saved1 = JSON.parse(globalThis.localStorage.store["gale.save.v1"] || "{}");
+  check("tapping the button flips the option, for the player and in the save", game.state === "paused" && game.storage.data.conserveMomentum === !before && player.conserveMomentum === !before && saved1.conserveMomentum === !before, `save ${saved1.conserveMomentum}`);
+  tap();
+  check("tapping it again flips it back", game.state === "paused" && game.storage.data.conserveMomentum === before && player.conserveMomentum === before);
+  dispatch("keydown", { code: "Escape" }); frame(); dispatch("keyup", { code: "Escape" }); frame();
+  check("Esc resumes", game.state === "playing", game.state);
 }
 
 console.log(failures ? `\n${failures} FAILED` : "\nall checks passed");

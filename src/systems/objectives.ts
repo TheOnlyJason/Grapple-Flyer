@@ -8,8 +8,7 @@ export type ObjectiveKind =
   | "distance"
   | "dash"
   | "smash"
-  | "orb"
-  | "flip";
+  | "orb";
 
 // A finished objective is crossed out, lingers, then fades and closes up.
 export const OBJECTIVE_STRIKE = 0.35; // s for the line to cross the label
@@ -68,7 +67,6 @@ const TEMPLATES: Template[] = [
   { kind: "dash", range: [2, 3], step: 1, make: (t) => `Trigger ${t} wind dashes` },
   { kind: "smash", range: [2, 3], step: 1, make: (t) => `Smash ${t} meteors at full speed` },
   { kind: "orb", range: [15, 30], step: 5, make: (t) => `Collect ${t} orbs` },
-  { kind: "flip", range: [3, 6], step: 1, make: (t) => `Land ${t} backflips` },
 ];
 
 // Generates and tracks three distinct run objectives.

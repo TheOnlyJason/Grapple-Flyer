@@ -158,7 +158,7 @@ export class Game {
 
     this.world.reset(this.rng, this.startX, CONFIG.world.startY);
     this.player.reset(this.startX, CONFIG.world.startY, this.storage.data.character);
-    this.player.swingModel = this.storage.data.swingModel;
+    this.player.conserveMomentum = this.storage.data.conserveMomentum;
     this.camera.snapTo(this.player.x, this.player.y);
     this.world.ensure(this.camera.right);
   }
@@ -247,28 +247,11 @@ export class Game {
     return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
   }
 
-  /** Abandon the current run (nothing is recorded) and start a fresh one in place. */
-  private restartRun() {
-    if (this.state !== "playing" && this.state !== "paused") return;
-    this.clearSmash();
-    this.magnetTime = 0;
-    this.barrier = false;
-    this.sound.setMusicPaused(false);
-    this.sound.setWind(0);
-    // Hand off exactly as a run's end does, then start straight away.
-    this.state = "gameover";
-    this.timeInState = 0;
-    this.player.trail.length = 0;
-    this.attractGlideX = this.player.x;
-    this.attractGlideStartTime = this.time;
-    this.player.animateMenuGlide(0, 0, this.attractGlideX);
-    this.startRun();
-  }
-
-  private toggleSwingModel() {
-    const next = this.storage.data.swingModel === "pendulum" ? "classic" : "pendulum";
-    this.storage.setSwingModel(next);
-    this.player.setSwingModel(next, this.time);
+  /** The pause-menu swing option (remembered in the save). */
+  private toggleConserveMomentum() {
+    const next = !this.storage.data.conserveMomentum;
+    this.storage.setConserveMomentum(next);
+    this.player.setConserveMomentum(next, this.time);
   }
 
   private hitPauseButton(): boolean {
@@ -400,19 +383,12 @@ export class Game {
 
     this.handleStateInput();
 
-    // A fresh press while playing is a grab attempt (or a backflip in open
-    // sky). The press that started the run does not count (timeInState is
-    // still 0 on that frame), nor does a press that landed on the dash button.
-    if (this.state === "playing" && this.timeInState > 0 && this.input.pressed && !this.dashLatch) {
-      this.player.pressTether();
-    }
-
     if (this.state !== "paused") {
       // World streaming runs once per rendered frame, not per 120 Hz sub-step:
       // the 700px spawn / 500px cull buffers dwarf per-frame camera movement.
       // ensure() before the step loop so anchors exist for the physics steps;
       // cull() after it, once the camera has settled for this frame.
-      this.world.ensure(this.camera.right, this.player.y);
+      this.world.ensure(this.camera.right);
       this.acc += dt;
       let steps = 0;
       while (this.acc >= CONFIG.fixedDt && steps < 8) {
@@ -453,16 +429,9 @@ export class Game {
     if (this.state === "crashing") return;
 
     if (this.state === "paused") {
-      if (this.input.pointerJustDown) {
-        const b = this.hud.pauseMenuButtons(this.camera);
-        if (this.hitRect(b.restart)) {
-          this.restartRun();
-          return;
-        }
-        if (this.hitRect(b.swing)) {
-          this.toggleSwingModel();
-          return;
-        }
+      if (this.input.pointerJustDown && this.hitRect(this.hud.momentumButton(this.camera))) {
+        this.toggleConserveMomentum();
+        return;
       }
       if (
         this.input.tapped.has("Escape") ||
@@ -640,8 +609,8 @@ export class Game {
     this.camera.follow(this.player.x, this.player.y, this.player.speed, dt);
 
     // Highlight the nearest grab candidate so the route reads clearly. Same
-    // view gate and lockout as the actual grab, so the glow never lies.
-    if (this.player.state === "glide" && this.player.grabReady) {
+    // view gate as the actual grab, so the glow never lies.
+    if (this.player.state === "glide") {
       const target = this.player.findGrabTarget(this.world.anchors, this.camera);
       if (target) target.highlight = 1;
     }
@@ -660,28 +629,6 @@ export class Game {
             color: theme.anchorRing,
           });
           if (e.moving) this.objectives.report("moving", 1);
-          break;
-        }
-        case "flip": {
-          const points = CONFIG.scoring.flipPoints * e.n;
-          this.bonus += points;
-          this.objectives.report("flip", 1);
-          const name = e.n === 1 ? "BACKFLIP" : e.n === 2 ? "DOUBLE FLIP" : e.n === 3 ? "TRIPLE FLIP" : `${e.n}× FLIP`;
-          this.hud.popup(e.x, e.y - 34, `${name} +${points}`, theme.anchorPerfect, 1 + Math.min(0.4, 0.1 * e.n));
-          this.sound.flip(e.n);
-          this.camera.addShake(2);
-          break;
-        }
-        case "slip": {
-          // The hook let go at the top of the swing: a soft cue, nothing scored.
-          this.sound.slip();
-          this.particles.emit(e.x, e.y, {
-            count: 6,
-            speed: [40, 160],
-            life: [0.2, 0.45],
-            size: [1.5, 3],
-            color: theme.anchor,
-          });
           break;
         }
         case "release": {
@@ -1048,11 +995,11 @@ export class Game {
       muted: !this.sound.enabled,
       newBest: this.newBest,
       perfectCount: this.perfectCount,
-      hint: "Press near an anchor to swing  ·  hold in open sky to backflip",
+      hint: "Hold to swing  ·  release to slingshot",
       hintAlpha: this.state === "playing" ? hintAlpha : 0,
       character: this.storage.data.character,
       characterName: characterName(this.storage.data.character),
-      swingModel: this.storage.data.swingModel,
+      conserveMomentum: this.storage.data.conserveMomentum,
     };
   }
 }
