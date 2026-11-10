@@ -10,6 +10,7 @@ import {
   OBJECTIVE_STRIKE,
 } from "../systems/objectives";
 import type { CharacterId } from "../characters/registry";
+import type { TutorialKey } from "../systems/tutorial";
 import {
   drawOrbIcon,
   drawPowerIcon,
@@ -24,6 +25,24 @@ const PALETTE = theme; // HUD reads the live theme for cohesive colour grading
 // the headless test harnesses, which don't define matchMedia.
 const COARSE_POINTER =
   typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+
+// The tutorial's words, one card per lesson (keyboard variants for desktop).
+const TUTORIAL_COPY: Record<TutorialKey, { title: string; sub: string; titleKeys?: string; subKeys?: string }> = {
+  grab: {
+    title: "Hold to grab",
+    sub: "Press and hold while an anchor glows",
+    subKeys: "Hold Space while an anchor glows",
+  },
+  release: { title: "Let go on gold", sub: "Release while the rope glows gold" },
+  chain: { title: "Grab the next one", sub: "Hold again in mid-air to chain swings" },
+  dash: {
+    title: "Tap DASH",
+    titleKeys: "Press D to dash",
+    sub: "A full gauge blasts you through rocks",
+  },
+  sea: { title: "Stay above the clouds", sub: "Falling into the cloud sea ends the run" },
+  done: { title: "You're ready", sub: "Fly as far as you can" },
+};
 
 // Assigning ctx.font triggers a CSS shorthand parse + font-cache lookup in
 // WebKit, so compose each string once. HUD sizes are a small fixed set;
@@ -64,6 +83,8 @@ export interface HudData {
   character: CharacterId;
   characterName: string;
   conserveMomentum: boolean; // shown on the pause screen's swing option
+  /** The first-flight tutorial: the card to show (fading by alpha), and whether it is running. */
+  tutorial: { active: boolean; key: TutorialKey | null; alpha: number; holding: boolean; gold: boolean };
 }
 
 interface Popup {
@@ -146,6 +167,20 @@ export class Hud {
     return { x: cam.w - ins.right - r - 20, y: ins.top + r + 20, r };
   }
 
+  /** SKIP during the tutorial: top centre, clear of the score and the pause button. */
+  tutorialSkipButton(cam: Camera): { x: number; y: number; w: number; h: number } {
+    const w = 132;
+    const h = 30;
+    return { x: cam.w / 2 - w / 2, y: cam.insets.top + 14, w, h };
+  }
+
+  /** HOW TO PLAY on the menu and game-over screens: top left, opposite the orb bank. */
+  howToPlayButton(cam: Camera): { x: number; y: number; w: number; h: number } {
+    const w = 132;
+    const h = 34;
+    return { x: cam.insets.left + 22, y: cam.insets.top + 22, w, h };
+  }
+
   /** The pause screen's two buttons (also their hit-test rectangles). */
   pauseMenuButtons(cam: Camera): {
     restart: { x: number; y: number; w: number; h: number };
@@ -226,8 +261,10 @@ export class Hud {
     drawOrbIcon(ctx, 33 + ins.left, 113 + ins.top, 6);
     this.text(ctx, `${d.orbs}`, 46 + ins.left, 105 + ins.top, 14, "700", ORB_COLOR);
 
-    // --- Objectives (top-right) ---
-    this.drawObjectives(ctx, cam, d);
+    // --- Objectives (top-right) --- (kept out of the way during the tutorial)
+    if (!d.tutorial.active) this.drawObjectives(ctx, cam, d);
+
+    if (d.tutorial.active || d.tutorial.alpha > 0.01) this.drawTutorial(ctx, cam, d);
 
     if (paused) this.drawPauseOverlay(ctx, cam, d);
 
@@ -386,6 +423,109 @@ export class Hud {
       ctx.fillRect(b.x - gap - barW, b.y - barH / 2, barW, barH);
       ctx.fillRect(b.x + gap, b.y - barH / 2, barW, barH);
     }
+  }
+
+  /**
+   * The tutorial: one card at a time, low in the frame — a big line, a small
+   * one, and a gesture beside them (a ring that fills for a hold, one that
+   * springs outward for a let-go) — plus a ring around DASH for the dash
+   * lesson and a SKIP button while it runs.
+   */
+  private drawTutorial(ctx: CanvasRenderingContext2D, cam: Camera, d: HudData) {
+    const t = d.tutorial;
+    const ins = cam.insets;
+    const now = performance.now() / 1000;
+    const baseline = ctx.textBaseline;
+
+    if (t.active && d.state === "playing") {
+      const r = this.tutorialSkipButton(cam);
+      ctx.fillStyle = hexA("#0a0d24", 0.28);
+      this.roundRect(ctx, r.x, r.y, r.w, r.h, r.h / 2);
+      ctx.fill();
+      ctx.strokeStyle = hexA(PALETTE.text, 0.35);
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      this.text(ctx, "SKIP TUTORIAL", r.x + r.w / 2, r.y + r.h / 2 + 1, 11, "800", hexA(PALETTE.text, 0.8));
+    }
+
+    const a = t.alpha;
+    if (!t.key || a <= 0.01) {
+      ctx.textBaseline = baseline;
+      return;
+    }
+    const copy = TUTORIAL_COPY[t.key];
+    const title = !COARSE_POINTER && copy.titleKeys ? copy.titleKeys : copy.title;
+    const sub = !COARSE_POINTER && copy.subKeys ? copy.subKeys : copy.sub;
+    const titleSize = clamp(cam.w * 0.036, 22, 34);
+    const gesture = t.key === "grab" || t.key === "chain" || t.key === "release";
+    const glyph = gesture ? 36 + 14 : 0; // the gesture sits left of the words
+    this.setFont(ctx, "800", titleSize);
+    const tw = ctx.measureText(title).width;
+    this.setFont(ctx, "600", 15);
+    const sw = ctx.measureText(sub).width;
+    const cw = glyph + Math.max(tw, sw) + 48;
+    const ch = titleSize + 56;
+    // Low in the frame, between the speed bar and DASH: the camera keeps the
+    // plane near the middle and anchors, ropes and rocks above or level with
+    // it, so the strip above the HUD's bottom row is the sky nothing happens in.
+    const cy = cam.h - ins.bottom - 64 - ch / 2;
+    const x0 = cam.w / 2 - cw / 2;
+    const y0 = cy - ch / 2;
+    ctx.fillStyle = hexA("#0a0d24", 0.3 * a);
+    this.roundRect(ctx, x0, y0, cw, ch, 18);
+    ctx.fill();
+
+    const textX = x0 + 24 + glyph;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    // The release card's title turns gold with the rope: now.
+    const titleCol = t.key === "release" && t.gold ? PALETTE.anchorPerfect : PALETTE.text;
+    this.text(ctx, title, textX, y0 + 16, titleSize, "800", hexA(titleCol, a), true);
+    this.text(ctx, sub, textX, y0 + 22 + titleSize, 15, "600", hexA(PALETTE.text, 0.85 * a), true);
+
+    if (gesture) {
+      const gx = x0 + 24 + 18;
+      const gy = cy;
+      ctx.lineWidth = 3;
+      if (t.key === "release" && t.gold) {
+        // Let go: a ring springing outward from the fingertip, over and over.
+        const p = (now % 0.9) / 0.9;
+        ctx.strokeStyle = hexA(PALETTE.anchorPerfect, (1 - p) * a);
+        ctx.beginPath();
+        ctx.arc(gx, gy, 8 + 14 * p, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = hexA(PALETTE.anchorPerfect, 0.9 * a);
+      } else {
+        // Hold: a ring that fills around the fingertip (full while held).
+        const p = t.holding ? 1 : (now % 1.3) / 1.3;
+        ctx.strokeStyle = hexA(PALETTE.text, 0.25 * a);
+        ctx.beginPath();
+        ctx.arc(gx, gy, 16, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.strokeStyle = hexA(PALETTE.anchor, a);
+        ctx.beginPath();
+        ctx.arc(gx, gy, 16, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * p);
+        ctx.stroke();
+        ctx.fillStyle = hexA(PALETTE.text, 0.9 * a);
+      }
+      ctx.beginPath();
+      ctx.arc(gx, gy, 7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    if (t.key === "dash") {
+      // Point at the button itself.
+      const b = this.dashButton(cam);
+      const pulse = 0.5 + 0.5 * Math.sin(now * 7);
+      ctx.strokeStyle = hexA(PALETTE.collectible, (0.45 + 0.45 * pulse) * a);
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r + 10 + pulse * 6, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.textBaseline = baseline;
   }
 
   private drawPauseOverlay(ctx: CanvasRenderingContext2D, cam: Camera, d: HudData) {
@@ -622,6 +762,21 @@ export class Hud {
         PALETTE.text,
         true
       );
+    }
+
+    // HOW TO PLAY — top left, opposite the orb bank: replays the tutorial.
+    {
+      const r = this.howToPlayButton(cam);
+      ctx.fillStyle = hexA(PALETTE.text, 0.12);
+      this.roundRect(ctx, r.x, r.y, r.w, r.h, r.h / 2);
+      ctx.fill();
+      ctx.strokeStyle = hexA(PALETTE.text, 0.4);
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      this.text(ctx, "HOW TO PLAY", r.x + r.w / 2, r.y + r.h / 2 + 1, 12, "800", hexA(PALETTE.text, 0.9));
+      ctx.textBaseline = "top";
     }
 
     // Orb bank — top right. Number right-aligned against the orb glyph.

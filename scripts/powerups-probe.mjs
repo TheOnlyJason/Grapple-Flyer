@@ -105,7 +105,8 @@ globalThis.MutationObserver = class {
   disconnect() {}
 };
 globalThis.localStorage = {
-  store: process.env.GALE_SAVE !== undefined ? { "gale.save.v1": process.env.GALE_SAVE } : {},
+  // Default: a returning player (the first-flight tutorial is done; scripts/tutorial-probe.mjs covers it).
+  store: { "gale.save.v1": process.env.GALE_SAVE !== undefined ? process.env.GALE_SAVE : JSON.stringify({ tutorialDone: true }) },
   getItem(k) {
     return this.store[k] ?? null;
   },

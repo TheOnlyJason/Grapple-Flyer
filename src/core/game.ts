@@ -20,6 +20,7 @@ import { makeScratch, Scratch, VersionCache } from "../render/rcache";
 import { World } from "../systems/world";
 import { Particles } from "../systems/particles";
 import { Objectives } from "../systems/objectives";
+import { Tutorial } from "../systems/tutorial";
 import { Background } from "../render/background";
 import { Hud, HudData } from "../render/hud";
 import {
@@ -88,6 +89,13 @@ export class Game {
   private barrier = false; // absorbs one fatal hit
   private barrierGrace = 0; // seconds rocks still break on contact after it bursts
   private objectivesChimed = 0; // completed objectives already announced this run
+  // First-flight tutorial (src/systems/tutorial.ts): its slow motion, and the
+  // rock it stages for the dash lesson.
+  private tutorial = new Tutorial();
+  private tutorialRock: Hazard | null = null;
+  private tutorialGaugeGiven = false;
+  private tutorialSeaWarned = false;
+  private timeScale = 1;
 
   // Reused dash-magnet params for world.update — mutated per sub-step instead
   // of allocating a fresh object literal 120x/sec for the duration of a dash.
@@ -164,6 +172,7 @@ export class Game {
   }
 
   private enterMenu() {
+    this.stopTutorial();
     this.seedAndReset();
     this.state = "menu";
     this.timeInState = 0;
@@ -174,7 +183,13 @@ export class Game {
     this.sound.setWind(0);
   }
 
-  private startRun() {
+  /**
+   * `tutorial`: the HOW TO PLAY button. A brand-new player's first run is
+   * the tutorial anyway, and a restart during it starts it over.
+   */
+  private startRun(tutorial = false) {
+    const firstFlight = !this.storage.data.tutorialDone && this.storage.data.runs === 0;
+    const withTutorial = tutorial || firstFlight || this.tutorial.active;
     if (this.state === "menu" || this.state === "gameover") {
       // Sync to the exact preview pose, then continue in place — no world reset.
       const glideTime = this.time - this.attractGlideStartTime;
@@ -192,6 +207,7 @@ export class Game {
       this.world.removeHazardsNear(this.player.x + 180, this.player.y, 320);
       this.player.beginRun();
       this.resetRunStats();
+      this.beginTutorial(withTutorial);
       this.state = "playing";
       this.timeInState = 0;
       this.sound.resume();
@@ -199,9 +215,97 @@ export class Game {
     }
 
     this.seedAndReset();
+    this.beginTutorial(withTutorial);
     this.state = "playing";
     this.timeInState = 0;
     this.sound.resume();
+  }
+
+  private beginTutorial(on: boolean) {
+    this.stopTutorial();
+    if (on) this.tutorial.start();
+  }
+
+  private stopTutorial() {
+    this.tutorial.stop();
+    this.tutorialRock = null;
+    this.tutorialGaugeGiven = false;
+    this.tutorialSeaWarned = false;
+    this.timeScale = 1;
+  }
+
+  /** SKIP during the tutorial: done for good, and the run goes on for real. */
+  private skipTutorial() {
+    const rock = this.tutorialRock;
+    // The lesson's rock is right in the path; with the safety net gone it
+    // would be a cheap death.
+    if (rock && !rock.destroyed) {
+      const i = this.world.hazards.indexOf(rock);
+      if (i >= 0) this.world.hazards.splice(i, 1);
+    }
+    this.stopTutorial();
+    this.storage.setTutorialDone();
+  }
+
+  /** The tutorial's half of a playing step: its bookkeeping and its staged rock. */
+  private stepTutorial(dt: number) {
+    const t = this.tutorial;
+    const p = this.player;
+    // No rocks but the lesson's own until the tutorial is over.
+    {
+      const hs = this.world.hazards;
+      let w = 0;
+      for (const h of hs) {
+        if (h === this.tutorialRock || h.destroyed || h.x < p.x - 300) hs[w++] = h;
+      }
+      hs.length = w;
+    }
+    if (t.wantsRock) {
+      if (!this.tutorialGaugeGiven) {
+        this.tutorialGaugeGiven = true;
+        this.hud.popup(p.x, p.y - 40, "WIND GAUGE FULL", theme.collectible, 1.15);
+      }
+      if (this.wind < CONFIG.wind.dashCost) this.wind = CONFIG.wind.max;
+      let rock = this.tutorialRock;
+      if (!rock || rock.destroyed || rock.gone || rock.x < p.x - 160) {
+        // Off the right edge of the view, at the player's height.
+        rock = new Hazard(this.camera.right + 90, p.y, 46, 42, this.rng);
+        this.world.hazards.push(rock);
+        this.tutorialRock = rock;
+      } else if (!t.dashPrompting) {
+        // Drift onto the line a dash from here would take (a dash keeps a
+        // little of the current pitch), so the lesson's dash lands.
+        const s = p.speed || 1;
+        const pitch = clamp(p.vy / s, -0.3, 0.3);
+        const lineY = p.y + (rock.x - p.x) * pitch;
+        rock.y += (lineY - rock.y) * Math.min(1, dt * 3);
+      }
+    }
+    const rock = this.tutorialRock;
+    // Rising forward from the bottom of the swing toward the gold window's
+    // near edge (the window is a launch direction: idealLaunchAngleDeg ±
+    // perfectToleranceDeg, screen-space, up is negative).
+    const T = CONFIG.tether;
+    const launchDeg = (Math.atan2(p.vy, p.vx) * 180) / Math.PI;
+    const releaseApproach =
+      p.state === "swing" &&
+      p.vx > 0 &&
+      p.vy < 0 &&
+      p.speed >= T.minSwingSpeed + 180 &&
+      launchDeg > T.idealLaunchAngleDeg + T.perfectToleranceDeg;
+    t.update(dt, {
+      holding: this.input.holding,
+      playerState: p.state,
+      grabLit: p.state === "glide" && t.allowTether() && p.findGrabTarget(this.world.anchors, this.camera) !== null,
+      inPerfectWindow: p.inPerfectWindow,
+      releaseApproach,
+      rockAhead: rock && !rock.destroyed && !rock.gone ? rock.x - p.x : null,
+    });
+    if (t.justFinished) {
+      this.tutorialRock = null;
+      this.storage.setTutorialDone();
+      this.sound.objective();
+    }
   }
 
   private togglePause() {
@@ -305,6 +409,7 @@ export class Game {
       return;
     }
     this.clearSmash();
+    this.stopTutorial();
     this.state = "gameover";
     this.timeInState = 0;
     const score = Math.floor(this.score);
@@ -354,6 +459,10 @@ export class Game {
       return;
     }
     if (this.input.pointerJustDown) {
+      if (this.hitRect(this.hud.howToPlayButton(this.camera))) {
+        this.startRun(true);
+        return;
+      }
       if (this.hitCharacterCycle(-1)) {
         this.cycleCharacter(-1);
         return;
@@ -413,7 +522,15 @@ export class Game {
       // ensure() before the step loop so anchors exist for the physics steps;
       // cull() after it, once the camera has settled for this frame.
       this.world.ensure(this.camera.right);
-      this.acc += dt;
+      // The tutorial slows time while a prompt waits for the player; outside
+      // it the scale is exactly 1 and nothing here changes the game.
+      const slowTarget = this.state === "playing" && this.tutorial.active ? this.tutorial.slow : 1;
+      if (slowTarget !== 1 || this.timeScale !== 1) {
+        const rate = slowTarget < this.timeScale ? 12 : 6;
+        this.timeScale += (slowTarget - this.timeScale) * Math.min(1, dt * rate);
+        if (slowTarget === 1 && this.timeScale > 0.995) this.timeScale = 1;
+      }
+      this.acc += dt * this.timeScale;
       let steps = 0;
       while (this.acc >= CONFIG.fixedDt && steps < 8) {
         this.step(CONFIG.fixedDt);
@@ -424,7 +541,8 @@ export class Game {
       this.world.cull(this.camera.left);
     }
 
-    this.particles.update(dt);
+    this.particles.update(dt * this.timeScale);
+    this.tutorial.animate(dt);
     this.hud.update(dt);
     if (this.state !== "paused") this.objectives.update(dt);
     const objectivesDone = this.objectives.completedCount;
@@ -483,6 +601,11 @@ export class Game {
     if (this.input.pointerJustDown) {
       if (this.hitPauseButton()) {
         this.togglePause();
+        return;
+      }
+      if (this.tutorial.active && this.hitRect(this.hud.tutorialSkipButton(this.camera))) {
+        this.dashLatch = true; // this press is not a grab
+        this.skipTutorial();
         return;
       }
       const b = this.hud.dashButton(this.camera);
@@ -560,7 +683,7 @@ export class Game {
     // --- Playing ---
     this.hintTimer += dt;
 
-    const holdForTether = this.input.holding && !this.dashLatch;
+    const holdForTether = this.input.holding && !this.dashLatch && this.tutorial.allowTether();
     this.player.step(dt, holdForTether, this.world.anchors, this.time, this.camera);
 
     // Reaching smash speed charges the smash for a short while, so the meteor
@@ -600,7 +723,25 @@ export class Game {
     this.handleHazards();
 
     // Cloud-sea death floor — skid to a stop before run over.
-    if (this.player.y >= this.world.seaLevel) {
+    if (this.player.y >= this.world.seaLevel && this.tutorial.active) {
+      // The tutorial's safety net: thrown back up, with a word of warning.
+      this.player.bounce(this.world.seaLevel, CONFIG.powerups.barrier.seaBounce);
+      this.particles.emit(this.player.x, this.world.seaLevel, {
+        count: 22,
+        speed: [60, 320],
+        life: [0.35, 0.8],
+        size: [2, 5.5],
+        color: theme.sea,
+        angle: -Math.PI / 2,
+        spread: Math.PI * 0.8,
+        gravity: 240,
+        additive: false,
+      });
+      if (!this.tutorialSeaWarned) {
+        this.tutorialSeaWarned = true;
+        this.hud.popup(this.player.x, this.player.y - 40, "THE CLOUD SEA ENDS A RUN", theme.text, 1);
+      }
+    } else if (this.player.y >= this.world.seaLevel) {
       if (!this.barrier) {
         this.startGroundCrash();
         return;
@@ -637,6 +778,8 @@ export class Game {
       this.hud.popup(this.player.x, this.player.y - 40, "SMASH SPEED", theme.collectible, 1.2);
     }
 
+    if (this.tutorial.active) this.stepTutorial(dt);
+
     this.camera.follow(this.player.x, this.player.y, this.player.speed, dt);
 
     // Highlight the nearest grab candidate so the route reads clearly. Same
@@ -651,6 +794,7 @@ export class Game {
     this.player.drainEvents((e) => {
       switch (e.type) {
         case "grab": {
+          this.tutorial.onGrab();
           this.sound.grab();
           this.particles.emit(e.x, e.y, {
             count: 8,
@@ -664,6 +808,7 @@ export class Game {
         }
         case "release": {
           const { perfect, x, y } = e.info;
+          this.tutorial.onRelease(perfect);
           // The launch speed itself counts: by the time the step's own speed
           // check runs, one step of glide drag has already come off it.
           if (e.info.speed >= CONFIG.player.smashSpeed) {
@@ -699,6 +844,7 @@ export class Game {
           break;
         }
         case "dash": {
+          this.tutorial.onDashStart();
           this.sound.dash();
           this.objectives.report("dash", 1);
           this.camera.addShake(6);
@@ -866,6 +1012,12 @@ export class Game {
         continue;
       }
 
+      // Nothing ends a run during the tutorial: the rock just breaks.
+      if (this.tutorial.active) {
+        this.smashHazard(h, 20, 6);
+        continue;
+      }
+
       this.player.kill();
       this.endRun({ crashSound: true });
       return;
@@ -1027,10 +1179,17 @@ export class Game {
       newBest: this.newBest,
       perfectCount: this.perfectCount,
       hint: "Hold to swing  ·  release to slingshot",
-      hintAlpha: this.state === "playing" ? hintAlpha : 0,
+      hintAlpha: this.state === "playing" && !this.tutorial.active ? hintAlpha : 0,
       character: this.storage.data.character,
       characterName: characterName(this.storage.data.character),
       conserveMomentum: this.storage.data.conserveMomentum,
+      tutorial: {
+        active: this.tutorial.active,
+        key: this.tutorial.shown,
+        alpha: this.state === "playing" || this.state === "paused" ? this.tutorial.alpha : 0,
+        holding: this.input.holding,
+        gold: this.player.inPerfectWindow,
+      },
     };
   }
 }

@@ -49,6 +49,30 @@ fly from the keyboard (starting a run and the pause-screen buttons take a click)
 
 Each run rolls **3 objectives** and tracks score, distance, and your best.
 
+### First flight (the tutorial)
+
+A brand-new player's first run teaches the loop the way Alto's Adventure
+does: no screens of text, one move at a time, prompted as the moment for it
+arrives, with time slowed almost to a stop until the player does it.
+
+1. An anchor glows: **Hold to grab**.
+2. Swinging up toward the gold window: **Let go on gold** (time all but
+   stops inside the window, so a PERFECT is there for the taking).
+3. The next anchor glows mid-air: **Grab the next one**, and a second swing
+   (the gold prompt again if the first launch was not PERFECT).
+4. The gauge is filled and a rock drifts onto the dash line: **Tap DASH**.
+5. **Stay above the clouds**, then **You're ready** — and the run carries on
+   for real.
+
+Until the last card nothing ends the run: the cloud sea throws the player
+back up and rocks only break. **SKIP TUTORIAL** (top centre) ends it at
+once. It is saved as done when finished or skipped, never shows again on its
+own, and does not show for anyone who already has runs on their save.
+**HOW TO PLAY** on the menu and game-over screens replays it; Restart Run
+during it starts it over. The logic is `src/systems/tutorial.ts`; the cards
+are drawn by `Hud.drawTutorial`. With the tutorial done the game is exactly
+what it was (a headless replay against the 1.2 build matches frame for frame).
+
 ---
 
 ## Project layout
@@ -73,6 +97,7 @@ src/
   systems/
     world.ts              # procedural endless generation + culling
     objectives.ts         # 3-goal run objective system
+    tutorial.ts           # first-flight tutorial: one move at a time, in slow motion
     particles.ts          # pooled particle effects
   render/
     background.ts         # layered parallax sky, sun, ruins, cloud sea
@@ -156,6 +181,7 @@ node scripts/smoke.mjs   # headless runtime smoke test (run after build)
 
 # Headless checks against the built bundle (all run after `npm run build`):
 node scripts/tether-probe.mjs    # both swings: 1.2 rope by default, the Conserve momentum pendulum, the switch, Restart Run
+node scripts/tutorial-probe.mjs  # a new player's first flight: card order, slow motion, safety net, SKIP, HOW TO PLAY
 node scripts/powerups-probe.mjs  # power-ups, orbs, barrier, objectives, restarts
 node scripts/smash-probe.mjs decay|ahead|bot   # smash-speed decay, meteor-ahead outcomes, play-bot stats
 node scripts/swing-strip.mjs     # contact sheets of the pendulum: a swing, a loop, a moving anchor → screenshots/

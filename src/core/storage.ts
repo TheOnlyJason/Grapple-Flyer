@@ -11,6 +11,8 @@ interface SaveData {
   character: CharacterId;
   /** The pause-menu swing option: false = the classic rope, true = a momentum-conserving pendulum. */
   conserveMomentum: boolean;
+  /** The first-flight tutorial has been finished or skipped. */
+  tutorialDone: boolean;
 }
 
 const KEY = "gale.save.v1";
@@ -30,6 +32,7 @@ const DEFAULT: SaveData = {
   orbs: 0,
   character: "plane",
   conserveMomentum: false,
+  tutorialDone: false,
 };
 
 export class Storage {
@@ -49,6 +52,7 @@ export class Storage {
           ...parsed,
           character: isCharacterId(parsed.character) ? parsed.character : "plane",
           conserveMomentum: parsed.conserveMomentum === true,
+          tutorialDone: parsed.tutorialDone === true,
         };
         // Saves from before orbs existed (or a hand-edited value) bank nothing.
         this.data.orbs = cleanOrbs(parsed.orbs);
@@ -80,6 +84,12 @@ export class Storage {
 
   setCharacter(id: CharacterId) {
     this.data.character = id;
+    this.save();
+  }
+
+  setTutorialDone() {
+    if (this.data.tutorialDone) return;
+    this.data.tutorialDone = true;
     this.save();
   }
 

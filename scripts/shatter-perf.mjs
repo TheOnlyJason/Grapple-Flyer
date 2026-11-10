@@ -35,7 +35,8 @@ globalThis.document = {
   querySelectorAll: () => [], addEventListener() {},
 };
 globalThis.MutationObserver = class { observe() {} disconnect() {} };
-globalThis.localStorage = { store: {}, getItem(k) { return this.store[k] ?? null; }, setItem(k, v) { this.store[k] = String(v); } };
+globalThis.localStorage = { // A returning player: the first-flight tutorial is done (scripts/tutorial-probe.mjs covers it).
+  store: { "gale.save.v1": JSON.stringify({ tutorialDone: true }) }, getItem(k) { return this.store[k] ?? null; }, setItem(k, v) { this.store[k] = String(v); } };
 
 await import(path.join(assetsDir, bundle));
 const game = globalThis.window.GALE;

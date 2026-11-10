@@ -113,7 +113,8 @@ globalThis.MutationObserver = class {
   disconnect() {}
 };
 globalThis.localStorage = {
-  store: {},
+  // A returning player: the first-flight tutorial is done (scripts/tutorial-probe.mjs covers it).
+  store: { "gale.save.v1": JSON.stringify({ tutorialDone: true }) },
   getItem(k) {
     return this.store[k] ?? null;
   },
