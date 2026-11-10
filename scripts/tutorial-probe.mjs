@@ -152,8 +152,9 @@ function tick(n = 1) {
     if (![p.x, p.y, p.vx, p.vy].every(Number.isFinite)) throw new Error("player went non-finite");
   }
 }
-const down = (x = 400, y = 300) => dispatch("pointerdown", { clientX: x, clientY: y, pointerId: 1 });
-const up = (x = 400, y = 300) => dispatch("pointerup", { clientX: x, clientY: y, pointerId: 1 });
+// Taps land in open sky mid-screen (the name row and corner buttons are controls).
+const down = (x = VW / 2, y = VH * 0.45) => dispatch("pointerdown", { clientX: x, clientY: y, pointerId: 1 });
+const up = (x = VW / 2, y = VH * 0.45) => dispatch("pointerup", { clientX: x, clientY: y, pointerId: 1 });
 const tapAt = (r) => { down(r.x + r.w / 2, r.y + r.h / 2); tick(1); up(r.x + r.w / 2, r.y + r.h / 2); tick(1); };
 const key = (code) => { dispatch("keydown", { code }); tick(1); dispatch("keyup", { code }); };
 const hud = () => game.buildHudData();
@@ -253,8 +254,11 @@ check("the dash lesson's dash smashes its rock", !!run1.lessonRock && run1.lesso
   for (let i = 0; i < 600 && !ended; i++) { tick(1); ended = game.state === "gameover"; }
   check("after the tutorial the cloud sea ends the run as usual", ended, game.state);
   tick(30);
-  down(); tick(2); up(); tick(2);
-  check("the next run starts without the tutorial", game.state === "playing" && !tut.active);
+  // A resting left thumb taps the bottom-left corner to fly again: that is a
+  // normal run (the corner holds the best run, not a button).
+  const cx = game.camera.insets.left + 60, cy = game.camera.h - game.camera.insets.bottom - 40;
+  down(cx, cy); tick(2); up(cx, cy); tick(2);
+  check("the next run starts without the tutorial (a tap in the bottom-left corner)", game.state === "playing" && !tut.active, `state ${game.state}, tutorial ${tut.active}`);
 }
 
 // --- 3. Nothing ends a run during the tutorial --------------------------------------------------

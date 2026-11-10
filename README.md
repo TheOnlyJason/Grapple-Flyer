@@ -31,7 +31,7 @@ fly from the keyboard (starting a run and the pause-screen buttons take a click)
 | **Tether & swing** | tap **and hold** | hold `Space` / `↑` / `W` |
 | **Slingshot launch** | release | release the hold key |
 | **Wind Dash** (gauge full) | tap the **DASH** button | `Shift` / `D` |
-| Mute / unmute | tap the **speaker** button (by the pause button; bottom right on the menu) | `M` |
+| Mute / unmute | tap the **speaker** button (top right: by the pause button in a run) | `M` |
 | Start / restart | tap anywhere on the menu (TAP TO FLY) | — |
 | Change character | the **‹ ›** either side of its name | `C` / `←` `→` |
 
@@ -40,10 +40,12 @@ fly from the keyboard (starting a run and the pause-screen buttons take a click)
 In the manner of Alto's Adventure: the live sky is the picture, with the
 plane gliding through it, and the type sits quietly on top — a light,
 wide-tracked GALE, small spaced capitals, no play button (a tap anywhere
-flies), the character's name between thin chevrons, best run and orbs in
-the top corners, HOW TO PLAY and the sound in the bottom ones. The game-over
-screen is the same page with the run's points, distance, perfects, goals and
-orbs in the middle (`Hud.drawAttractScreen`).
+flies), the character's name between thin chevrons (a tap on either half
+of the name works too), HOW TO PLAY and the sound in the top corners, and
+the best run and orbs as plain words in the bottom ones, where a resting
+thumb's tap simply flies. The game-over screen is the same page with the
+run's points, distance, perfects, goals and orbs in the middle, on a soft
+dark wash so a pale day sky cannot swallow them (`Hud.drawAttractScreen`).
 
 ### The loop
 

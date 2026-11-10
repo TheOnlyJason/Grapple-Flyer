@@ -410,9 +410,16 @@ export class Game {
 
   private hitCharacterCycle(dir: -1 | 1): boolean {
     const b = this.hud.characterCycleButton(this.camera, dir);
-    const dx = this.input.pointer.x - b.x;
-    const dy = this.input.pointer.y - b.y;
-    return dx * dx + dy * dy <= b.r * b.r;
+    const p = this.input.pointer;
+    const dx = p.x - b.x;
+    const dy = p.y - b.y;
+    if (dx * dx + dy * dy <= b.r * b.r) return true;
+    // The name between the chevrons is part of the picker: its left half
+    // goes back, its right half forward (a tap on it is not a "fly").
+    const other = this.hud.characterCycleButton(this.camera, dir === 1 ? -1 : 1);
+    const mid = (b.x + other.x) / 2;
+    const inRow = Math.abs(dy) <= b.r && p.x > Math.min(b.x, other.x) && p.x < Math.max(b.x, other.x);
+    return inRow && (dir === 1 ? p.x >= mid : p.x < mid);
   }
 
   private hitRect(r: { x: number; y: number; w: number; h: number }): boolean {
@@ -452,10 +459,7 @@ export class Game {
   }
 
   private hitMuteButton(): boolean {
-    const b = this.hud.muteButton(this.camera, this.isAttractScreen());
-    const dx = this.input.pointer.x - b.x;
-    const dy = this.input.pointer.y - b.y;
-    return dx * dx + dy * dy <= b.r * b.r;
+    return this.hud.hitsMute(this.camera, this.isAttractScreen(), this.input.pointer.x, this.input.pointer.y);
   }
 
   /** The pause-menu swing option (remembered in the save). */

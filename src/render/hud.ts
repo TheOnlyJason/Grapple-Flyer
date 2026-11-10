@@ -113,6 +113,9 @@ export class Hud {
   private lastFont = "";
   // Attract-screen edge gradients — fixed colours, rebuilt only on resize.
   private spacedCache = new Map<string, { widths: number[]; track: number; total: number }>();
+  // Drawn widths of the corner labels, so their touch targets cover them.
+  private howLabelW = 120;
+  private soundLabelW = 70;
   private attractTop: CanvasGradient | null = null;
   private attractBottom: CanvasGradient | null = null;
   private attractGradH = 0;
@@ -177,19 +180,33 @@ export class Hud {
   }
 
   /**
-   * The mute button: on the menu and game-over screens bottom right; during
-   * a run (and paused) just left of the pause button. There is no keyboard
-   * on a phone, so M alone is not enough.
+   * The mute button: on the menu and game-over screens top right (where the
+   * pause button sits in a run — the bottom corners are where the thumbs
+   * rest); during a run (and paused) just left of the pause button. There is
+   * no keyboard on a phone, so M alone is not enough.
    */
   muteButton(cam: Camera, attract: boolean): { x: number; y: number; r: number } {
     const ins = cam.insets;
     if (attract) {
       const r = 20;
-      return { x: cam.w - ins.right - 24 - r, y: cam.h - ins.bottom - 22 - r, r };
+      return { x: cam.w - ins.right - 24 - r, y: ins.top + 20 + r, r };
     }
     const p = this.pauseButton(cam);
     const r = Math.round(p.r * 0.85);
     return { x: p.x - p.r - 12 - r, y: p.y, r };
+  }
+
+  /**
+   * Whether (x, y) hits the mute button: at least a 44 pt target, and on the
+   * menu screens the label beside the circle counts too.
+   */
+  hitsMute(cam: Camera, attract: boolean, x: number, y: number): boolean {
+    const b = this.muteButton(cam, attract);
+    const r = Math.max(b.r, 22);
+    const dx = x - b.x;
+    const dy = y - b.y;
+    if (dx * dx + dy * dy <= r * r) return true;
+    return attract && Math.abs(dy) <= 22 && x <= b.x && x >= b.x - b.r - 10 - this.soundLabelW - 8;
   }
 
   private drawMuteButton(ctx: CanvasRenderingContext2D, cam: Camera, d: HudData, attract: boolean) {
@@ -241,13 +258,14 @@ export class Hud {
   }
 
   /**
-   * HOW TO PLAY on the menu and game-over screens: bottom left, mirroring the
-   * sound button (a "?" in a circle and its label; the whole strip is the
-   * touch target).
+   * HOW TO PLAY on the menu and game-over screens: top left, mirroring the
+   * sound button (a "?" in a circle and its label; the whole strip, sized
+   * from the drawn label, is the touch target). Kept out of the bottom
+   * corners, where a resting thumb taps to fly again.
    */
   howToPlayButton(cam: Camera): { x: number; y: number; w: number; h: number } {
     const h = 44;
-    return { x: cam.insets.left + 22, y: cam.h - cam.insets.bottom - 20 - h, w: 150, h };
+    return { x: cam.insets.left + 22, y: cam.insets.top + 18, w: 50 + this.howLabelW + 10, h };
   }
 
   /** The pause screen's two buttons (also their hit-test rectangles). */
@@ -861,67 +879,35 @@ export class Hud {
     const subY = titleBottom + (over ? 8 : 12);
     this.spaced(ctx, "SKY · SAILING", w / 2, subY, over ? 10 : 12, "700", hexA(PALETTE.anchorPerfect, 0.9), 0.5, "center", 0.25);
 
-    // --- The run just flown (game over only): a big light score, one line of the rest.
+    // --- The run just flown (game over only): a big light score, one line of
+    // the rest, on a soft dark wash so a pale day sky cannot swallow it.
     if (over) {
-      let y = subY + 9 + Math.max(16, h * 0.05);
+      let y = subY + 10 + Math.max(16, h * 0.05);
+      const stackTop = y;
+      const scoreSize = Math.round(clamp(w * 0.07, 40, 64));
+      const stackH = (d.newBest ? 20 : 0) + scoreSize + 8 + 22 + 16;
+      const wash = ctx.createRadialGradient(w / 2, stackTop + stackH / 2, 10, w / 2, stackTop + stackH / 2, Math.max(w * 0.34, 190));
+      wash.addColorStop(0, hexA("#0a0d24", 0.34));
+      wash.addColorStop(1, hexA("#0a0d24", 0));
+      ctx.fillStyle = wash;
+      ctx.fillRect(0, stackTop - 60, w, stackH + 120);
       if (d.newBest) {
         const a = 0.8 + 0.2 * Math.sin(now / 200);
-        this.spaced(ctx, "NEW BEST", w / 2, y, 12, "800", hexA(PALETTE.anchorPerfect, a), 0.45, "center", 0.3);
+        this.spaced(ctx, "NEW BEST", w / 2, y, 12, "800", hexA(PALETTE.anchorPerfect, a), 0.45, "center", 0.45);
         y += 20;
       }
-      const scoreSize = Math.round(clamp(w * 0.07, 40, 64));
       const sBox = this.ink(ctx, `${Math.floor(d.score)}`, scoreSize, "300");
       const scoreY = y - sBox.top;
-      this.spaced(ctx, `${Math.floor(d.score)}`, w / 2, scoreY, scoreSize, "300", hexA(PALETTE.anchor, 0.98), 0.06, "center", 0.25);
+      this.spaced(ctx, `${Math.floor(d.score)}`, w / 2, scoreY, scoreSize, "300", hexA(PALETTE.anchor, 0.98), 0.06, "center", 0.35);
       y = scoreY + sBox.bottom + 8;
-      this.spaced(ctx, "POINTS", w / 2, y, 11, "700", hexA(white, 0.8), 0.45, "center", 0.25);
+      this.spaced(ctx, "POINTS", w / 2, y, 11, "700", hexA(white, 0.9), 0.45, "center", 0.45);
       y += 22;
       const stats = `${Math.floor(d.distance)} M   ·   ${d.perfectCount} PERFECT   ·   ${d.objectivesDone}/${d.objectives.length} GOALS   ·   +${d.orbs} ORBS`;
-      this.spaced(ctx, stats, w / 2, y, 12, "700", hexA(white, 0.92), 0.16, "center", 0.25);
+      this.spaced(ctx, stats, w / 2, y, 13, "700", white, 0.14, "center", 0.45);
     }
 
-    // --- Top left: the best run (or, before any, a word of welcome).
-    const left = ins.left + 26;
-    const topY = ins.top + 22;
-    if (d.bestDistance > 0) {
-      this.spaced(ctx, "BEST", left, topY, 11, "700", hexA(white, 0.7), 0.4, "left", 0.2);
-      const best = `${Math.floor(d.bestDistance)}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-      this.spaced(ctx, `${best} m`, left, topY + 17, 24, "300", white, 0.04, "left", 0.2);
-    } else {
-      this.spaced(ctx, "FIRST FLIGHT", left, topY, 11, "700", hexA(white, 0.7), 0.4, "left", 0.2);
-    }
-
-    // --- Top right: the orb bank.
-    {
-      const ox = w - ins.right - 34;
-      const oy = ins.top + 34;
-      drawOrbIcon(ctx, ox, oy, 9);
-      ctx.textBaseline = "middle";
-      this.spaced(ctx, `${d.orbBank}`, ox - 18, oy + 1, 19, "600", ORB_COLOR, 0.04, "right");
-      ctx.textBaseline = "top";
-      this.spaced(ctx, "ORBS", ox + 9, oy + 16, 10, "700", hexA(white, 0.7), 0.4, "right", 0.2);
-    }
-
-    // --- Bottom centre: the character, then TAP TO FLY.
-    const lb = this.characterCycleButton(cam, -1);
-    const rb = this.characterCycleButton(cam, 1);
-    ctx.textBaseline = "middle";
-    this.spaced(ctx, d.characterName.toUpperCase(), w / 2, lb.y, 14, "700", hexA(white, 0.95), 0.3, "center", 0.25);
-    ctx.strokeStyle = hexA(white, 0.75);
-    ctx.lineWidth = 2;
-    ctx.lineCap = "round";
-    for (const [b, dir] of [[lb, -1], [rb, 1]] as const) {
-      ctx.beginPath();
-      ctx.moveTo(b.x - dir * 4, b.y - 8);
-      ctx.lineTo(b.x + dir * 4, b.y);
-      ctx.lineTo(b.x - dir * 4, b.y + 8);
-      ctx.stroke();
-    }
-    ctx.lineCap = "butt";
-    const tap = this.playButton(cam);
-    this.spaced(ctx, over ? "TAP TO FLY AGAIN" : "TAP TO FLY", w / 2, tap.y, 14, "700", hexA(white, 0.5 + 0.45 * breathe), 0.42, "center", 0.2);
-
-    // --- Bottom corners: HOW TO PLAY (left) and the sound (right).
+    // --- Top corners: HOW TO PLAY (left) and the sound (right) — the
+    // controls, up where no resting thumb taps them by accident.
     {
       const r = this.howToPlayButton(cam);
       const cx = r.x + 20;
@@ -934,15 +920,61 @@ export class Hud {
       ctx.lineWidth = 1.5;
       ctx.stroke();
       ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
       this.text(ctx, "?", cx, cy + 1, 18, "600", hexA(white, 0.9));
-      this.spaced(ctx, "HOW TO PLAY", cx + 30, cy + 1, 11, "700", hexA(white, 0.85), 0.28, "left", 0.2);
+      this.howLabelW = this.spaced(ctx, "HOW TO PLAY", cx + 30, cy + 1, 11, "700", hexA(white, 0.9), 0.28, "left", 0.3);
     }
     this.drawMuteButton(ctx, cam, d, true);
     {
       const m = this.muteButton(cam, true);
       const label = d.muted ? "SOUND OFF" : "SOUND";
-      this.spaced(ctx, COARSE_POINTER ? label : `${label} · M`, m.x - m.r - 10, m.y + 1, 11, "700", hexA(white, 0.85), 0.28, "right", 0.2);
+      ctx.textBaseline = "middle";
+      this.soundLabelW = this.spaced(ctx, COARSE_POINTER ? label : `${label} · M`, m.x - m.r - 10, m.y + 1, 11, "700", hexA(white, 0.9), 0.28, "right", 0.3);
     }
+
+    // --- Bottom corners: the best run (left) and the orb bank (right) —
+    // plain words, so a resting thumb's tap there just flies.
+    ctx.textBaseline = "top";
+    const left = ins.left + 26;
+    const baseY = h - ins.bottom - 24;
+    if (d.bestDistance > 0) {
+      const best = `${Math.floor(d.bestDistance)}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+      this.spaced(ctx, "BEST", left, baseY - 40, 11, "700", hexA(white, 0.75), 0.4, "left", 0.3);
+      this.spaced(ctx, `${best} m`, left, baseY - 24, 22, "300", white, 0.04, "left", 0.3);
+    } else {
+      this.spaced(ctx, "FIRST FLIGHT", left, baseY - 14, 11, "700", hexA(white, 0.75), 0.4, "left", 0.3);
+    }
+    {
+      const ox = w - ins.right - 34;
+      const oy = baseY - 16;
+      drawOrbIcon(ctx, ox, oy, 9);
+      ctx.textBaseline = "middle";
+      this.spaced(ctx, `${d.orbBank}`.replace(/\B(?=(\d{3})+(?!\d))/g, ","), ox - 18, oy + 1, 19, "600", ORB_COLOR, 0.04, "right", 0.3);
+      ctx.textBaseline = "top";
+      this.spaced(ctx, "ORBS", ox + 9, oy + 14, 10, "700", hexA(white, 0.75), 0.4, "right", 0.3);
+    }
+
+    // --- Bottom centre: the character, then TAP TO FLY. On the narrowest
+    // screens the game-over line steps down a size so it clears the corners.
+    const lb = this.characterCycleButton(cam, -1);
+    const rb = this.characterCycleButton(cam, 1);
+    ctx.textBaseline = "middle";
+    this.spaced(ctx, d.characterName.toUpperCase(), w / 2, lb.y, 14, "700", hexA(white, 0.95), 0.3, "center", 0.3);
+    ctx.strokeStyle = hexA(white, 0.8);
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    for (const [b, dir] of [[lb, -1], [rb, 1]] as const) {
+      ctx.beginPath();
+      ctx.moveTo(b.x - dir * 4, b.y - 8);
+      ctx.lineTo(b.x + dir * 4, b.y);
+      ctx.lineTo(b.x - dir * 4, b.y + 8);
+      ctx.stroke();
+    }
+    ctx.lineCap = "butt";
+    const tap = this.playButton(cam);
+    const tapText = over ? "TAP TO FLY AGAIN" : "TAP TO FLY";
+    const tapSize = over && w < 640 ? 12 : 14;
+    this.spaced(ctx, tapText, w / 2, tap.y, tapSize, "700", hexA(white, 0.62 + 0.35 * breathe), over && w < 640 ? 0.3 : 0.42, "center", 0.35);
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
   }

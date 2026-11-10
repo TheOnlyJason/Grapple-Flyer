@@ -113,9 +113,10 @@ if (process.env.INSETS) {
 tick(20);
 save("menu");
 game.time = Number(moodArg) * 95;
-dispatch("pointerdown", { clientX: 400, clientY: 300, pointerId: 1 });
+// Tap open sky (mid-screen): the name row and the corner buttons are controls.
+dispatch("pointerdown", { clientX: W / 2, clientY: H * 0.45, pointerId: 1 });
 tick(30);
-dispatch("pointerup", { clientX: 400, clientY: 300, pointerId: 1 });
+dispatch("pointerup", { clientX: W / 2, clientY: H * 0.45, pointerId: 1 });
 tick(2);
 if (game.state !== "playing") throw new Error("expected playing, got " + game.state);
 

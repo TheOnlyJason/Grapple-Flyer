@@ -166,6 +166,14 @@ assert(game.state === "menu", `expected menu state, got ${game.state}`);
   assert(game.state === "menu" && game.sound.enabled === false && saved.muted === true, "the menu's mute button did not mute (or started a run)");
   tapCircle(game.hud.muteButton(game.camera, true));
   assert(game.state === "menu" && game.sound.enabled === true && game.storage.data.muted === false, "the menu's mute button did not unmute");
+  // The character's name is part of the picker: its right half goes forward,
+  // its left half back, and neither starts a run.
+  const c0 = game.storage.data.character;
+  const r = game.hud.characterCycleButton(game.camera, 1);
+  tapCircle({ x: game.camera.w / 2 + 20, y: r.y });
+  const c1 = game.storage.data.character;
+  tapCircle({ x: game.camera.w / 2 - 20, y: r.y });
+  assert(game.state === "menu" && c1 !== c0 && game.storage.data.character === c0, `tapping the name did not cycle the character (${c0} -> ${c1} -> ${game.storage.data.character}, state ${game.state})`);
 }
 // 2) Start the run + hold to swing (pointerdown).
 dispatch("pointerdown", { clientX: 400, clientY: 300, pointerId: 1 });
