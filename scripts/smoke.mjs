@@ -182,7 +182,7 @@ dispatch("keydown", { code: "Escape" });
 tick(2);
 dispatch("keyup", { code: "Escape" });
 if (game.state === "paused") {
-  const r = game.hud.momentumButton(game.camera);
+  const r = game.hud.pauseMenuButtons(game.camera).momentum;
   const tapOption = () => {
     dispatch("pointerdown", { clientX: r.x + r.w / 2, clientY: r.y + r.h / 2, pointerId: 1 });
     tick(1);

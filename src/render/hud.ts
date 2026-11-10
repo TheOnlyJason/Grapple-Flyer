@@ -146,11 +146,21 @@ export class Hud {
     return { x: cam.w - ins.right - r - 20, y: ins.top + r + 20, r };
   }
 
-  /** The pause screen's swing option (also its hit-test rectangle). */
-  momentumButton(cam: Camera): { x: number; y: number; w: number; h: number } {
+  /** The pause screen's two buttons (also their hit-test rectangles). */
+  pauseMenuButtons(cam: Camera): {
+    restart: { x: number; y: number; w: number; h: number };
+    momentum: { x: number; y: number; w: number; h: number };
+  } {
     const w = clamp(cam.w * 0.3, 220, 300);
     const h = 44;
-    return { x: cam.w / 2 - w / 2, y: cam.h * 0.42 + 88, w, h };
+    const gap = 12;
+    const x = cam.w / 2 - w / 2;
+    // Under the "Tap ▶ or Esc to resume" line, but never off a short screen.
+    const top = Math.min(cam.h * 0.42 + 84, cam.h - cam.insets.bottom - 2 * h - gap - 10);
+    return {
+      restart: { x, y: top, w, h },
+      momentum: { x, y: top + h + gap, w, h },
+    };
   }
 
   playButton(cam: Camera): { x: number; y: number; r: number } {
@@ -400,12 +410,22 @@ export class Hud {
       true
     );
 
-    // The swing option: the classic rope, or a pendulum that keeps your
-    // momentum. Remembered between sessions.
-    const r = this.momentumButton(cam);
-    const on = d.conserveMomentum;
-    const color = on ? PALETTE.collectible : PALETTE.text;
+    // Restart the run, and the swing option: the classic rope, or a pendulum
+    // that keeps your momentum (remembered between sessions).
+    const b = this.pauseMenuButtons(cam);
     const baseline = ctx.textBaseline;
+    this.pauseButtonBox(ctx, b.restart, "RESTART RUN", PALETTE.text);
+    const on = d.conserveMomentum;
+    this.pauseButtonBox(ctx, b.momentum, on ? "CONSERVE MOMENTUM: ON" : "CONSERVE MOMENTUM: OFF", on ? PALETTE.collectible : PALETTE.text);
+    ctx.textBaseline = baseline;
+  }
+
+  private pauseButtonBox(
+    ctx: CanvasRenderingContext2D,
+    r: { x: number; y: number; w: number; h: number },
+    label: string,
+    color: string
+  ) {
     ctx.fillStyle = hexA(PALETTE.text, 0.12);
     this.roundRect(ctx, r.x, r.y, r.w, r.h, 12);
     ctx.fill();
@@ -414,8 +434,7 @@ export class Hud {
     ctx.stroke();
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    this.text(ctx, on ? "CONSERVE MOMENTUM: ON" : "CONSERVE MOMENTUM: OFF", r.x + r.w / 2, r.y + r.h / 2, 13, "800", color);
-    ctx.textBaseline = baseline;
+    this.text(ctx, label, r.x + r.w / 2, r.y + r.h / 2, 13, "800", color);
   }
 
   private drawObjectives(ctx: CanvasRenderingContext2D, cam: Camera, d: HudData) {

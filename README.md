@@ -112,8 +112,10 @@ vector, so timing the release governs the launch's shape and power.
 
 ### Option: Conserve momentum
 
-The pause screen has one switch, **CONSERVE MOMENTUM** (off by default, and
-remembered in the save). Off is the swing above, unchanged from 1.2. On swaps
+The pause screen has **RESTART RUN** (abandons the run, unrecorded, and
+starts a fresh one in place) and one switch, **CONSERVE MOMENTUM** (off by
+default, and remembered in the save). Off is the swing above, unchanged from
+1.2. On swaps
 in a **pendulum solved in polar coordinates** around the anchor: rope length,
 angle from straight below and angular velocity, integrated with velocity
 Verlet each fixed step, with position and velocity written back from them.
@@ -152,7 +154,7 @@ npm run preview   # preview the production build
 node scripts/smoke.mjs   # headless runtime smoke test (run after build)
 
 # Headless checks against the built bundle (all run after `npm run build`):
-node scripts/tether-probe.mjs    # both swings: 1.2 rope by default, the Conserve momentum pendulum, the switch
+node scripts/tether-probe.mjs    # both swings: 1.2 rope by default, the Conserve momentum pendulum, the switch, Restart Run
 node scripts/powerups-probe.mjs  # power-ups, orbs, barrier, objectives, restarts
 node scripts/smash-probe.mjs decay|ahead|bot   # smash-speed decay, meteor-ahead outcomes, play-bot stats
 node scripts/swing-strip.mjs     # contact sheets of the pendulum: a swing, a loop, a moving anchor → screenshots/

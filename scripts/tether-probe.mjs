@@ -486,7 +486,7 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
   const before = game.storage.data.conserveMomentum;
   dispatch("keydown", { code: "Escape" }); frame(); dispatch("keyup", { code: "Escape" }); frame();
   check("Esc pauses", game.state === "paused", game.state);
-  const r = game.hud.momentumButton(game.camera);
+  const r = game.hud.pauseMenuButtons(game.camera).momentum;
   const tap = () => {
     dispatch("pointerdown", { clientX: r.x + r.w / 2, clientY: r.y + r.h / 2, pointerId: 1 }); frame();
     dispatch("pointerup", { clientX: r.x + r.w / 2, clientY: r.y + r.h / 2, pointerId: 1 }); frame();
@@ -498,6 +498,33 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
   check("tapping it again flips it back", game.state === "paused" && game.storage.data.conserveMomentum === before && player.conserveMomentum === before);
   dispatch("keydown", { code: "Escape" }); frame(); dispatch("keyup", { code: "Escape" }); frame();
   check("Esc resumes", game.state === "playing", game.state);
+}
+
+// --- 13. Restart Run from the pause screen ----------------------------------------------------
+{
+  for (const on of [false, true]) {
+    const label = on ? "on" : "off";
+    game.storage.data.conserveMomentum = on; player.conserveMomentum = on;
+    staged = null;
+    placeGlide(46000 + (on ? 3000 : 0), -400, 500, 0);
+    quiet(); frame(5);
+    game.runOrbs = 7;
+    game.smashCharge = 0.5; game.barrier = true; game.magnetTime = 3;
+    const runsBefore = game.storage.data.runs;
+    const bestBefore = game.storage.data.bestScore;
+    const clockBefore = game.time;
+    const camBefore = game.camera.x;
+    dispatch("keydown", { code: "Escape" }); frame(); dispatch("keyup", { code: "Escape" }); frame();
+    check(`${label}: paused before the restart`, game.state === "paused", game.state);
+    const r = game.hud.pauseMenuButtons(game.camera).restart;
+    dispatch("pointerdown", { clientX: r.x + r.w / 2, clientY: r.y + r.h / 2, pointerId: 1 }); frame();
+    dispatch("pointerup", { clientX: r.x + r.w / 2, clientY: r.y + r.h / 2, pointerId: 1 }); frame(2);
+    check(`${label}: RESTART RUN starts a fresh run in place`, game.state === "playing" && game.runOrbs === 0 && game.score < 5 && game.distance < 5 && Math.abs(game.camera.x - camBefore) < 120 && game.time > clockBefore, `state ${game.state} orbs ${game.runOrbs} score ${game.score.toFixed(0)} camera moved ${(game.camera.x - camBefore).toFixed(0)}`);
+    check(`${label}: the abandoned run is not recorded and power-ups are cleared`, game.storage.data.runs === runsBefore && game.storage.data.bestScore === bestBefore && !game.barrier && game.magnetTime === 0 && game.smashCharge === 0);
+    check(`${label}: music resumes, and the swing option is kept`, game.sound.musicPaused === false && player.conserveMomentum === on && game.storage.data.conserveMomentum === on);
+    player.x += 0; // keep going from the fresh run
+  }
+  game.storage.data.conserveMomentum = false; player.conserveMomentum = true;
 }
 
 console.log(failures ? `\n${failures} FAILED` : "\nall checks passed");

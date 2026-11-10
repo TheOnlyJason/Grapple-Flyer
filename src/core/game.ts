@@ -247,6 +247,24 @@ export class Game {
     return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
   }
 
+  /** Abandon the current run (nothing is recorded) and start a fresh one in place. */
+  private restartRun() {
+    if (this.state !== "playing" && this.state !== "paused") return;
+    this.clearSmash();
+    this.magnetTime = 0;
+    this.barrier = false;
+    this.sound.setMusicPaused(false);
+    this.sound.setWind(0);
+    // Hand off exactly as a run's end does, then start straight away.
+    this.state = "gameover";
+    this.timeInState = 0;
+    this.player.trail.length = 0;
+    this.attractGlideX = this.player.x;
+    this.attractGlideStartTime = this.time;
+    this.player.animateMenuGlide(0, 0, this.attractGlideX);
+    this.startRun();
+  }
+
   /** The pause-menu swing option (remembered in the save). */
   private toggleConserveMomentum() {
     const next = !this.storage.data.conserveMomentum;
@@ -429,9 +447,16 @@ export class Game {
     if (this.state === "crashing") return;
 
     if (this.state === "paused") {
-      if (this.input.pointerJustDown && this.hitRect(this.hud.momentumButton(this.camera))) {
-        this.toggleConserveMomentum();
-        return;
+      if (this.input.pointerJustDown) {
+        const b = this.hud.pauseMenuButtons(this.camera);
+        if (this.hitRect(b.restart)) {
+          this.restartRun();
+          return;
+        }
+        if (this.hitRect(b.momentum)) {
+          this.toggleConserveMomentum();
+          return;
+        }
       }
       if (
         this.input.tapped.has("Escape") ||
