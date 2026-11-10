@@ -139,9 +139,16 @@ if (game.state !== "playing") throw new Error("expected playing, got " + game.st
 
 const MODE = process.argv[2] || "decay";
 // Knobs come from the live config (exposed as window.GALE_CONFIG). GALE_KNOBS
-// overrides them before anything runs, e.g.
-//   GALE_KNOBS='{"tether.swingDrag":0,"player.smashSpeed":1250}' node scripts/smash-probe.mjs bot
+// overrides them before anything runs, and GALE_CONSERVE=1 turns the pause
+// screen's Conserve momentum option on (tether.swingDrag and
+// tether.conserveReelRate only matter then), e.g.
+//   GALE_CONSERVE=1 GALE_KNOBS='{"player.smashSpeed":1200}' node scripts/smash-probe.mjs bot
 const CFG = globalThis.window.GALE_CONFIG;
+if (process.env.GALE_CONSERVE === "1") {
+  game.storage.data.conserveMomentum = true;
+  game.player.conserveMomentum = true;
+  console.log("swing: Conserve momentum on");
+}
 if (process.env.GALE_KNOBS) {
   for (const [path, value] of Object.entries(JSON.parse(process.env.GALE_KNOBS))) {
     const keys = path.split(".");

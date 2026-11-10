@@ -262,6 +262,12 @@ export class Game {
     this.attractGlideX = this.player.x;
     this.attractGlideStartTime = this.time;
     this.player.animateMenuGlide(0, 0, this.attractGlideX);
+    // The plane is back at the start altitude, wherever the run was: bring
+    // the view with it, or the new run would start off-screen, with the
+    // finger still on the button free to latch an old anchor the player
+    // cannot see (a death has the game-over screen for the camera to catch
+    // up; a restart has no frame in between). x stays: the run restarts in place.
+    this.camera.y = this.player.y - this.camera.viewH * CONFIG.camera.anchorY;
     this.startRun();
   }
 
@@ -269,7 +275,7 @@ export class Game {
   private toggleConserveMomentum() {
     const next = !this.storage.data.conserveMomentum;
     this.storage.setConserveMomentum(next);
-    this.player.setConserveMomentum(next, this.time);
+    this.player.setConserveMomentum(next);
   }
 
   private hitPauseButton(): boolean {

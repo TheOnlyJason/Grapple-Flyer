@@ -209,13 +209,18 @@ clearStage();
   save("objective-gone");
 }
 
-// 6c. The pause screen with its restart and swing-model buttons.
+// 6c. The pause screen with its Restart Run and Conserve momentum buttons,
+// with a magnet and a barrier running (their chips must not cover a button).
 clearStage();
+game.magnetTime = 6;
+game.barrier = true;
 hold(); tick(2);
 game.togglePause();
 tick(1);
 save("paused");
 game.togglePause();
+game.magnetTime = 0;
+game.barrier = false;
 
 // 7. Game over with orbs banked.
 clearStage();

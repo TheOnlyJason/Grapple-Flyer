@@ -448,18 +448,28 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
   const a = stageAnchor(40000, -600);
   placeSwing(a, 200, 0.4, 700 / 200);
   for (let i = 0; i < 10; i++) { quiet(); frame(); }
-  player.setConserveMomentum(false, game.time);
+  player.setConserveMomentum(false);
   for (let i = 0; i < 10; i++) { quiet(); frame(); }
   const ropeErr = Math.abs(Math.hypot(player.x - a.x, player.y - a.y) - player.ropeLen);
   check("turned off mid-swing: the classic rope carries on", player.conserveMomentum === false && player.state === "swing" && finite() && ropeErr < 1e-6, `rope error ${ropeErr.toExponential(1)} px`);
   const v1 = Math.hypot(player.vx, player.vy);
-  const x1 = player.x, y1 = player.y;
-  player.setConserveMomentum(true, game.time);
-  const syncErr = Math.abs(player.ropeLen * Math.abs(player.swingOmega) - v1);
-  check("turned on mid-swing: the pendulum starts from the same position and speed", player.x === x1 && player.y === y1 && syncErr < 1e-6 * v1, `speed ${v1.toFixed(1)} vs ${(player.ropeLen * Math.abs(player.swingOmega)).toFixed(1)}`);
+  player.setConserveMomentum(true);
   quiet(); frame();
-  check("…and keeps swinging smoothly", player.state === "swing" && finite() && Math.abs(Math.hypot(player.vx, player.vy) - v1) < 40, `speed ${v1.toFixed(0)} → ${Math.hypot(player.vx, player.vy).toFixed(0)}`);
+  const ropeErr2 = Math.abs(Math.hypot(player.x - a.x, player.y - a.y) - player.ropeLen);
+  check("turned on mid-swing: the pendulum takes over smoothly", player.state === "swing" && finite() && ropeErr2 < 1e-6 && Math.abs(Math.hypot(player.vx, player.vy) - v1) < 40, `speed ${v1.toFixed(0)} → ${Math.hypot(player.vx, player.vy).toFixed(0)}, rope error ${ropeErr2.toExponential(1)} px`);
   up();
+  // On and straight back off within one pause, on a moving anchor: the rope
+  // is left exactly as it was (nothing is synced until a pendulum step runs).
+  player.conserveMomentum = false;
+  const m = stageAnchor(40500, -600, "moving", { amp: 130, phase: 0.3, speed: 1.6 });
+  placeSwing(m, 200, 0.4, 700 / 200);
+  for (let i = 0; i < 10; i++) { quiet(); frame(); }
+  const snap = JSON.stringify([player.x, player.y, player.vx, player.vy, player.ropeLen]);
+  player.setConserveMomentum(true);
+  player.setConserveMomentum(false);
+  check("on then off without a step leaves the classic rope untouched", JSON.stringify([player.x, player.y, player.vx, player.vy, player.ropeLen]) === snap);
+  up();
+  player.conserveMomentum = true;
   restoreKnobs();
 }
 
@@ -506,7 +516,9 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
     const label = on ? "on" : "off";
     game.storage.data.conserveMomentum = on; player.conserveMomentum = on;
     staged = null;
-    placeGlide(46000 + (on ? 3000 : 0), -400, 500, 0);
+    // High in the sky (or low over the sea): the restart brings the plane back
+    // to the start altitude, and the view must come with it.
+    placeGlide(46000 + (on ? 3000 : 0), on ? 760 : -1300, 500, 0);
     quiet(); frame(5);
     game.runOrbs = 7;
     game.smashCharge = 0.5; game.barrier = true; game.magnetTime = 3;
@@ -518,6 +530,11 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
     check(`${label}: paused before the restart`, game.state === "paused", game.state);
     const r = game.hud.pauseMenuButtons(game.camera).restart;
     dispatch("pointerdown", { clientX: r.x + r.w / 2, clientY: r.y + r.h / 2, pointerId: 1 }); frame();
+    const cam = game.camera;
+    const onScreen = player.x > cam.left && player.x < cam.right && player.y > cam.top && player.y < cam.bottom;
+    const grabbed = player.anchor;
+    const grabSeen = !grabbed || (grabbed.x > cam.left && grabbed.x < cam.right && grabbed.y > cam.top && grabbed.y < cam.bottom);
+    check(`${label}: the fresh run starts with the plane in view, and the held finger can only latch an anchor in view`, onScreen && grabSeen, `plane y ${player.y.toFixed(0)}, view y ${cam.top.toFixed(0)}..${cam.bottom.toFixed(0)}${grabbed ? `, grabbed y ${grabbed.y.toFixed(0)}` : ""}`);
     dispatch("pointerup", { clientX: r.x + r.w / 2, clientY: r.y + r.h / 2, pointerId: 1 }); frame(2);
     check(`${label}: RESTART RUN starts a fresh run in place`, game.state === "playing" && game.runOrbs === 0 && game.score < 5 && game.distance < 5 && Math.abs(game.camera.x - camBefore) < 120 && game.time > clockBefore, `state ${game.state} orbs ${game.runOrbs} score ${game.score.toFixed(0)} camera moved ${(game.camera.x - camBefore).toFixed(0)}`);
     check(`${label}: the abandoned run is not recorded and power-ups are cleared`, game.storage.data.runs === runsBefore && game.storage.data.bestScore === bestBefore && !game.barrier && game.magnetTime === 0 && game.smashCharge === 0);

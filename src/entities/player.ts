@@ -55,6 +55,10 @@ export class Player {
   // the swing keeps reading plain world position and velocity.
   swingPhi = 0;
   swingOmega = 0;
+  // Turned on mid-swing: the pendulum takes over from the rope's motion at
+  // its first step, so turning the option on and off again within one pause
+  // leaves the rope exactly as it was.
+  private pendingSync = false;
 
   inPerfectWindow = false;
   perfectQuality = 0;
@@ -164,6 +168,7 @@ export class Player {
     const d = Math.hypot(anchor.x - this.x, anchor.y - this.y);
     // Match the rope to the current distance so latch-on doesn't snap position.
     this.ropeLen = Math.max(d, 1e-3);
+    this.pendingSync = false;
     if (this.conserveMomentum) this.syncSwingToVelocity(anchor, t0);
     this.state = "swing";
     this.swingTime = 0;
@@ -365,10 +370,10 @@ export class Player {
   }
 
   /** The pause-menu switch; flipping it mid-swing keeps the motion continuous. */
-  setConserveMomentum(on: boolean, time: number) {
+  setConserveMomentum(on: boolean) {
     if (on === this.conserveMomentum) return;
     this.conserveMomentum = on;
-    if (on && this.state === "swing" && this.anchor) this.syncSwingToVelocity(this.anchor, time);
+    this.pendingSync = on && this.state === "swing" && this.anchor !== null;
   }
 
   // The momentum-conserving swing: a pendulum in polar form, integrated with
@@ -382,6 +387,10 @@ export class Player {
   private stepPendulum(dt: number, holding: boolean, time: number) {
     const a = this.anchor;
     if (!a) return;
+    if (this.pendingSync) {
+      this.pendingSync = false;
+      this.syncSwingToVelocity(a, time - dt);
+    }
     this.swingTime += dt;
     const T = CONFIG.tether;
     const g = CONFIG.world.gravitySwing;

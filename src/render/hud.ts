@@ -273,12 +273,17 @@ export class Hud {
     );
 
     // --- Active power-ups: chips beside the speed bar ---
+    // (On the shortest screens the pause buttons reach down to this row; a
+    // chip that would sit on one is left out while paused.)
+    const pauseRects = paused ? Object.values(this.pauseMenuButtons(cam)) : [];
+    const chipClear = (cx: number, cy: number) =>
+      pauseRects.every((r) => cx + 18 < r.x || cx - 18 > r.x + r.w || cy + 18 < r.y || cy - 18 > r.y + r.h);
     let chipX = spX + barW + 34;
     if (d.magnet > 0) {
-      this.drawPowerChip(ctx, chipX, spY - 2, "magnet", d.magnet);
+      if (chipClear(chipX, spY - 2)) this.drawPowerChip(ctx, chipX, spY - 2, "magnet", d.magnet);
       chipX += 42;
     }
-    if (d.barrier) this.drawPowerChip(ctx, chipX, spY - 2, "barrier", 1);
+    if (d.barrier && chipClear(chipX, spY - 2)) this.drawPowerChip(ctx, chipX, spY - 2, "barrier", 1);
 
     // --- Centered fading hint ---
     if (d.hintAlpha > 0.01 && d.hint) {

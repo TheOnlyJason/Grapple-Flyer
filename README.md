@@ -21,7 +21,7 @@ npm run dev
 ```
 
 Open the printed URL (default <http://localhost:5173>). On desktop you can also
-play entirely from the keyboard.
+fly from the keyboard (starting a run and the pause-screen buttons take a click).
 
 ### Controls
 
@@ -32,7 +32,7 @@ play entirely from the keyboard.
 | **Slingshot launch** | release | release the hold key |
 | **Wind Dash** (gauge full) | tap the **DASH** button | `Shift` / `D` |
 | Mute / unmute | — | `M` |
-| Start / restart | tap | `Space` / `↑` / `W` |
+| Start / restart | tap (or click) | — |
 
 ### The loop
 
@@ -141,7 +141,8 @@ energy once every deliberate knob is zeroed.
 Physics runs on a fixed `1/120s` timestep (`config.fixedDt`) for stability,
 independent of render frame rate. `window.GALE_CONFIG` exposes the live tuning
 table, which the headless probes poke directly (`scripts/smash-probe.mjs` also
-reads `GALE_KNOBS='{"tether.swingDrag":0}'`) without a rebuild.
+reads `GALE_KNOBS='{"player.smashSpeed":1200}'`, and `GALE_CONSERVE=1` for the
+option) without a rebuild.
 
 ---
 
