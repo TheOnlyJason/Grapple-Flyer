@@ -119,7 +119,8 @@ globalThis.setTimeout = globalThis.setTimeout || ((fn) => fn());
 
 // The game seeds each run from the clock; pin it so the smoke is the same
 // run every time (a flaky smoke is worse than none).
-let fakeNow = 1762_000_000_000;
+// GALE_SEED=<n> shifts the pinned clock, so the run is a different world.
+let fakeNow = 1762_000_000_000 + Number(process.env.GALE_SEED || 0) * 7919;
 Date.now = () => (fakeNow += 1);
 await import(path.join(assetsDir, bundle));
 
@@ -151,6 +152,14 @@ const up = (x = 400, y = 300) => dispatch("pointerup", { clientX: x, clientY: y,
 const tapAt = (r) => { down(r.x + r.w / 2, r.y + r.h / 2); tick(1); up(r.x + r.w / 2, r.y + r.h / 2); tick(1); };
 const key = (code) => { dispatch("keydown", { code }); tick(1); dispatch("keyup", { code }); };
 const hud = () => game.buildHudData();
+
+// The returning-player check (section 7) runs this file again with a 1.2 save.
+if (process.env.GALE_RETURNING_CHECK === "1") {
+  tick(20);
+  down(); tick(2); up(); tick(2);
+  console.log(game.state === "playing" && !tut.active ? "RETURNING: no tutorial" : `RETURNING: tutorial=${tut.active} state=${game.state}`);
+  process.exit(0);
+}
 
 // Play through the tutorial the way a new player would: do what each card says.
 // Returns the cards seen (in order), the slowest time scale under each, and more.
@@ -279,19 +288,65 @@ check("the dash lesson's dash smashes its rock", !!run1.lessonRock && run1.lesso
   check("SKIP during the dash card takes the rock away with it", !tut.active && rock && !game.world.hazards.includes(rock));
 }
 
-// --- 6. A returning player (a 1.2 save with runs) never gets it automatically ------------------
-if (!process.env.GALE_SAVE) {
+// --- 6. The tutorial cannot stall --------------------------------------------------------------
+{
+  // (a) No anchor anywhere ahead (a missed opening anchor, a sparse sky):
+  // the tutorial hangs a good one in reach before long.
+  player.y = game.world.seaLevel - 4; player.vy = 500;
+  for (let i = 0; i < 900 && game.state !== "gameover"; i++) tick(1);
+  tick(30);
+  tapAt(game.hud.howToPlayButton(game.camera));
+  for (let i = 0; i < 5; i++) tick(1);
+  game.world.anchors.length = 0;
+  // In slow motion a frame can run no physics step, so the card still
+  // standing for an anchor just removed takes a moment to go.
+  for (let i = 0; i < 60 && tut.want === "grab"; i++) { game.world.genX = player.x + 1e6; tick(1); }
+  let shownAfter = -1;
+  for (let i = 0; i < 400 && shownAfter < 0; i++) {
+    game.world.anchors = game.world.anchors.filter((a) => a === game.tutorialAnchor); // nothing but the tutorial's own
+    game.world.genX = player.x + 1e6;
+    tick(1);
+    if (tut.want === "grab") shownAfter = i;
+  }
+  check("with no anchor in the sky, the tutorial hangs a good one and the grab card shows", shownAfter >= 0, shownAfter >= 0 ? `after ${(shownAfter / 60).toFixed(1)} s` : "never");
+  // (The card can come up as the anchor crosses the view's edge, so look
+  // over its first half second rather than at one instant.)
+  let lit = null;
+  for (let i = 0; i < 30 && !(lit && lit.y < player.y - 60 && lit.x > player.x); i++) {
+    lit = player.findGrabTarget(game.world.anchors, game.camera);
+    if (!(lit && lit.y < player.y - 60 && lit.x > player.x)) tick(1);
+  }
+  check("…an anchor above and ahead of the plane", !!lit && lit.y < player.y - 60 && lit.x > player.x, lit ? `dx ${(lit.x - player.x).toFixed(0)} dy ${(lit.y - player.y).toFixed(0)}` : "none");
+  // (b) A weak grab (a level anchor right ahead: the 1.2 rope hangs dead):
+  // the card says to let go instead of leaving the player holding forever.
+  const A = lit ? lit.constructor : null;
+  if (A) {
+    game.world.anchors.length = 0;
+    const level = new A(player.x + 180, player.y - 4, "normal");
+    game.world.anchors.push(level);
+    down();
+    let grabbed = false;
+    for (let i = 0; i < 30 && !grabbed; i++) { tick(1); grabbed = player.state === "swing"; }
+    let letgoAfter = -1;
+    for (let i = 0; i < 600 && letgoAfter < 0; i++) {
+      game.world.anchors = [level]; game.world.genX = player.x + 1e6;
+      tick(1);
+      if (tut.want === "letgo") letgoAfter = i;
+    }
+    check("a swing that cannot reach gold gets a Let go card", grabbed && letgoAfter >= 0, `grabbed ${grabbed}, card after ${letgoAfter >= 0 ? (letgoAfter / 60).toFixed(1) + " s" : "never"}`);
+    up(); tick(2);
+    check("…and letting go moves the lesson on", tut.step === "chain", `step ${tut.step}`);
+  }
+}
+
+// --- 7. A returning player (a 1.2 save with runs) never gets it automatically ------------------
+{
   const { execFileSync } = await import("node:child_process");
   const out = execFileSync(process.execPath, [fileURLToPath(import.meta.url)], {
-    env: { ...process.env, GALE_SAVE: JSON.stringify({ bestScore: 900, bestDistance: 400, runs: 7, totalPerfect: 3, orbs: 40, character: "plane" }) },
+    env: { ...process.env, GALE_RETURNING_CHECK: "1", GALE_SAVE: JSON.stringify({ bestScore: 900, bestDistance: 400, runs: 7, totalPerfect: 3, orbs: 40, character: "plane" }) },
     encoding: "utf8",
   });
   check("a returning 1.2 player's first run here has no tutorial", out.includes("RETURNING: no tutorial"), out.trim().split("\n").pop());
-} else {
-  tick(20);
-  down(); tick(2); up(); tick(2);
-  console.log(game.state === "playing" && !tut.active ? "RETURNING: no tutorial" : `RETURNING: tutorial=${tut.active} state=${game.state}`);
-  process.exit(0);
 }
 console.log(failures ? `\n${failures} FAILED` : "\nall checks passed");
 process.exit(failures ? 1 : 0);

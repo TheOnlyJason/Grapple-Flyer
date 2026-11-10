@@ -8,7 +8,7 @@ import { Rng } from "./rng";
 import { clamp } from "./math";
 import { Player } from "../entities/player";
 import { Hazard } from "../entities/hazard";
-import { hexA } from "../entities/anchor";
+import { Anchor, hexA } from "../entities/anchor";
 import {
   drawBarrier,
   drawMagnetField,
@@ -93,6 +93,8 @@ export class Game {
   // rock it stages for the dash lesson.
   private tutorial = new Tutorial();
   private tutorialRock: Hazard | null = null;
+  private tutorialAnchor: Anchor | null = null;
+  private tutorialWaitGrab = 0;
   private tutorialGaugeGiven = false;
   private tutorialSeaWarned = false;
   private timeScale = 1;
@@ -229,6 +231,8 @@ export class Game {
   private stopTutorial() {
     this.tutorial.stop();
     this.tutorialRock = null;
+    this.tutorialAnchor = null;
+    this.tutorialWaitGrab = 0;
     this.tutorialGaugeGiven = false;
     this.tutorialSeaWarned = false;
     this.timeScale = 1;
@@ -281,6 +285,34 @@ export class Game {
         rock.y += (lineY - rock.y) * Math.min(1, dt * 3);
       }
     }
+    // A grab lesson needs a good anchor: above and ahead (the 1.2 rope also
+    // grabs a level one, and that swing hangs dead). If none has glowed for
+    // a moment, one is hung just off the right edge of the view and drifts
+    // (off screen briskly, on screen gently, like a moving anchor) to stay a
+    // reachable height above the glide until it is in reach.
+    const target = p.state === "glide" && t.allowTether() ? p.findGrabTarget(this.world.anchors, this.camera) : null;
+    const grabGood = target !== null && target.y < p.y - 60 && target.x > p.x + 20;
+    if (t.wantsGrab && p.state === "glide") {
+      this.tutorialWaitGrab = grabGood ? 0 : this.tutorialWaitGrab + dt;
+      let a = this.tutorialAnchor;
+      if (a && a.x < p.x - 120) a = this.tutorialAnchor = null;
+      if (!a && this.tutorialWaitGrab > 0.8) {
+        a = new Anchor(this.camera.right + 60, p.y - 150, "normal");
+        this.world.anchors.push(a);
+        this.tutorialAnchor = a;
+      }
+      if (a && Math.hypot(a.x - p.x, a.y - p.y) > CONFIG.tether.grabRange) {
+        // Where the glide will be when the anchor is about 250 px ahead,
+        // and a comfortable 150 px above that.
+        const lead = Math.max(0, (a.x - p.x - 250) / Math.max(p.vx, 200));
+        const y = Math.min(this.world.seaLevel - 320, p.y + clamp(p.vy, -150, 250) * lead - 150);
+        const rate = a.x > this.camera.right - 30 ? 4 : 1.5;
+        a.y += (y - a.y) * Math.min(1, dt * rate); // a "normal" anchor is wherever y says
+      }
+    } else {
+      this.tutorialWaitGrab = 0;
+    }
+
     const rock = this.tutorialRock;
     // Rising forward from the bottom of the swing toward the gold window's
     // near edge (the window is a launch direction: idealLaunchAngleDeg ±
@@ -296,7 +328,7 @@ export class Game {
     t.update(dt, {
       holding: this.input.holding,
       playerState: p.state,
-      grabLit: p.state === "glide" && t.allowTether() && p.findGrabTarget(this.world.anchors, this.camera) !== null,
+      grabLit: grabGood,
       inPerfectWindow: p.inPerfectWindow,
       releaseApproach,
       rockAhead: rock && !rock.destroyed && !rock.gone ? rock.x - p.x : null,

@@ -34,6 +34,7 @@ const TUTORIAL_COPY: Record<TutorialKey, { title: string; sub: string; titleKeys
     subKeys: "Hold Space while an anchor glows",
   },
   release: { title: "Let go on gold", sub: "Release while the rope glows gold" },
+  letgo: { title: "Let go", sub: "Release to fly on" },
   chain: { title: "Grab the next one", sub: "Hold again in mid-air to chain swings" },
   dash: {
     title: "Tap DASH",
@@ -459,7 +460,7 @@ export class Hud {
     const title = !COARSE_POINTER && copy.titleKeys ? copy.titleKeys : copy.title;
     const sub = !COARSE_POINTER && copy.subKeys ? copy.subKeys : copy.sub;
     const titleSize = clamp(cam.w * 0.036, 22, 34);
-    const gesture = t.key === "grab" || t.key === "chain" || t.key === "release";
+    const gesture = t.key === "grab" || t.key === "chain" || t.key === "release" || t.key === "letgo";
     const glyph = gesture ? 36 + 14 : 0; // the gesture sits left of the words
     this.setFont(ctx, "800", titleSize);
     const tw = ctx.measureText(title).width;
@@ -489,7 +490,7 @@ export class Hud {
       const gx = x0 + 24 + 18;
       const gy = cy;
       ctx.lineWidth = 3;
-      if (t.key === "release" && t.gold) {
+      if ((t.key === "release" && t.gold) || t.key === "letgo") {
         // Let go: a ring springing outward from the fingertip, over and over.
         const p = (now % 0.9) / 0.9;
         ctx.strokeStyle = hexA(PALETTE.anchorPerfect, (1 - p) * a);

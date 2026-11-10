@@ -64,6 +64,10 @@ arrives, with time slowed almost to a stop until the player does it.
 5. **Stay above the clouds**, then **You're ready** — and the run carries on
    for real.
 
+The grab cards only come up for a good anchor (above and ahead: the 1.2
+rope also grabs a level one, and that swing hangs dead); if none comes along
+for a moment the tutorial hangs one in reach. A swing that cannot reach gold
+gets a **Let go** card instead of leaving the player holding forever.
 Until the last card nothing ends the run: the cloud sea throws the player
 back up and rocks only break. **SKIP TUTORIAL** (top centre) ends it at
 once. It is saved as done when finished or skipped, never shows again on its

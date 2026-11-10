@@ -16,7 +16,7 @@
 // pure bookkeeping: the game feeds it what happened and asks it how fast
 // time should run, whether a held finger may grab, and what to show.
 
-export type TutorialKey = "grab" | "release" | "chain" | "dash" | "sea" | "done";
+export type TutorialKey = "grab" | "release" | "letgo" | "chain" | "dash" | "sea" | "done";
 
 type Step = "off" | "grab" | "swing" | "chain" | "dash" | "dashing" | "sea" | "done";
 
@@ -25,7 +25,11 @@ export interface TutorialFacts {
   /** The finger (or hold key) is down. */
   holding: boolean;
   playerState: "glide" | "swing" | "dash" | "skid";
-  /** A glide grab target exists right now (an anchor is glowing). */
+  /**
+   * A good glide grab target is glowing right now: above and ahead of the
+   * player, so holding on cue gives a swing with life in it. (The 1.2 rope
+   * also grabs a level anchor, and that swing hangs dead.)
+   */
   grabLit: boolean;
   inPerfectWindow: boolean;
   /** Swinging up toward the gold window (from the bottom of the swing to its edge). */
@@ -52,6 +56,12 @@ const DONE_CARD = 2.6;
 // A release that misses the gold window counts as a try; after this many the
 // lesson moves on anyway.
 const RELEASE_TRIES = 2;
+// A swing that has not reached gold by now (game seconds) never will — a
+// weak grab hangs — so the card says to let go instead.
+const LETGO_AFTER = 2.0;
+// Off the rope while the swing lesson is on (a dash out of it, say) this long
+// counts as a launch.
+const OFF_ROPE = 0.3;
 
 export class Tutorial {
   active = false;
@@ -65,6 +75,8 @@ export class Tutorial {
   private releasePassed = false;
   private releaseMisses = 0;
   private cardTime = 0;
+  private swingTime = 0;
+  private offRope = 0;
 
   /** Wanted time scale (the game eases toward it). */
   slow = 1;
@@ -84,6 +96,8 @@ export class Tutorial {
     this.releasePassed = false;
     this.releaseMisses = 0;
     this.cardTime = 0;
+    this.swingTime = 0;
+    this.offRope = 0;
     this.slow = 1;
     this.want = null;
     this.shown = null;
@@ -95,6 +109,11 @@ export class Tutorial {
     this.step = "off";
     this.slow = 1;
     this.want = null;
+  }
+
+  /** Waiting for a grab (the game makes sure a good anchor comes along). */
+  get wantsGrab(): boolean {
+    return this.active && (this.step === "grab" || this.step === "chain");
   }
 
   /** The dash lesson wants a full gauge and a rock to blast. */
@@ -115,10 +134,16 @@ export class Tutorial {
   onGrab() {
     if (!this.active) return;
     if (this.step === "grab" || this.step === "chain") this.step = "swing";
+    this.swingTime = 0;
+    this.offRope = 0;
   }
 
   onRelease(perfect: boolean) {
     if (!this.active || this.step !== "swing") return;
+    this.endSwing(perfect);
+  }
+
+  private endSwing(perfect: boolean) {
     this.swings++;
     if (perfect) this.releasePassed = true;
     else if (++this.releaseMisses >= RELEASE_TRIES) this.releasePassed = true;
@@ -149,14 +174,22 @@ export class Tutorial {
         }
         break;
       case "swing":
-        if (f.playerState === "swing" && !this.releasePassed) {
-          if (f.inPerfectWindow) {
-            want = "release";
-            slow = SLOW_RELEASE;
-          } else if (f.releaseApproach) {
-            want = "release";
-            slow = SLOW_RELEASE_APPROACH;
-          }
+        if (f.playerState !== "swing") {
+          // Off the rope without a release (a dash out of the swing).
+          this.offRope += dt;
+          if (this.offRope >= OFF_ROPE) this.endSwing(false);
+          break;
+        }
+        this.offRope = 0;
+        this.swingTime += dt;
+        if (!this.releasePassed && f.inPerfectWindow) {
+          want = "release";
+          slow = SLOW_RELEASE;
+        } else if (!this.releasePassed && f.releaseApproach) {
+          want = "release";
+          slow = SLOW_RELEASE_APPROACH;
+        } else if (this.swingTime >= LETGO_AFTER) {
+          want = "letgo";
         }
         break;
       case "chain":
