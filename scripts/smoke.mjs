@@ -152,6 +152,21 @@ function tick(n, dtMs = 16.6) {
 // 1) Menu frames.
 tick(20);
 assert(game.state === "menu", `expected menu state, got ${game.state}`);
+// 1b) The mute button (a phone has no M key): on the menu it mutes without
+//     starting a run, and the save keeps it.
+{
+  const tapCircle = (b) => {
+    dispatch("pointerdown", { clientX: b.x, clientY: b.y, pointerId: 1 });
+    tick(1);
+    dispatch("pointerup", { clientX: b.x, clientY: b.y, pointerId: 1 });
+    tick(1);
+  };
+  tapCircle(game.hud.muteButton(game.camera, true));
+  const saved = JSON.parse(globalThis.localStorage.store["gale.save.v1"] || "{}");
+  assert(game.state === "menu" && game.sound.enabled === false && saved.muted === true, "the menu's mute button did not mute (or started a run)");
+  tapCircle(game.hud.muteButton(game.camera, true));
+  assert(game.state === "menu" && game.sound.enabled === true && game.storage.data.muted === false, "the menu's mute button did not unmute");
+}
 // 2) Start the run + hold to swing (pointerdown).
 dispatch("pointerdown", { clientX: 400, clientY: 300, pointerId: 1 });
 tick(8);
@@ -173,6 +188,31 @@ for (let c = 0; c < 6; c++) {
   tick(45);
   dispatch("pointerup", { clientX: 400, clientY: 300, pointerId: 1 });
   tick(35);
+}
+// 4b) Mid-run the mute button sits by the pause button: a tap there mutes
+//     and is not a grab; paused, it mutes without resuming.
+if (game.state === "playing") {
+  const b = game.hud.muteButton(game.camera, false);
+  dispatch("pointerdown", { clientX: b.x, clientY: b.y, pointerId: 1 });
+  let grabbed = false;
+  for (let i = 0; i < 40; i++) { tick(1); if (game.player.state === "swing") grabbed = true; }
+  dispatch("pointerup", { clientX: b.x, clientY: b.y, pointerId: 1 });
+  tick(1);
+  assert(game.sound.enabled === false, "the in-run mute button did not mute");
+  assert(!grabbed, "a tap on the mute button was taken as a grab");
+  dispatch("keydown", { code: "Escape" });
+  tick(2);
+  dispatch("keyup", { code: "Escape" });
+  if (game.state === "paused") {
+    dispatch("pointerdown", { clientX: b.x, clientY: b.y, pointerId: 1 });
+    tick(1);
+    dispatch("pointerup", { clientX: b.x, clientY: b.y, pointerId: 1 });
+    tick(1);
+    assert(game.state === "paused" && game.sound.enabled === true, "paused, the mute button did not unmute (or it resumed)");
+    dispatch("keydown", { code: "Escape" });
+    tick(2);
+    dispatch("keyup", { code: "Escape" });
+  }
 }
 // 5) Trigger a dash via keyboard.
 dispatch("keydown", { code: "KeyD" });

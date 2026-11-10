@@ -111,7 +111,7 @@ export class Sound {
           .webkitAudioContext;
       this.ctx = new Ctx();
       this.master = this.ctx.createGain();
-      this.master.gain.value = 0.7;
+      this.master.gain.value = this.enabled ? 0.7 : 0; // a saved mute holds from the first sound
       this.master.connect(this.ctx.destination);
 
       this.musicGain = this.ctx.createGain();

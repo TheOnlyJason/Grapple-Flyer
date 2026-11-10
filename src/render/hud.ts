@@ -26,22 +26,16 @@ const PALETTE = theme; // HUD reads the live theme for cohesive colour grading
 const COARSE_POINTER =
   typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
 
-// The tutorial's words, one card per lesson (keyboard variants for desktop).
-const TUTORIAL_COPY: Record<TutorialKey, { title: string; sub: string; titleKeys?: string; subKeys?: string }> = {
-  grab: {
-    title: "Hold to grab",
-    sub: "Press and hold while an anchor glows",
-    subKeys: "Hold Space while an anchor glows",
-  },
-  release: { title: "Let go on gold", sub: "Release while the rope glows gold" },
-  letgo: { title: "Let go", sub: "Release to fly on" },
-  chain: { title: "Grab the next one", sub: "Hold again in mid-air to chain swings" },
-  dash: {
-    title: "Tap DASH",
-    titleKeys: "Press D to dash",
-    sub: "A full gauge blasts you through rocks",
-  },
-  sea: { title: "Stay above the clouds", sub: "Falling into the cloud sea ends the run" },
+// The tutorial's words, one card per lesson. Written for a phone — touch,
+// hold, lift your finger, tap the button — which also reads right with a
+// mouse (a click and hold anywhere is the same as a touch).
+const TUTORIAL_COPY: Record<TutorialKey, { title: string; sub: string }> = {
+  grab: { title: "Hold to grab", sub: "Touch and hold when an anchor glows" },
+  release: { title: "Let go on gold", sub: "Lift your finger on the gold glow" },
+  letgo: { title: "Let go", sub: "Lift your finger to fly on" },
+  chain: { title: "Grab the next one", sub: "Touch and hold again in mid-air" },
+  dash: { title: "Tap DASH", sub: "It blasts you through rocks" },
+  sea: { title: "Stay above the clouds", sub: "The cloud sea below ends the run" },
   done: { title: "You're ready", sub: "Fly as far as you can" },
 };
 
@@ -168,6 +162,63 @@ export class Hud {
     return { x: cam.w - ins.right - r - 20, y: ins.top + r + 20, r };
   }
 
+  /**
+   * The mute button: on the menu and game-over screens bottom right; during
+   * a run (and paused) just left of the pause button. There is no keyboard
+   * on a phone, so M alone is not enough.
+   */
+  muteButton(cam: Camera, attract: boolean): { x: number; y: number; r: number } {
+    const ins = cam.insets;
+    if (attract) {
+      const r = 20;
+      return { x: cam.w - ins.right - 28 - r, y: cam.h - ins.bottom - 26 - r, r };
+    }
+    const p = this.pauseButton(cam);
+    const r = Math.round(p.r * 0.85);
+    return { x: p.x - p.r - 12 - r, y: p.y, r };
+  }
+
+  private drawMuteButton(ctx: CanvasRenderingContext2D, cam: Camera, d: HudData, attract: boolean) {
+    const b = this.muteButton(cam, attract);
+    ctx.fillStyle = hexA(PALETTE.text, 0.14);
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = hexA(PALETTE.text, 0.32);
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    // A speaker: a box and a cone, then sound waves — or a cross when muted.
+    const s = b.r / 20;
+    const cx = b.x - 4 * s;
+    const col = hexA(PALETTE.text, 0.88);
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.moveTo(cx - 7 * s, b.y - 3.5 * s);
+    ctx.lineTo(cx - 3 * s, b.y - 3.5 * s);
+    ctx.lineTo(cx + 3 * s, b.y - 8.5 * s);
+    ctx.lineTo(cx + 3 * s, b.y + 8.5 * s);
+    ctx.lineTo(cx - 3 * s, b.y + 3.5 * s);
+    ctx.lineTo(cx - 7 * s, b.y + 3.5 * s);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 2 * s;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    if (d.muted) {
+      ctx.moveTo(cx + 7 * s, b.y - 4.5 * s);
+      ctx.lineTo(cx + 15 * s, b.y + 4.5 * s);
+      ctx.moveTo(cx + 15 * s, b.y - 4.5 * s);
+      ctx.lineTo(cx + 7 * s, b.y + 4.5 * s);
+    } else {
+      ctx.arc(cx + 4 * s, b.y, 6 * s, -0.75, 0.75);
+      ctx.moveTo(cx + 4 * s + 11 * s * Math.cos(-0.8), b.y + 11 * s * Math.sin(-0.8));
+      ctx.arc(cx + 4 * s, b.y, 11 * s, -0.8, 0.8);
+    }
+    ctx.stroke();
+    ctx.lineCap = "butt";
+  }
+
   /** SKIP during the tutorial: top centre, clear of the score and the pause button. */
   tutorialSkipButton(cam: Camera): { x: number; y: number; w: number; h: number } {
     const w = 132;
@@ -269,8 +320,9 @@ export class Hud {
 
     if (paused) this.drawPauseOverlay(ctx, cam, d);
 
-    // --- Pause / resume (top-right corner, above overlay) ---
+    // --- Pause / resume and mute (top-right corner, above overlay) ---
     this.drawPauseButton(ctx, cam, paused);
+    this.drawMuteButton(ctx, cam, d, false);
 
     // --- Wind gauge / dash button (bottom-right) ---
     this.drawDashButton(ctx, cam, d);
@@ -356,17 +408,7 @@ export class Hud {
       }
     }
 
-    // Mute indicator.
     ctx.textAlign = "left"; // the hint block above may have left it centred
-    this.text(
-      ctx,
-      d.muted ? "♪ off (M)" : "♪ on (M)",
-      cam.w - 96 - ins.right,
-      cam.h - 22 - ins.bottom,
-      11,
-      "600",
-      hexA(PALETTE.textDim, 0.7)
-    );
   }
 
   // A worn power-up: dark badge, its glyph, and a ring showing what is left
@@ -457,8 +499,8 @@ export class Hud {
       return;
     }
     const copy = TUTORIAL_COPY[t.key];
-    const title = !COARSE_POINTER && copy.titleKeys ? copy.titleKeys : copy.title;
-    const sub = !COARSE_POINTER && copy.subKeys ? copy.subKeys : copy.sub;
+    const title = copy.title;
+    const sub = copy.sub;
     const titleSize = clamp(cam.w * 0.036, 22, 34);
     const gesture = t.key === "grab" || t.key === "chain" || t.key === "release" || t.key === "letgo";
     const glyph = gesture ? 36 + 14 : 0; // the gesture sits left of the words
@@ -517,7 +559,8 @@ export class Hud {
     }
 
     if (t.key === "dash") {
-      // Point at the button itself.
+      // Point at the button itself: a pulsing ring, and an arrow from the
+      // card to it that nudges toward the button.
       const b = this.dashButton(cam);
       const pulse = 0.5 + 0.5 * Math.sin(now * 7);
       ctx.strokeStyle = hexA(PALETTE.collectible, (0.45 + 0.45 * pulse) * a);
@@ -525,6 +568,32 @@ export class Hud {
       ctx.beginPath();
       ctx.arc(b.x, b.y, b.r + 10 + pulse * 6, 0, Math.PI * 2);
       ctx.stroke();
+      const ax0 = x0 + cw + 10;
+      const ay0 = cy;
+      const ring = b.r + 22;
+      const dx = b.x - ax0;
+      const dy = b.y - ay0;
+      const len = Math.hypot(dx, dy);
+      if (len > ring + 24) {
+        const ux = dx / len;
+        const uy = dy / len;
+        const nudge = 6 * pulse;
+        const ex = b.x - ux * (ring - nudge);
+        const ey = b.y - uy * (ring - nudge);
+        const sx = ax0 + ux * nudge;
+        const sy = ay0 + uy * nudge;
+        ctx.strokeStyle = hexA(PALETTE.collectible, 0.85 * a);
+        ctx.lineWidth = 3;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(ex, ey);
+        ctx.moveTo(ex - ux * 11 - uy * 7, ey - uy * 11 + ux * 7);
+        ctx.lineTo(ex, ey);
+        ctx.lineTo(ex - ux * 11 + uy * 7, ey - uy * 11 - ux * 7);
+        ctx.stroke();
+        ctx.lineCap = "butt";
+      }
     }
     ctx.textBaseline = baseline;
   }
@@ -547,7 +616,7 @@ export class Hud {
     const pulse = 0.55 + Math.sin(performance.now() / 400) * 0.35;
     this.text(
       ctx,
-      "Tap ▶ or Esc to resume",
+      COARSE_POINTER ? "Tap ▶ to resume" : "Tap ▶ or Esc to resume",
       cam.w / 2,
       cam.h * 0.42 + 52,
       15,
@@ -885,17 +954,14 @@ export class Hud {
       this.text(ctx, "FIRST FLIGHT", 28 + ins.left, h - 58 - ins.bottom, 11, "700", PALETTE.textDim);
     }
 
-    // Mute — bottom right.
-    ctx.textAlign = "right";
-    this.text(
-      ctx,
-      d.muted ? "♪ off   M" : "♪ on   M",
-      w - 28 - ins.right,
-      h - 48 - ins.bottom,
-      11,
-      "600",
-      hexA(PALETTE.textDim, 0.75)
-    );
+    // Mute — bottom right (M on a keyboard too).
+    this.drawMuteButton(ctx, cam, d, true);
+    if (!COARSE_POINTER) {
+      const m = this.muteButton(cam, true);
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      this.text(ctx, "M", m.x, m.y + m.r + 4, 10, "700", hexA(PALETTE.textDim, 0.7));
+    }
   }
 
   /**

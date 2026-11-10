@@ -13,6 +13,8 @@ interface SaveData {
   conserveMomentum: boolean;
   /** The first-flight tutorial has been finished or skipped. */
   tutorialDone: boolean;
+  /** Sound off (the mute button, or M). */
+  muted: boolean;
 }
 
 const KEY = "gale.save.v1";
@@ -33,6 +35,7 @@ const DEFAULT: SaveData = {
   character: "plane",
   conserveMomentum: false,
   tutorialDone: false,
+  muted: false,
 };
 
 export class Storage {
@@ -53,6 +56,7 @@ export class Storage {
           character: isCharacterId(parsed.character) ? parsed.character : "plane",
           conserveMomentum: parsed.conserveMomentum === true,
           tutorialDone: parsed.tutorialDone === true,
+          muted: parsed.muted === true,
         };
         // Saves from before orbs existed (or a hand-edited value) bank nothing.
         this.data.orbs = cleanOrbs(parsed.orbs);
@@ -84,6 +88,11 @@ export class Storage {
 
   setCharacter(id: CharacterId) {
     this.data.character = id;
+    this.save();
+  }
+
+  setMuted(muted: boolean) {
+    this.data.muted = muted;
     this.save();
   }
 

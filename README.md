@@ -31,7 +31,7 @@ fly from the keyboard (starting a run and the pause-screen buttons take a click)
 | **Tether & swing** | tap **and hold** | hold `Space` / `↑` / `W` |
 | **Slingshot launch** | release | release the hold key |
 | **Wind Dash** (gauge full) | tap the **DASH** button | `Shift` / `D` |
-| Mute / unmute | — | `M` |
+| Mute / unmute | tap the **speaker** button (by the pause button; bottom right on the menu) | `M` |
 | Start / restart | tap (or click) | — |
 
 ### The loop
@@ -53,7 +53,9 @@ Each run rolls **3 objectives** and tracks score, distance, and your best.
 
 A brand-new player's first run teaches the loop the way Alto's Adventure
 does: no screens of text, one move at a time, prompted as the moment for it
-arrives, with time slowed almost to a stop until the player does it.
+arrives, with time slowed almost to a stop until the player does it. The
+cards are written for a phone (touch and hold, lift your finger, tap DASH,
+with an arrow to the button); a mouse click and hold reads the same.
 
 1. An anchor glows: **Hold to grab**.
 2. Swinging up toward the gold window: **Let go on gold** (time all but

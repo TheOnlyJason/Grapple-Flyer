@@ -126,6 +126,7 @@ export class Game {
     if (!ctx) throw new Error("2D canvas context unavailable");
     this.ctx = ctx;
     this.input = new Input(canvas);
+    this.sound.setMuted(this.storage.data.muted);
     this.enterMenu();
   }
 
@@ -407,6 +408,20 @@ export class Game {
     this.startRun();
   }
 
+  /** The mute button (or M): sound off or on, remembered in the save. */
+  private toggleMute() {
+    const muted = this.sound.enabled;
+    this.sound.setMuted(muted);
+    this.storage.setMuted(muted);
+  }
+
+  private hitMuteButton(): boolean {
+    const b = this.hud.muteButton(this.camera, this.isAttractScreen());
+    const dx = this.input.pointer.x - b.x;
+    const dy = this.input.pointer.y - b.y;
+    return dx * dx + dy * dy <= b.r * b.r;
+  }
+
   /** The pause-menu swing option (remembered in the save). */
   private toggleConserveMomentum() {
     const next = !this.storage.data.conserveMomentum;
@@ -491,6 +506,10 @@ export class Game {
       return;
     }
     if (this.input.pointerJustDown) {
+      if (this.hitMuteButton()) {
+        this.toggleMute();
+        return;
+      }
       if (this.hitRect(this.hud.howToPlayButton(this.camera))) {
         this.startRun(true);
         return;
@@ -542,9 +561,7 @@ export class Game {
     // Drift the time-of-day palette. Each run starts at dawn (this.time resets).
     updateTheme(this.time);
     if (this.input.anyInteraction) this.sound.resume();
-    if (this.input.tapped.has("KeyM")) {
-      this.sound.setMuted(this.sound.enabled);
-    }
+    if (this.input.tapped.has("KeyM")) this.toggleMute();
 
     this.handleStateInput();
 
@@ -603,6 +620,10 @@ export class Game {
     if (this.state === "crashing") return;
 
     if (this.state === "paused") {
+      if (this.input.pointerJustDown && this.hitMuteButton()) {
+        this.toggleMute();
+        return;
+      }
       if (this.input.pointerJustDown) {
         const b = this.hud.pauseMenuButtons(this.camera);
         if (this.hitRect(b.restart)) {
@@ -633,6 +654,11 @@ export class Game {
     if (this.input.pointerJustDown) {
       if (this.hitPauseButton()) {
         this.togglePause();
+        return;
+      }
+      if (this.hitMuteButton()) {
+        this.dashLatch = true; // this press is not a grab
+        this.toggleMute();
         return;
       }
       if (this.tutorial.active && this.hitRect(this.hud.tutorialSkipButton(this.camera))) {

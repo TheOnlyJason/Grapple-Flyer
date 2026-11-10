@@ -154,6 +154,11 @@ const key = (code) => { dispatch("keydown", { code }); tick(1); dispatch("keyup"
 const hud = () => game.buildHudData();
 
 // The returning-player check (section 7) runs this file again with a 1.2 save.
+if (process.env.GALE_MUTE_CHECK === "1") {
+  tick(5);
+  console.log(`MUTED AT BOOT: ${game.sound.enabled === false}`);
+  process.exit(0);
+}
 if (process.env.GALE_RETURNING_CHECK === "1") {
   tick(20);
   down(); tick(2); up(); tick(2);
@@ -347,6 +352,11 @@ check("the dash lesson's dash smashes its rock", !!run1.lessonRock && run1.lesso
     encoding: "utf8",
   });
   check("a returning 1.2 player's first run here has no tutorial", out.includes("RETURNING: no tutorial"), out.trim().split("\n").pop());
+  const muted = execFileSync(process.execPath, [fileURLToPath(import.meta.url)], {
+    env: { ...process.env, GALE_MUTE_CHECK: "1", GALE_SAVE: JSON.stringify({ runs: 3, tutorialDone: true, muted: true }) },
+    encoding: "utf8",
+  });
+  check("the mute button's setting survives a relaunch", muted.includes("MUTED AT BOOT: true"), muted.trim().split("\n").pop());
 }
 console.log(failures ? `\n${failures} FAILED` : "\nall checks passed");
 process.exit(failures ? 1 : 0);
