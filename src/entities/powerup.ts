@@ -158,7 +158,7 @@ export const POWERUP_RADIUS = 22;
 export class PowerUp {
   readonly x: number;
   y: number;
-  baseY: number; // settles with the anchor it hangs on (see World.settleAnchors)
+  readonly baseY: number;
   readonly kind: PowerUpKind;
   collected = false;
   private phase: number;

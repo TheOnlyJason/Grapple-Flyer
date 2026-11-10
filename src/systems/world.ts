@@ -8,21 +8,6 @@ import { Hazard } from "../entities/hazard";
 import { PowerUp, POWERUP_KINDS } from "../entities/powerup";
 
 const SPAWN_BUFFER = 700;
-// Anchors settle their height this far before the camera's right edge.
-const SETTLE_AHEAD = 150;
-// While the player swings or dashes, hold a pending anchor's height until it
-// is this close to the view's edge, so a glide may have begun by then.
-const SETTLE_AHEAD_BUSY = 60;
-
-/** The game's live view of the player, for settling anchors. */
-export interface FlightProbe {
-  x: number;
-  y: number;
-  /** True in a glide; a swing or dash makes the altitude ahead unknowable. */
-  gliding: boolean;
-  /** Where a glide from now is when it reaches world-x `targetX`. */
-  predictY(targetX: number): number;
-}
 const CULL_BUFFER = 500;
 // On a restart, how far past the right screen edge the old world is kept.
 // It must exceed the furthest anything can hang to the LEFT of the segment
@@ -45,16 +30,6 @@ export class World {
   private genX = 0;
   /** World-x of the most recent anchor — used to cap anchor droughts. */
   private lastAnchorX = 0;
-  // Altitude the world is being built around. It follows the player and the
-  // anchors chain along it, so there is nearly always something in reach:
-  // spreading everything over the whole 2000 px sky left an anchor grabbable
-  // for only ~7% of a glide (bot-measured), with 8 s stretches of nothing.
-  private chainY = 0;
-  // The player's altitude smoothed over a few seconds (segments are built
-  // 1.5–2k px ahead, so the instantaneous altitude is noise) — for the
-  // generator; and the game's live view of the player — for settling anchors.
-  private playerYAvg = 0;
-  private probe: FlightProbe = { x: 0, y: 0, gliding: true, predictY: () => 0 };
   /** World-x where the current run began: the difficulty ramp is measured from here. */
   private runOriginX = 0;
   /** World-x past which the next power-up pickup spawns. */
@@ -87,9 +62,6 @@ export class World {
     const first = new Anchor(startX + 260, startY - 180, "normal");
     this.anchors.push(first);
     this.lastAnchorX = first.x;
-    this.chainY = first.y;
-    this.probe = { x: startX, y: startY, gliding: true, predictY: () => startY };
-    this.playerYAvg = startY;
     this.genX = startX + 280;
   }
 
@@ -190,8 +162,6 @@ export class World {
     this.genX = keepUntilX;
     this.lastAnchorX = originX;
     for (const a of this.anchors) if (a.x > this.lastAnchorX) this.lastAnchorX = a.x;
-    const last = this.anchors[this.anchors.length - 1];
-    this.chainY = last ? last.baseY : this.probe.y - CONFIG.world.bandAbove;
     // A dropped pickup must not push the next one a whole gap further out.
     this.nextPowerX = Math.min(this.nextPowerX, this.genX + CONFIG.powerups.firstAt);
   }
@@ -200,69 +170,20 @@ export class World {
     return clamp((this.genX - this.runOriginX) / 13000, 0, 1);
   }
 
-  /**
-   * Build what the camera is about to need and settle the anchors about to
-   * come into view. `probe` is the game's live view of the player (omitted
-   * by the attract screen, which keeps the last one).
-   */
-  ensure(cameraRight: number, probe?: FlightProbe) {
-    if (probe) this.probe = probe;
+  /** The player's altitude, so a lofted player still finds anchors to grab. */
+  private playerY = 0;
+
+  ensure(cameraRight: number, playerY = this.playerY) {
+    this.playerY = playerY;
     while (this.genX < cameraRight + SPAWN_BUFFER) {
       this.generateSegment();
-    }
-    this.settleAnchors(cameraRight);
-  }
-
-  /**
-   * Anchors get their x when a segment is built, 1.5–2k px ahead, but their
-   * HEIGHT only as they are about to scroll into view, from where the player
-   * will be by the time they reach them. A grab needs the anchor above the
-   * player and on screen; the player's altitude six seconds out is anyone's
-   * guess, while the glide ahead to the anchor's x is the player's own glide
-   * step run forward (a launch climbs hundreds of px and then sinks; a sink
-   * rate alone put anchors under the climb's apex and over the sink). While
-   * the player swings or dashes the launch to come is unknown, so settling
-   * waits until the anchor is nearly on screen in the hope of a glide by
-   * then. Whatever was hung on the anchor meanwhile (orbs, a pickup) moves
-   * with it.
-   */
-  private settleAnchors(cameraRight: number) {
-    const W = CONFIG.world;
-    const bottom = this.altitudeBounds().bottom;
-    const ahead = this.probe.gliding ? SETTLE_AHEAD : SETTLE_AHEAD_BUSY;
-    for (const a of this.anchors) {
-      if (!a.pending || a.x > cameraRight + ahead) continue;
-      a.pending = false;
-      const predicted = this.probe.predictY(a.x);
-      let y = Math.min(bottom, predicted + this.rng.range(-W.anchorAbove[1], -W.anchorAbove[0]));
-      // Rocks were placed around the flight band before the anchor's height
-      // was known: an anchor must not settle inside one.
-      for (let tries = 0; tries < 4 && this.insideHazardAt(a.x, y, 70); tries++) y -= 130;
-      const dy = y - a.baseY;
-      if (dy === 0) continue;
-      a.baseY = y;
-      a.y += dy;
-      for (const it of a.attached) {
-        it.baseY += dy;
-        it.y += dy;
-        if (it instanceof Collectible) {
-          // An orb may not sit in a rock or in the cloud sea.
-          if (it.y > W.seaLevel - 60 || this.insideHazardAt(it.x, it.y, 22)) it.collected = true;
-        } else if (it instanceof PowerUp) {
-          for (let tries = 0; tries < 4 && this.insideHazardAt(it.x, it.baseY, 60); tries++) {
-            it.baseY -= 150;
-            it.y -= 150;
-          }
-        }
-      }
-      a.attached.length = 0;
     }
   }
 
   private generateSegment() {
     const rng = this.rng;
     const diff = this.difficulty();
-    const { top: hardTop, bottom } = this.altitudeBounds();
+    const { top, bottom } = this.altitudeBounds();
 
     const segW = rng.range(lerp(340, 420, diff), lerp(480, 620, diff));
     const segStart = this.genX;
@@ -275,32 +196,26 @@ export class World {
     // outgrows a good slingshot, and the rescue spawns EARLY in the segment
     // at a mid-altitude band the player can actually reach.
     const drought = segEnd - this.lastAnchorX > 850;
-    // The flight band: anchors chain along it, and it drifts slowly toward
-    // where the player has been flying (above them, inside the view). It
-    // follows the player up without limit — the swing's gravity outweighs
-    // the glide's, so a run that keeps its energy climbs, and a ceiling on
-    // the anchors would strand the player above everything (the old
-    // skyCeiling did exactly that: ten seconds of empty sky, then the sea).
-    const W = CONFIG.world;
-    this.chainY += (this.playerYAvg - W.bandAbove - this.chainY) * W.bandFollow;
-    const top = Math.min(hardTop, this.chainY - 500);
-    const bandY = (lo: number, hi: number) => clamp(this.chainY + rng.range(lo, hi), top, bottom);
+    // A big launch can loft the player above the anchor band; rather than
+    // leave them in empty sky for seconds, hang the next anchor near them.
+    const skyRescue = this.playerY < top;
     const emptyChance = lerp(0.08, 0.28, diff);
     let anchorCount = 0;
-    if (drought || !rng.chance(emptyChance)) {
+    if (drought || skyRescue || !rng.chance(emptyChance)) {
       anchorCount = rng.int(1, diff > 0.45 ? 2 : 1);
     }
 
     const segAnchors: Anchor[] = [];
     for (let i = 0; i < anchorCount; i++) {
-      const rescue = drought && i === 0;
+      const rescue = (drought || skyRescue) && i === 0;
       const ax = rescue
         ? rng.range(segStart + 40, Math.min(segEnd - 60, segStart + 260))
         : rng.range(segStart + 60, segEnd - 60);
-      // Provisional height along the flight band — settleAnchors() fixes
-      // it as the anchor nears the screen (orbs hung under it follow).
-      const ay = bandY(-W.bandScatter, W.bandScatter * 0.8);
-      if (i === anchorCount - 1) this.chainY += (ay - this.chainY) * 0.5;
+      const ay = skyRescue && i === 0
+        ? Math.max(CONFIG.world.skyCeiling - 600, rng.range(this.playerY - 120, this.playerY + 260))
+        : rescue
+        ? rng.range(-650, Math.min(bottom, 350))
+        : rng.range(top, bottom);
       const moving = rng.chance(lerp(0.06, 0.38, diff));
       const anchor = moving
         ? new Anchor(ax, ay, "moving", {
@@ -309,7 +224,6 @@ export class World {
             speed: rng.range(0.7, 1.6),
           })
         : new Anchor(ax, ay, "normal");
-      anchor.pending = true;
       this.anchors.push(anchor);
       segAnchors.push(anchor);
       if (ax > this.lastAnchorX) this.lastAnchorX = ax;
@@ -320,25 +234,22 @@ export class World {
     for (let i = 0; i < collectCount; i++) {
       let cx: number;
       let cy: number;
-      let host: Anchor | null = null;
       if (segAnchors.length > 0 && rng.chance(0.55)) {
-        host = rng.pick(segAnchors);
-        cx = host.x + rng.range(-90, 90);
-        cy = host.y + rng.range(-70, 110);
+        const a = rng.pick(segAnchors);
+        cx = a.x + rng.range(-90, 90);
+        cy = a.y + rng.range(-70, 110);
       } else {
         cx = rng.range(segStart + 40, segEnd - 40);
-        cy = bandY(-120, 260);
+        cy = rng.range(top + 80, bottom - 40);
       }
-      const wisp = new Collectible(cx, cy);
-      this.collectibles.push(wisp);
-      if (host) host.attached.push(wisp);
+      this.collectibles.push(new Collectible(cx, cy));
     }
 
     // --- Clouds: random position and size within the segment. ---
     const cloudCount = rng.chance(0.62) ? rng.int(1, 2) : 0;
     for (let i = 0; i < cloudCount; i++) {
       const cx = rng.range(segStart, segEnd);
-      const cy = clamp(this.chainY + rng.range(120, 420), top + 160, bottom + 80); // under the flight path: skimmable
+      const cy = rng.range(top + 160, bottom + 80);
       this.clouds.push(
         new Cloud(
           cx,
@@ -350,17 +261,14 @@ export class World {
       );
     }
 
-    // --- Hazards: scattered through the flight band (not on a line). They
-    // used to be spread over the whole 2000 px sky, most of them never met;
-    // concentrated around the band the same count would be ~3x as deadly,
-    // so the chance is lower and the spread wider than the anchors'.
+    // --- Hazards: scattered anywhere in the segment (not on a line). ---
     if (segEnd - this.runOriginX > 1400) {
-      const hazardChance = lerp(0.06, 0.3, diff);
+      const hazardChance = lerp(0.12, 0.52, diff);
       if (rng.chance(hazardChance)) {
         const count = rng.chance(diff * 0.5) ? 2 : 1;
         for (let i = 0; i < count; i++) {
           const hx = rng.range(segStart + 30, segEnd - 30);
-          const hy = bandY(-340, 460);
+          const hy = rng.range(top + 60, bottom - 20);
           const r = rng.range(34, 92);
           const rock = new Hazard(hx, hy, r, r * rng.range(0.75, 1.35), rng);
           // A pickup placed by an earlier segment may already sit here; a
@@ -396,12 +304,11 @@ export class World {
         const mid = Math.PI / 2 + rng.range(-0.25, 0.25); // straight down (+y)
         for (let i = 0; i < n; i++) {
           const ang = mid + span / 2 - (i * span) / (n - 1);
-          const orb = this.addOrb(a.x + Math.cos(ang) * radius, a.y + Math.sin(ang) * radius);
-          if (orb) a.attached.push(orb);
+          this.addOrb(a.x + Math.cos(ang) * radius, a.y + Math.sin(ang) * radius);
         }
       } else {
         const x0 = rng.range(segStart + 20, segEnd - 20);
-        const y0 = bandY(-100, 260);
+        const y0 = rng.range(top + 140, bottom + 120);
         const amp = rng.range(-70, 70);
         for (let i = 0; i < n; i++) {
           this.addOrb(x0 + i * gap, y0 + Math.sin((i / (n - 1)) * Math.PI) * amp);
@@ -415,43 +322,25 @@ export class World {
       const kind = POWERUP_KINDS[this.powerCount++ % POWERUP_KINDS.length];
       let px: number;
       let py: number;
-      let host: Anchor | null = null;
       if (segAnchors.length > 0) {
-        host = rng.pick(segAnchors);
-        px = host.x + rng.range(70, 170);
-        py = host.y + rng.range(60, 170);
+        const a = rng.pick(segAnchors);
+        px = a.x + rng.range(70, 170);
+        py = a.y + rng.range(60, 170);
       } else {
         px = rng.range(segStart + 60, segEnd - 60);
-        py = bandY(-80, 220);
+        py = rng.range(top + 220, bottom);
       }
       // Never inside (or hugging) a rock: lift it clear.
       for (let tries = 0; tries < 4 && this.insideHazard(px, py, 60); tries++) py -= 150;
-      const pickup = new PowerUp(px, py, kind);
-      this.powerups.push(pickup);
-      if (host) host.attached.push(pickup);
+      this.powerups.push(new PowerUp(px, py, kind));
       this.nextPowerX = segEnd + rng.range(CONFIG.powerups.gap[0], CONFIG.powerups.gap[1]);
     }
   }
 
-  private addOrb(x: number, y: number): Collectible | null {
+  private addOrb(x: number, y: number) {
     // Keep clear of rocks and above the cloud sea.
-    if (y > CONFIG.world.seaLevel - 60 || this.insideHazard(x, y, 22)) return null;
-    const orb = new Collectible(x, y, "orb");
-    this.collectibles.push(orb);
-    return orb;
-  }
-
-  /**
-   * True if (x, y) with padding `r` overlaps a rock near world-x `x`, however
-   * long ago it was built. For settling: the rocks around an anchor may be
-   * many segments old by the time its height is fixed, so the generator's
-   * recent-rocks shortcut below would miss them.
-   */
-  private insideHazardAt(x: number, y: number, r: number): boolean {
-    for (const h of this.hazards) {
-      if (Math.abs(h.x - x) < 600 && h.hits(x, y, r)) return true;
-    }
-    return false;
+    if (y > CONFIG.world.seaLevel - 60 || this.insideHazard(x, y, 22)) return;
+    this.collectibles.push(new Collectible(x, y, "orb"));
   }
 
   /** True if (x, y) with padding `r` overlaps one of the most recent rocks. */
@@ -468,8 +357,6 @@ export class World {
     time: number,
     magnet?: { x: number; y: number; range: number; strength: number }
   ) {
-    // Smooth the player's altitude over a few seconds for the generator.
-    this.playerYAvg += (this.probe.y - this.playerYAvg) * Math.min(1, dt / CONFIG.world.bandAverage);
     for (const a of this.anchors) a.update(dt, time);
     for (const c of this.clouds) c.update(dt);
     for (const h of this.hazards) h.update(dt);

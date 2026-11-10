@@ -409,36 +409,55 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
 {
   setKnobs({ "tether.swingDrag": 0, "tether.reelRate": 0 });
   const a = stageAnchor(28600, -600);
-  placeSwing(a, 150, deg(45), 900 / 150); // in the PERFECT window, rising
-  quiet(); frame();
-  up(); quiet(); frame(); // release
-  const launched = player.state === "glide" && player.vx > 0 && player.vy < 0;
+  const b = new Anchor(a.x, a.y);
+  // A PERFECT-window release from `a`, flying up and forward.
+  const releaseFromA = () => {
+    placeSwing(a, 150, deg(45), 900 / 150);
+    quiet(); frame();
+    up(); quiet(); frame();
+    return player.state === "glide" && player.vx > 0 && player.vy < 0;
+  };
+  // World setups, applied every frame: `a` and a second anchor `b` kept just
+  // ahead of and above the player; `a` alone with the player parked below
+  // and to its left; `a` and `b` with the player parked past `a`.
+  const both = () => { world.anchors.length = 0; world.anchors.push(a, b); world.genX = player.x + 1e6; b.x = player.x + 160; b.y = player.y - 200; };
+  const onlyA = () => { world.anchors.length = 0; world.anchors.push(a); world.genX = player.x + 1e6; player.x = a.x - 200; player.y = a.y + 150; player.vx = 400; player.vy = 0; };
+  const nearB = () => { world.anchors.length = 0; world.anchors.push(a, b); world.genX = player.x + 1e6; player.x = a.x + 118; player.y = a.y + 90; player.vx = 600; player.vy = -300; b.x = player.x + 160; b.y = player.y - 200; };
+  const delayFrames = Math.ceil(CFG.tether.releaseGrabDelay * 120) + 2;
+  const graceFrames = Math.ceil(CFG.tether.grabBuffer * 120) + 2;
+
+  let launched = releaseFromA();
   down();
   let regrabbed = false;
   for (let i = 0; i < 6; i++) { quiet(); frame(); if (player.state === "swing") regrabbed = true; }
   check("a re-press right after a release does not re-grab the anchor just left", launched && !regrabbed && player.vx > 0, `state ${player.state}, v (${player.vx.toFixed(0)}, ${player.vy.toFixed(0)})`);
-  up(); quiet(); frame();
-  // For releaseGrabDelay nothing at all is grabbable (a press as the finger
-  // lifts is not an aim); after it, another anchor is — while the one just
-  // left is still off limits.
-  const b = new Anchor(player.x + 160, player.y - 200);
-  const both = () => { world.anchors.length = 0; world.anchors.push(a, b); world.genX = player.x + 1e6; };
-  down();
-  let grabbedEarly = false;
-  for (let i = 0; i < 6; i++) { both(); frame(); if (player.state === "swing") grabbedEarly = true; }
-  check("right after a release a press grabs nothing at all", !grabbedEarly, `state ${player.state}`);
+  // The press is not kept on ice either: held through the delay with another
+  // anchor in reach, it expires (the hold is a backflip) instead of hooking
+  // `b` the moment the delay ends.
+  let grabbedLate = false;
+  for (let i = 0; i < delayFrames + graceFrames; i++) { both(); frame(); if (player.state === "swing") grabbedLate = true; }
+  check("a press made inside the delay expires instead of grabbing when the delay ends", !grabbedLate && player.flipping, `state ${player.state}, flipping ${player.flipping}`);
   up(); both(); frame();
-  const delayFrames = Math.ceil(CFG.tether.releaseGrabDelay * 120) + 2;
-  for (let i = 0; i < delayFrames; i++) { both(); frame(); player.x = a.x + 118; player.y = a.y + 90; player.vx = 600; player.vy = -300; b.x = player.x + 160; b.y = player.y - 200; }
+  // Past the delay but inside the cooldown, `a` is refused even when it is
+  // the only anchor in reach.
+  onlyA(); frame();
+  down();
+  let regrabbedLater = false;
+  for (let i = 0; i < 6; i++) { onlyA(); frame(); if (player.state === "swing") regrabbedLater = true; }
+  check("inside the cooldown the anchor just left is refused even when it is the only one in reach", !regrabbedLater && player.lastAnchor === a, `state ${player.state}`);
+  up(); onlyA(); frame();
+  // Once the cooldown has run out `a` is fair game again (nothing reset by hand).
+  for (let i = 0; i < Math.ceil(CFG.tether.regrabCooldown * 120) + 12; i++) { onlyA(); frame(); }
+  check("the old anchor is grabbable again once the cooldown has run out", player.lastAnchor === null && pressAndGrab() && player.anchor === a);
+  up();
+  // A fresh release: once the delay has passed a different anchor is grabbed
+  // while the one just left is still off limits.
+  launched = releaseFromA();
+  for (let i = 0; i < delayFrames; i++) { nearB(); frame(); }
   down();
   let grabbedOther = false;
-  for (let i = 0; i < 6; i++) { both(); frame(); if (player.state === "swing") { grabbedOther = player.anchor === b; break; } }
-  check("once the delay has passed a different anchor is grabbed, not the one just left", grabbedOther, `anchor is ${player.anchor === b ? "the new one" : player.anchor === a ? "the old one" : "none"}`);
-  up();
-  // After the cooldown the old anchor is fair game again.
-  placeGlide(a.x - 200, a.y + 150, 400, 0);
-  for (let i = 0; i < Math.ceil(CFG.tether.regrabCooldown * 120) + 12; i++) { quiet(); frame(); player.x = a.x - 200; player.y = a.y + 150; }
-  check("the old anchor is grabbable again once the cooldown has run out", pressAndGrab() && player.anchor === a);
+  for (let i = 0; i < 6; i++) { nearB(); frame(); if (player.state === "swing") { grabbedOther = player.anchor === b; break; } }
+  check("once the delay has passed a different anchor is grabbed, not the one just left", launched && grabbedOther, `anchor is ${player.anchor === b ? "the new one" : player.anchor === a ? "the old one" : "none"}`);
   up();
   restoreKnobs();
 }

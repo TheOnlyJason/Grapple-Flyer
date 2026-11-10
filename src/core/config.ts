@@ -15,18 +15,6 @@ export const CONFIG = {
     // gravityAir, so swings build speed that a glide alone never would.
     gravitySwing: 1750,
     metersPerPixel: 0.05, // distance scoring scale
-    // The flight band the world is built around follows the player: aimed
-    // this far above them (a grab needs the anchor above the player and
-    // inside the view — about 40–290 px up on a phone), closing the gap by
-    // bandFollow per segment, with anchors scattered ±bandScatter around it.
-    bandAbove: 150,
-    bandFollow: 0.2,
-    bandScatter: 160,
-    bandAverage: 3, // seconds over which the player's altitude is averaged
-    // An anchor's height is settled as it is about to scroll into view: this
-    // far above where the player will be when they reach it (a grab needs
-    // the anchor above the player and on screen — up to ~290 px on a phone).
-    anchorAbove: [70, 290],
   },
 
   player: {
@@ -87,6 +75,11 @@ export const CONFIG = {
     // the swing cannot lift the player above the anchor, so a rope to one
     // at or below their height would slip on the very next step.
     grabMinAbove: 10,
+    // A grab whose swing would reach the cap within this many seconds is
+    // refused too: hooking an anchor only to slip off it a frame later is
+    // the yank this rule exists to prevent (a rising glide at a near-level
+    // anchor, or an anchor just passed).
+    grabHeadroom: 0.15,
     // After a release or slip the anchor just left stays ungrabbable for
     // this long, so a re-press during the launch cannot haul the player back
     // onto it (the clip that prompted this turned a PERFECT into a vertical

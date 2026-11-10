@@ -113,6 +113,10 @@ globalThis.localStorage = {
 };
 globalThis.setTimeout = globalThis.setTimeout || ((fn) => fn());
 
+// The game seeds each run from the clock; pin it so the smoke is the same
+// run every time (a flaky smoke is worse than none).
+let fakeNow = 1762_000_000_000;
+Date.now = () => (fakeNow += 1);
 await import(path.join(assetsDir, bundle));
 
 const game = globalThis.window.GALE;
@@ -178,8 +182,13 @@ for (let c = 0; c < 6; c++) {
   tick(35);
 }
 {
-  for (let i = 0; i < 240 && inReach(); i++) tick(1); // wait for open sky
-  if (!inReach() && game.state === "playing") {
+  // An anchor that scrolls into reach inside the 0.15 s grab grace turns the
+  // press into a grab by design, so try a few patches of open sky until one
+  // hold stays in open sky for the whole window; that one must have flipped.
+  let judged = false;
+  for (let attempt = 0; attempt < 4 && !judged && game.state === "playing"; attempt++) {
+    for (let i = 0; i < 240 && inReach(); i++) tick(1); // wait for open sky
+    if (inReach() || game.state !== "playing") break;
     const spin0 = game.player.flipSpin;
     dispatch("pointerdown", { clientX: 400, clientY: 300, pointerId: 1 });
     let grabbed = false;
@@ -187,16 +196,14 @@ for (let c = 0; c < 6; c++) {
       tick(1);
       if (game.player.state === "swing") grabbed = true;
     }
-    // An anchor that scrolls into reach inside the 0.15 s grab grace turns
-    // the press into a grab by design, and a crash ends the run and freezes
-    // the player; neither is a control failure. Only a hold that stayed in
-    // open sky for the whole window must have flipped.
     if (game.state === "playing" && !grabbed) {
       assert(game.player.flipSpin !== spin0, "a hold in open sky did not start a backflip");
+      judged = true;
     }
     dispatch("pointerup", { clientX: 400, clientY: 300, pointerId: 1 });
     tick(30);
   }
+  assert(judged, "never got a hold that stayed in open sky, so the backflip went untested");
 }
 // 5) Trigger a dash via keyboard.
 dispatch("keydown", { code: "KeyD" });

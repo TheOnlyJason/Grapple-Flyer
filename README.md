@@ -33,7 +33,7 @@ play entirely from the keyboard.
 | **Slingshot launch** | release | release the hold key |
 | **Wind Dash** (gauge full) | tap the **DASH** button | `Shift` / `D` |
 | Mute / unmute | — | `M` |
-| Start / restart | tap | any key |
+| Start / restart | tap | `Space` / `↑` / `W` |
 
 Only anchors **above** you can be grabbed (a rope to one at your own height
 would have nothing to swing on). Right after you let go there is a short
@@ -111,9 +111,6 @@ ones:
   backflip turns, what it costs, what it pays.
 - `player.cruiseSpeed` / `forwardDrag` — glide pace and how long launches persist.
 - `world.seaLevel` — how much altitude headroom you have before the run ends.
-- `world.anchorAbove` — how far above the player's predicted position an
-  anchor settles as it comes into view (see below); `world.band*` — how the
-  flight band that clouds, rocks and orbs are built around follows the player.
 
 Colours live in the `PALETTE` object in the same file.
 
@@ -157,30 +154,8 @@ rocket that stalls — it is redirected forward-up at `tether.slipLaunchAngleDeg
 
 Physics runs on a fixed `1/120s` timestep (`config.fixedDt`) for stability,
 independent of render frame rate. `window.GALE_CONFIG` exposes the live tuning
-table so the headless probes can sweep knobs (`GALE_KNOBS='{"tether.swingDrag":0}'`)
-without a rebuild.
-
----
-
-## How the world is built
-
-Segments are generated 1.5–2k px ahead of the camera. Everything in a segment
-is placed around a **flight band** that drifts toward the player's altitude
-averaged over a few seconds (`world.bandAbove`, `bandFollow`, `bandScatter`,
-`bandAverage`) and follows the player up without limit — a run that keeps its
-energy climbs, and a ceiling on the anchors would strand the player above
-everything. Anchors get their x then, but their **height only as they are
-about to scroll into view** (`World.settleAnchors`): `world.anchorAbove` px
-above where the player will be when they reach it. That altitude comes from
-the player's own glide step run forward to the anchor's x
-(`Player.predictGlideY`, sharing `glideStep` with the glide itself): a
-launch climbs for a second or two and then sinks, and a plain sink rate put
-anchors under the climb's apex and over the sink. While the player swings or
-dashes the launch to come is unknowable, so settling waits until the anchor
-is nearly on screen. An anchor never settles inside a rock; orbs and pickups
-hung on it move with it (and an orb that lands in a rock is dropped). The
-play-bot (`scripts/smash-probe.mjs bot`) reports the anchor supply: the
-share of the glide with something grabbable and the longest stretch without.
+table, which the headless probes poke directly (`scripts/smash-probe.mjs` also
+reads `GALE_KNOBS='{"tether.swingDrag":0}'`) without a rebuild.
 
 ---
 
@@ -216,4 +191,4 @@ Pirate threat system (corrupted anchors), weather, daily seed runs (the RNG is
 already seedable), ghost replays, and cosmetic unlocks.
 
 Built with **Vite + TypeScript** and an HTML5 Canvas 2D renderer. No game-engine
-dependency; the bundle is ~13 kB gzipped.
+dependency; the bundle is ~41 kB gzipped.

@@ -33,39 +33,6 @@ interface TrailPoint {
 
 // The player: a paper airplane that converts falling momentum into swing energy, then
 // slingshots it back out. This class owns all of its own physics.
-/** The position and velocity a glide step advances. */
-export interface GlideState {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-}
-
-/**
- * One fixed step of the unpowered glide: gravity less speed-dependent lift,
- * vertical drag, forward speed relaxing toward cruise, the speed cap. Shared
- * by the player's glide and by the world's look-ahead that settles anchors,
- * so the two can never disagree.
- */
-export function glideStep(s: GlideState, dt: number) {
-  const p = CONFIG.player;
-  const g = CONFIG.world.gravityAir;
-  // Lift scales with forward speed but never exceeds gravity, so a fast glide
-  // flattens out (you soar) without ever climbing on its own.
-  const lift = Math.min(Math.max(0, s.vx - p.glideLiftBaseSpeed) * p.glideLift, g);
-  s.vy += (g - lift) * dt;
-  s.vy -= s.vy * p.vertDrag * dt;
-  s.vx += (p.cruiseSpeed - s.vx) * p.forwardDrag * dt;
-  const sp = Math.hypot(s.vx, s.vy);
-  if (sp > p.maxSpeed) {
-    const k = p.maxSpeed / sp;
-    s.vx *= k;
-    s.vy *= k;
-  }
-  s.x += s.vx * dt;
-  s.y += s.vy * dt;
-}
-
 export class Player {
   x = 0;
   y = 0;
@@ -180,6 +147,11 @@ export class Player {
   // When `view` (the camera's visible world rect) is given, only anchors the
   // player can actually SEE are eligible — latching onto something off-screen
   // always reads as a bug, never as skill.
+  /** False for the moment after a release, slip or bounce in which no press grabs. */
+  get grabReady(): boolean {
+    return this.grabLockout <= 0;
+  }
+
   findGrabTarget(
     anchors: Anchor[],
     view?: { left: number; top: number; right: number; bottom: number }
@@ -189,6 +161,8 @@ export class Player {
     const range = CONFIG.tether.grabRange;
     const VIS = 12; // anchor centre must be this far inside the screen edge
     const minAbove = CONFIG.tether.grabMinAbove;
+    const headroom = CONFIG.tether.grabHeadroom;
+    const cap = rad(CONFIG.tether.maxSwingAngleDeg);
     for (const a of anchors) {
       if (a === this.lastAnchor) continue; // just let go of it; see lastAnchorCooldown
       const dx = a.x - this.x;
@@ -197,8 +171,19 @@ export class Player {
       if (d > range || d < 6) continue;
       // The swing cannot carry the player above the anchor, so an anchor at
       // or below the player's own height has nothing to offer: grabbing it
-      // would slip on the very next step.
+      // would slip on the very next step. Nor may the swing be about to hit
+      // the cap: from the pendulum state a grab would start in (angle from
+      // straight below, and its rate from the player's velocity), the cap
+      // must be more than grabHeadroom seconds away.
       if (dy > -minAbove) continue;
+      const phi = Math.atan2(-dx, -dy);
+      const phiDot = (this.vx * -dy - this.vy * -dx) / (d * d);
+      if (
+        Math.sign(phiDot) === Math.sign(phi) &&
+        Math.abs(phi) + Math.abs(phiDot) * headroom >= cap
+      ) {
+        continue;
+      }
       if (
         view &&
         (a.x < view.left + VIS ||
@@ -313,6 +298,11 @@ export class Player {
       this.flipping = false;
       this.flipsInHold = 0;
     }
+    // The press's grace runs out at the same rate whatever the player is
+    // doing: a press made inside the release lockout, or just before a dash,
+    // expires unanswered instead of being kept on ice and hooking the first
+    // anchor the moment the lockout or the dash ends.
+    if (this.wantsGrab > 0) this.wantsGrab = Math.max(0, this.wantsGrab - dt);
 
     switch (this.state) {
       case "glide": {
@@ -326,7 +316,6 @@ export class Player {
             this.stepSwing(dt, holding, time);
             break;
           }
-          this.wantsGrab = Math.max(0, this.wantsGrab - dt);
         }
         if (this.flipping) this.stepFlip(dt);
         this.stepGlide(dt);
@@ -384,21 +373,20 @@ export class Player {
   }
 
   private stepGlide(dt: number) {
-    glideStep(this, dt);
-  }
-
-  /**
-   * Where a glide from the current state is when it reaches world-x
-   * `targetX`: the glide's own step, run ahead up to `maxT` seconds. The
-   * world settles anchors from this. While swinging or dashing the launch to
-   * come is anyone's guess, so the answer is the current altitude.
-   */
-  predictGlideY(targetX: number, maxT = 4): number {
-    if (this.state !== "glide") return this.y;
-    const s = { x: this.x, y: this.y, vx: this.vx, vy: this.vy };
-    const dt = 1 / 60;
-    for (let t = 0; t < maxT && s.x < targetX; t += dt) glideStep(s, dt);
-    return s.y;
+    const p = CONFIG.player;
+    const g = CONFIG.world.gravityAir;
+    // Lift scales with forward speed but never exceeds gravity, so a fast glide
+    // flattens out (you soar) without ever climbing on its own.
+    const lift = Math.min(
+      Math.max(0, this.vx - p.glideLiftBaseSpeed) * p.glideLift,
+      g
+    );
+    this.vy += (g - lift) * dt;
+    this.vy -= this.vy * p.vertDrag * dt;
+    this.vx += (p.cruiseSpeed - this.vx) * p.forwardDrag * dt;
+    this.clampSpeed();
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
   }
 
   // Pendulum step in polar form (velocity Verlet). The rope is exact by
@@ -446,6 +434,10 @@ export class Player {
     this.swingModel = model;
     if (model === "pendulum" && this.state === "swing" && this.anchor) {
       this.syncSwingToVelocity(this.anchor, time);
+      // The classic rod may have carried the player past the pendulum's cap.
+      // Snapping them back to it and flinging them would be a teleport; the
+      // hook simply lets go where they are, with the velocity they have.
+      if (Math.abs(this.swingPhi) >= rad(CONFIG.tether.maxSwingAngleDeg)) this.slip(this.anchor);
     }
   }
 
