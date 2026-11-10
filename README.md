@@ -32,7 +32,18 @@ fly from the keyboard (starting a run and the pause-screen buttons take a click)
 | **Slingshot launch** | release | release the hold key |
 | **Wind Dash** (gauge full) | tap the **DASH** button | `Shift` / `D` |
 | Mute / unmute | tap the **speaker** button (by the pause button; bottom right on the menu) | `M` |
-| Start / restart | tap (or click) | — |
+| Start / restart | tap anywhere on the menu (TAP TO FLY) | — |
+| Change character | the **‹ ›** either side of its name | `C` / `←` `→` |
+
+### The home screen
+
+In the manner of Alto's Adventure: the live sky is the picture, with the
+plane gliding through it, and the type sits quietly on top — a light,
+wide-tracked GALE, small spaced capitals, no play button (a tap anywhere
+flies), the character's name between thin chevrons, best run and orbs in
+the top corners, HOW TO PLAY and the sound in the bottom ones. The game-over
+screen is the same page with the run's points, distance, perfects, goals and
+orbs in the middle (`Hud.drawAttractScreen`).
 
 ### The loop
 
