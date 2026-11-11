@@ -59,6 +59,10 @@ export class Player {
   // its first step, so turning the option on and off again within one pause
   // leaves the rope exactly as it was.
   private pendingSync = false;
+  // Net angle the pendulum has turned since the grab, and the laps already
+  // charged for (tether.lapSpeedKeep).
+  private lapAngle = 0;
+  private lapsDone = 0;
 
   inPerfectWindow = false;
   perfectQuality = 0;
@@ -120,6 +124,11 @@ export class Player {
 
   get speed(): number {
     return Math.hypot(this.vx, this.vy);
+  }
+
+  /** The speed at which meteors shatter: higher with Conserve momentum on. */
+  get smashThreshold(): number {
+    return this.conserveMomentum ? CONFIG.player.conserveSmashSpeed : CONFIG.player.smashSpeed;
   }
 
   /** The tether refuses to attach right now (just after a barrier or sea bounce). */
@@ -353,6 +362,8 @@ export class Player {
     const L = Math.max(Math.hypot(rx, ry), 1e-3);
     this.ropeLen = L;
     this.swingPhi = Math.atan2(rx, ry);
+    this.lapAngle = 0;
+    this.lapsDone = 0;
     const tx = ry / L;
     const ty = -rx / L; // tangent of increasing phi
     const ux = this.vx;
@@ -414,6 +425,13 @@ export class Player {
       L = Ln;
     }
     phi += omega * dt;
+    // A full lap around the anchor (net, either way round) costs speed.
+    this.lapAngle += omega * dt;
+    const laps = Math.floor(Math.abs(this.lapAngle) / TAU);
+    if (laps > this.lapsDone) {
+      this.lapsDone = laps;
+      omega *= T.lapSpeedKeep;
+    }
     if (phi > Math.PI) phi -= TAU;
     else if (phi <= -Math.PI) phi += TAU;
     omega += 0.5 * dt * acc(phi, time);
@@ -556,14 +574,15 @@ export class Player {
   /** Barrier save: thrown back up off the cloud sea instead of crashing. */
   bounce(groundY: number, speed: number) {
     const p = CONFIG.player;
-    const wasFast = this.speed >= p.smashSpeed;
+    const smash = this.smashThreshold;
+    const wasFast = this.speed >= smash;
     this.y = groundY - 2;
     this.vy = -speed;
     this.vx = Math.max(this.vx, p.cruiseSpeed * 1.25);
     if (!wasFast) {
       // The save is not a speed smash: a fast shallow entry plus the launch
       // would otherwise cross smash speed and charge it. Stay just under.
-      const cap = Math.sqrt(Math.max(0, (p.smashSpeed - 1) ** 2 - speed * speed));
+      const cap = Math.sqrt(Math.max(0, (smash - 1) ** 2 - speed * speed));
       this.vx = Math.min(this.vx, Math.max(cap, p.cruiseSpeed * 1.25));
     }
     // Fly free: a dash would flatten the launch, and a rope would haul the

@@ -1,5 +1,4 @@
 import { Camera } from "../core/camera";
-import { CONFIG } from "../core/config";
 import { theme } from "./theme";
 import { clamp } from "../core/math";
 import { hexA } from "../entities/anchor";
@@ -62,6 +61,8 @@ export interface HudData {
   wind: number; // 0..1
   dashReady: boolean;
   speed: number;
+  smashSpeed: number; // the threshold in force (higher with Conserve momentum)
+  speedBarMax: number;
   smashReady: boolean; // smash is charged: a meteor hit shatters it
   smashCharge: number; // 0..1 of the smash window left
   orbs: number; // orbs picked up this run
@@ -402,7 +403,7 @@ export class Hud {
     this.drawDashButton(ctx, cam, d);
 
     // --- Speed pips (bottom-left) ---
-    const spd = clamp(d.speed / 1200, 0, 1);
+    const spd = clamp(d.speed / d.speedBarMax, 0, 1);
     const barW = 120;
     const spX = 26 + ins.left;
     const spY = cam.h - 36 - ins.bottom;
@@ -417,7 +418,7 @@ export class Hud {
     // drawDashButton leaves textAlign centred; the speed label is left-aligned.
     ctx.textAlign = "left";
     // Threshold tick: reach this mark to charge the smash.
-    const tickX = spX + barW * clamp(CONFIG.player.smashSpeed / 1200, 0, 1);
+    const tickX = spX + barW * clamp(d.smashSpeed / d.speedBarMax, 0, 1);
     ctx.fillStyle = hexA(PALETTE.text, 0.55);
     ctx.fillRect(tickX - 1, spY - 3, 2, 14);
     // The smash window, draining under the speed bar once it is charged.

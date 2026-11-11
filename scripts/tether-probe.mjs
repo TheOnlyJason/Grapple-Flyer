@@ -5,8 +5,9 @@
 // energy, a free swing does not drift, reeling in speeds the player up by
 // exactly the rope ratio (angular momentum), a moving anchor hands its
 // velocity over, a whole glide → grab → swing → release → glide → grab chain
-// conserves energy once every deliberate energy knob is zeroed, and a fast
-// swing still loops over the top (no cap). For both: the option is off by
+// conserves energy once every deliberate energy knob is zeroed, a fast swing
+// still loops over the top (no cap), and each full lap around the same anchor
+// costs tether.lapSpeedKeep of the speed (so circling cannot hold top speed). For both: the option is off by
 // default, off is the old projecting rope, holding grabs (as in 1.2) and a
 // hold in open sky does nothing else, the switch is seamless mid-swing and
 // the pause screen flips and saves it. Knobs are set through
@@ -262,7 +263,7 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
 
 // --- 2. A free swing does not drift -------------------------------------------------
 {
-  setKnobs({ "tether.swingDrag": 0, "tether.conserveReelRate": 0 });
+  setKnobs({ "tether.lapSpeedKeep": 1, "tether.swingDrag": 0, "tether.conserveReelRate": 0 });
   const g = CFG.world.gravitySwing;
   for (const [L, v, label] of [[70, 1900, "L70 v1900"], [150, 1100, "L150 v1100 (loops)"], [300, 600, "L300 v600"], [420, 300, "L420 v300"]]) {
     const a = stageAnchor(12000, -600);
@@ -284,7 +285,7 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
 
 // --- 3. Reeling in pumps by the rope ratio (angular momentum) -----------------------
 {
-  setKnobs({ "tether.swingDrag": 0, "tether.conserveReelRate": 90, "world.gravitySwing": 0 });
+  setKnobs({ "tether.lapSpeedKeep": 1, "tether.swingDrag": 0, "tether.conserveReelRate": 90, "world.gravitySwing": 0 });
   const a = stageAnchor(15000, -600);
   placeSwing(a, 300, 0.3, 600 / 300);
   quiet();
@@ -321,7 +322,7 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
 
 // --- 5. End to end: with every deliberate energy knob zeroed, Newton holds ------------
 {
-  setKnobs({ "world.gravitySwing": 300, "world.gravityAir": 300, "player.forwardDrag": 0, "player.vertDrag": 0, "player.glideLift": 0, "tether.swingDrag": 0, "tether.conserveReelRate": 0, "tether.releaseBoost": 1, "tether.perfectBoost": 1, "tether.perfectBonusSpeed": 0 });
+  setKnobs({ "tether.lapSpeedKeep": 1, "world.gravitySwing": 300, "world.gravityAir": 300, "player.forwardDrag": 0, "player.vertDrag": 0, "player.glideLift": 0, "tether.swingDrag": 0, "tether.conserveReelRate": 0, "tether.releaseBoost": 1, "tether.perfectBoost": 1, "tether.perfectBonusSpeed": 0 });
   const g = 300;
   const x0 = 21000, y0 = -300;
   const a1 = stageAnchor(x0 + 320, y0 - 160);
@@ -385,6 +386,45 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
   check("a fast swing loops over the top of the anchor (no cap, no slip)", over && player.state === "swing" && finite(), `highest ${highest.toFixed(0)} px above the anchor, state ${player.state}`);
   up();
   restoreKnobs();
+}
+
+// --- 7b. Laps cost speed; an ordinary swing never completes one -------------------------------
+{
+  // Uniform circular motion (no gravity, drag or reel): the speed only
+  // changes at a completed lap.
+  setKnobs({ "tether.swingDrag": 0, "tether.conserveReelRate": 0, "world.gravitySwing": 0 });
+  const keep = CFG.tether.lapSpeedKeep;
+  const a = stageAnchor(29000, -600);
+  const v0 = 900, L = 150;
+  placeSwing(a, L, 0, v0 / L);
+  const lapFrames = Math.ceil(((2 * Math.PI) / (v0 / L)) * 120);
+  for (let i = 0; i < Math.round(lapFrames * 0.5); i++) { quiet(); frame(); }
+  const half = player.ropeLen * Math.abs(player.swingOmega);
+  for (let i = 0; i < lapFrames; i++) { quiet(); frame(); }
+  const oneHalf = player.ropeLen * Math.abs(player.swingOmega);
+  check(`half a lap costs nothing; a full lap keeps ${Math.round(keep * 100)}% of the speed`, Math.abs(half - v0) < 1e-6 * v0 && Math.abs(oneHalf - v0 * keep) < 1e-6 * v0, `${v0} → ${half.toFixed(1)} → ${oneHalf.toFixed(1)}`);
+  for (let i = 0; i < Math.round(lapFrames / keep); i++) { quiet(); frame(); }
+  const twoHalf = player.ropeLen * Math.abs(player.swingOmega);
+  check("the second lap costs the same again", Math.abs(twoHalf - v0 * keep * keep) < 1e-6 * v0, `→ ${twoHalf.toFixed(1)} (expected ${(v0 * keep * keep).toFixed(1)})`);
+  up();
+  restoreKnobs();
+  // A real grab and one ordinary swing, let go at the first gold: under a
+  // lap, so the lap cost changes nothing.
+  const swing = (k) => {
+    setKnobs({ "tether.lapSpeedKeep": k });
+    const b = stageAnchor(29500, -500);
+    placeGlide(b.x - 220, b.y + 160, 450, 120);
+    pressAndGrab(6);
+    let v = null;
+    for (let i = 0; i < 360 && player.state === "swing"; i++) {
+      if (player.inPerfectWindow) { up(); quiet(); frame(); v = player.speed; break; }
+      quiet(); frame();
+    }
+    up(); restoreKnobs();
+    return v;
+  };
+  const withLaps = swing(CFG.tether.lapSpeedKeep), without = swing(1);
+  check("an ordinary swing launches exactly as fast with the lap cost on", withLaps !== null && withLaps === without, `${withLaps?.toFixed(1)} vs ${without?.toFixed(1)}`);
 }
 
 // --- 8. Off (the default) is the classic rope ------------------------------------------------

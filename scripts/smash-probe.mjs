@@ -159,7 +159,7 @@ if (process.env.GALE_KNOBS) {
   }
   console.log("knobs:", process.env.GALE_KNOBS);
 }
-const SMASH = CFG.player.smashSpeed;
+const SMASH = process.env.GALE_CONSERVE === "1" ? CFG.player.conserveSmashSpeed : CFG.player.smashSpeed;
 const armedNow = () => ("smashArmed" in game ? game.smashArmed : player.speed >= SMASH);
 function restart() {
   while (game.state === "crashing") frame(); // a sea skid at smash speeds lasts 3.5–4 s

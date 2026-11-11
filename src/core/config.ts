@@ -24,6 +24,9 @@ export const CONFIG = {
     // Reach this speed and meteors shatter on contact instead of ending the
     // run — a clean perfect release gets you there.
     smashSpeed: 1050,
+    // ...and with the pause screen's Conserve momentum on, where every launch
+    // keeps more of its speed (1.2's 1050 would be reached most of the time).
+    conserveSmashSpeed: 1200,
     // Reaching smash speed charges the smash for this long. Drag bleeds a
     // launch below smashSpeed within 0.1–0.5 s, far too briefly to reach the
     // meteor you were aiming at, so the charge outlives the speed itself.
@@ -57,6 +60,11 @@ export const CONFIG = {
     // Quadratic air drag on that swing's speed (px⁻¹), its only deliberate
     // loss: a = -swingDrag·v·|v|, 6%/s at 1000 px/s. 0 = pure conservation.
     swingDrag: 6e-5,
+    // Each full lap around the same anchor keeps only this much of the speed
+    // (Conserve momentum only). An ordinary swing turns well under a lap and
+    // never feels it; circling an anchor to hold top speed winds down instead
+    // of going on for ever. 1 = no lap cost (the physics probes set it).
+    lapSpeedKeep: 0.85,
     releaseBoost: 1.07, // velocity multiplier on a normal release
     perfectBoost: 1.45, // velocity multiplier on a perfect release
     perfectBonusSpeed: 130, // additive speed on perfect

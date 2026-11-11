@@ -137,8 +137,9 @@ Open `src/core/config.ts` — every number is a labelled knob. A few high-levera
 ones:
 
 - `world.gravitySwing` / `tether.reelRate` — how energetic and climby swings feel.
-- `tether.conserveReelRate` / `tether.swingDrag` — the same for the
-  **Conserve momentum** swing (see below).
+- `tether.conserveReelRate` / `tether.swingDrag` / `tether.lapSpeedKeep` /
+  `player.conserveSmashSpeed` — the same for the **Conserve momentum** swing
+  (see below).
 - `tether.idealLaunchAngleDeg` / `perfectToleranceDeg` — where and how forgiving
   the **perfect** window is.
 - `tether.perfectBoost` / `releaseBoost` — how rewarding good timing is.
@@ -179,6 +180,13 @@ Nothing else in the game changes.
 - **Air drag** (`tether.swingDrag`, quadratic) is the only deliberate loss
   while swinging. A moving anchor is a moving pivot and hands its velocity
   over. Like the rope, there is no cap: a fast swing loops over the top.
+- **Laps cost speed.** Each full lap around the same anchor keeps
+  `tether.lapSpeedKeep` (85%) of the speed. An ordinary swing turns well
+  under a lap and never feels it; circling an anchor to hold top speed winds
+  down instead (from a fast entry: about 1880 px/s held for ever before,
+  about 960 after 12 s now).
+- **Meteors need more speed:** `player.conserveSmashSpeed` (1200, against
+  1.2's 1050), and the speed bar runs to 1500 so its tick stays on it.
 
 Switching mid-swing carries the motion over seamlessly.
 `scripts/tether-probe.mjs` checks both swings: the option's grab keeps

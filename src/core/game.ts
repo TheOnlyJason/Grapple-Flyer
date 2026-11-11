@@ -786,7 +786,7 @@ export class Game {
 
     // Reaching smash speed charges the smash for a short while, so the meteor
     // the player was aiming at still breaks after drag bleeds the launch off.
-    if (this.player.speed >= CONFIG.player.smashSpeed) {
+    if (this.player.speed >= this.player.smashThreshold) {
       this.smashCharge = CONFIG.player.smashHold;
     } else if (this.smashCharge > 0) {
       this.smashCharge = Math.max(0, this.smashCharge - dt);
@@ -909,7 +909,7 @@ export class Game {
           this.tutorial.onRelease(perfect);
           // The launch speed itself counts: by the time the step's own speed
           // check runs, one step of glide drag has already come off it.
-          if (e.info.speed >= CONFIG.player.smashSpeed) {
+          if (e.info.speed >= this.player.smashThreshold) {
             this.smashCharge = CONFIG.player.smashHold;
           }
           if (perfect) {
@@ -1265,6 +1265,10 @@ export class Game {
       wind: this.wind / CONFIG.wind.max,
       dashReady: this.wind >= CONFIG.wind.dashCost,
       speed: this.player.speed,
+      smashSpeed: this.player.smashThreshold,
+      // The 1.2 bar runs to 1200; with Conserve momentum's higher threshold it
+      // runs to 1500 so the smash tick stays on it.
+      speedBarMax: this.player.conserveMomentum ? 1500 : 1200,
       smashReady: this.smashCharge > 0,
       smashCharge: this.smashCharge / CONFIG.player.smashHold,
       orbs: this.runOrbs,
