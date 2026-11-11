@@ -192,6 +192,7 @@ function placeSwing(a, L, phi, omega) {
   up();
   player.anchor = a; player.state = "swing";
   player.ropeLen = L; player.swingPhi = phi; player.swingOmega = omega; player.swingTime = 0;
+  player.lapAnchor = a; player.lapAngle = 0; player.lapsDone = 0; player.lapLastPhi = phi; player.regrabAnchor = null;
   player.x = a.x + L * Math.sin(phi); player.y = a.yAt(game.time) + L * Math.cos(phi);
   player.vx = L * omega * Math.cos(phi); player.vy = a.vyAt(game.time) - L * omega * Math.sin(phi);
   game.camera.snapTo(player.x, player.y);
@@ -425,6 +426,23 @@ const finite = () => [player.x, player.y, player.vx, player.vy, player.swingPhi,
   };
   const withLaps = swing(CFG.tether.lapSpeedKeep), without = swing(1);
   check("an ordinary swing launches exactly as fast with the lap cost on", withLaps !== null && withLaps === without, `${withLaps?.toFixed(1)} vs ${without?.toFixed(1)}`);
+
+  // Letting go and grabbing the same anchor again (a tap) is the same swing:
+  // no release boost kept, and the laps carry on. Uniform circle again.
+  setKnobs({ "tether.swingDrag": 0, "tether.conserveReelRate": 0, "world.gravitySwing": 0, "world.gravityAir": 0, "player.vertDrag": 0, "player.forwardDrag": 0, "player.glideLift": 0 });
+  const c = stageAnchor(30000, -600);
+  placeSwing(c, L, 0, v0 / L);
+  const tapFrames = Math.round(lapFrames / 4);
+  let taps = 0, regrabs = 0;
+  for (let k = 0; k < 10; k++) { // two and a half laps of quarter-lap taps
+    for (let i = 0; i < tapFrames; i++) { quiet(); frame(); }
+    up(); quiet(); frame(); taps++;
+    if (pressAndGrab(4) && player.anchor === c) regrabs++;
+  }
+  const tapped = player.ropeLen * Math.abs(player.swingOmega);
+  check("tapping around one anchor gains nothing and still pays for the laps", regrabs === taps && tapped <= v0 * keep * keep * 1.001 && tapped >= v0 * keep * keep * 0.97, `${taps} taps, ${regrabs} re-grabs: ${v0} → ${tapped.toFixed(1)} (two laps at 85%: ${(v0 * keep * keep).toFixed(1)})`);
+  up();
+  restoreKnobs();
 }
 
 // --- 8. Off (the default) is the classic rope ------------------------------------------------

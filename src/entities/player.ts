@@ -59,10 +59,19 @@ export class Player {
   // its first step, so turning the option on and off again within one pause
   // leaves the rope exactly as it was.
   private pendingSync = false;
-  // Net angle the pendulum has turned since the grab, and the laps already
-  // charged for (tether.lapSpeedKeep).
+  // Net angle the pendulum has turned around lapAnchor, and the laps already
+  // charged for (tether.lapSpeedKeep). The count belongs to the anchor, not
+  // the grab: letting go and grabbing the same anchor again carries it on.
   private lapAngle = 0;
   private lapsDone = 0;
+  private lapAnchor: Anchor | null = null;
+  private lapLastPhi = 0;
+  // A re-grab of the anchor just let go of, within a second, is the same
+  // swing: the release boost it paid out is taken back (Conserve momentum),
+  // so tapping around one anchor cannot pump speed.
+  private regrabAnchor: Anchor | null = null;
+  private regrabBoost = 1;
+  private regrabTime = 0;
 
   inPerfectWindow = false;
   perfectQuality = 0;
@@ -183,7 +192,14 @@ export class Player {
     // Match the rope to the current distance so latch-on doesn't snap position.
     this.ropeLen = Math.max(d, 1e-3);
     this.pendingSync = false;
-    if (this.conserveMomentum) this.syncSwingToVelocity(anchor, t0);
+    if (this.conserveMomentum) {
+      if (anchor === this.regrabAnchor && this.regrabTime > 0 && this.regrabBoost > 1) {
+        this.vx /= this.regrabBoost;
+        this.vy /= this.regrabBoost;
+      }
+      this.regrabAnchor = null;
+      this.syncSwingToVelocity(anchor, t0);
+    }
     this.state = "swing";
     this.swingTime = 0;
     anchor.used = true;
@@ -200,6 +216,7 @@ export class Player {
     if (!this.anchor) return;
     const perfect = this.inPerfectWindow;
     const quality = this.perfectQuality;
+    const before = this.speed;
 
     const boost = perfect ? CONFIG.tether.perfectBoost : CONFIG.tether.releaseBoost;
     this.vx *= boost;
@@ -210,6 +227,11 @@ export class Player {
       this.vy += (this.vy / s) * CONFIG.tether.perfectBonusSpeed;
     }
     this.clampSpeed();
+    if (this.conserveMomentum) {
+      this.regrabAnchor = this.anchor;
+      this.regrabBoost = before > 1e-6 ? this.speed / before : 1;
+      this.regrabTime = 1;
+    }
 
     this.events.push({
       type: "release",
@@ -256,6 +278,7 @@ export class Player {
       this.hazardInvuln = Math.max(0, this.hazardInvuln - dt);
     }
     if (this.grabLockout > 0) this.grabLockout = Math.max(0, this.grabLockout - dt);
+    if (this.regrabTime > 0) this.regrabTime = Math.max(0, this.regrabTime - dt);
 
     switch (this.state) {
       case "glide": {
@@ -362,8 +385,15 @@ export class Player {
     const L = Math.max(Math.hypot(rx, ry), 1e-3);
     this.ropeLen = L;
     this.swingPhi = Math.atan2(rx, ry);
-    this.lapAngle = 0;
-    this.lapsDone = 0;
+    if (anchor === this.lapAnchor) {
+      // Back on the same anchor: the laps carry on from where it was let go.
+      this.lapAngle += angleDelta(this.lapLastPhi, this.swingPhi);
+    } else {
+      this.lapAnchor = anchor;
+      this.lapAngle = 0;
+      this.lapsDone = 0;
+    }
+    this.lapLastPhi = this.swingPhi;
     const tx = ry / L;
     const ty = -rx / L; // tangent of increasing phi
     const ux = this.vx;
@@ -434,6 +464,7 @@ export class Player {
     }
     if (phi > Math.PI) phi -= TAU;
     else if (phi <= -Math.PI) phi += TAU;
+    this.lapLastPhi = phi;
     omega += 0.5 * dt * acc(phi, time);
     if (T.swingDrag > 0) {
       // Exact step of ω' = -c·L·ω|ω| (quadratic air drag on the swing speed).

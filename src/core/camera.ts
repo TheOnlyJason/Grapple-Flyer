@@ -15,6 +15,10 @@ export class Camera {
    * latching onto anchors the player never saw.
    */
   zoom = 1;
+  /** The zoom the viewport asks for (resize); `zoom` is this less the speed pull. */
+  private baseZoom = 1;
+  /** 0..1: how far the camera has pulled back for speed (Conserve momentum only). */
+  pull = 0;
 
   // Safe-area insets (CSS px) so the HUD clears notches / rounded corners /
   // the home indicator on phones. Zero on desktop.
@@ -29,7 +33,28 @@ export class Camera {
     this.h = h;
     // Aim for ~900 world px of visible height (desktop shows a touch more
     // world, phones a lot more), floored so the art stays readable.
-    this.zoom = clamp(h / 900, 0.6, 1);
+    this.baseZoom = clamp(h / 900, 0.6, 1);
+    this.zoom = this.baseZoom * (1 - CONFIG.camera.speedZoomOut * this.pull);
+  }
+
+  /** Where the plane rests across the screen (further left while pulled back). */
+  private get anchorX() {
+    return CONFIG.camera.anchorX - CONFIG.camera.speedAnchorShift * this.pull;
+  }
+
+  /**
+   * Set the speed pull (0..1) and the zoom it implies, keeping the focus
+   * point (the plane) where it is on screen, so the view widens around it
+   * rather than from a corner; follow() then eases it to its new rest.
+   */
+  setPull(pull: number, focusX: number, focusY: number) {
+    if (pull === this.pull) return;
+    const sx = (focusX - this.x) * this.zoom;
+    const sy = (focusY - this.y) * this.zoom;
+    this.pull = pull;
+    this.zoom = this.baseZoom * (1 - CONFIG.camera.speedZoomOut * pull);
+    this.x = focusX - sx / this.zoom;
+    this.y = focusY - sy / this.zoom;
   }
 
   /** Visible world width / height (grows as the camera zooms out). */
@@ -41,13 +66,13 @@ export class Camera {
   }
 
   snapTo(targetX: number, targetY: number) {
-    this.x = targetX - this.viewW * CONFIG.camera.anchorX;
+    this.x = targetX - this.viewW * this.anchorX;
     this.y = targetY - this.viewH * CONFIG.camera.anchorY;
   }
 
   follow(targetX: number, targetY: number, speed: number, dt: number) {
     const lookAhead = speed * CONFIG.camera.lookAheadSpeed;
-    const desiredX = targetX - this.viewW * CONFIG.camera.anchorX + lookAhead;
+    const desiredX = targetX - this.viewW * this.anchorX + lookAhead;
     const desiredY = targetY - this.viewH * CONFIG.camera.anchorY;
 
     this.x = damp(this.x, desiredX, CONFIG.camera.followX, dt);

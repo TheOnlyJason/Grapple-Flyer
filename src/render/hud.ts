@@ -79,6 +79,8 @@ export interface HudData {
   character: CharacterId;
   characterName: string;
   conserveMomentum: boolean; // shown on the pause screen's swing option
+  /** Rocks about to come in from the right edge: screen y and nearness (0..1). */
+  incoming: { y: number; near: number }[];
   /** The first-flight tutorial: the card to show (fading by alpha), and whether it is running. */
   tutorial: {
     active: boolean;
@@ -387,6 +389,45 @@ export class Hud {
     // Orbs collected this run.
     drawOrbIcon(ctx, 33 + ins.left, 113 + ins.top, 6);
     this.text(ctx, `${d.orbs}`, 46 + ins.left, 105 + ins.top, 14, "700", ORB_COLOR);
+
+    // --- Incoming rocks: a warning puck on the right edge, level with each
+    // rock still off screen — a dark disc with a pulsing gold ring and a
+    // chevron pointing at it — growing and brightening as it nears (kept
+    // clear of the pause and mute buttons above and DASH below).
+    if (d.incoming.length) {
+      const dash = this.dashButton(cam);
+      const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 110);
+      for (const m of d.incoming) {
+        const r = 9 + 6 * m.near;
+        const a = 0.55 + 0.45 * m.near;
+        const x = cam.w - ins.right - 8 - r;
+        const top = ins.top + 70 + r;
+        const bottom = dash.y - dash.r - 14 - r;
+        const y = clamp(m.y, top, Math.max(top, bottom));
+        ctx.fillStyle = hexA(PALETTE.anchorPerfect, (0.12 + 0.12 * pulse) * a);
+        ctx.beginPath();
+        ctx.arc(x, y, r * 1.9, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = hexA(PALETTE.hazard, 0.95 * a);
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = hexA(PALETTE.anchorPerfect, (0.6 + 0.4 * pulse) * a);
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(x, y, r + 2, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.strokeStyle = hexA(PALETTE.text, 0.9 * a);
+        ctx.lineWidth = 2;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(x - r * 0.25, y - r * 0.45);
+        ctx.lineTo(x + r * 0.3, y);
+        ctx.lineTo(x - r * 0.25, y + r * 0.45);
+        ctx.stroke();
+        ctx.lineCap = "butt";
+      }
+    }
 
     // --- Objectives (top-right) --- (kept out of the way during the tutorial)
     if (!d.tutorial.active) this.drawObjectives(ctx, cam, d);

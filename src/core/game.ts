@@ -5,7 +5,7 @@ import { Input } from "./input";
 import { Sound } from "./audio";
 import { Storage } from "./storage";
 import { Rng } from "./rng";
-import { clamp } from "./math";
+import { clamp, smoothstep } from "./math";
 import { Player } from "../entities/player";
 import { Hazard } from "../entities/hazard";
 import { Anchor, hexA } from "../entities/anchor";
@@ -98,6 +98,8 @@ export class Game {
   private tutorialGaugeGiven = false;
   private tutorialSeaWarned = false;
   private timeScale = 1;
+  // The pace (smoothed speed) the camera's speed pull follows.
+  private paceSpeed = 0;
 
   // Reused dash-magnet params for world.update — mutated per sub-step instead
   // of allocating a fresh object literal 120x/sec for the duration of a dash.
@@ -273,6 +275,32 @@ export class Game {
     }
     const sy = ys.map((y) => (y - cam.y) * cam.zoom);
     return { top: Math.min(...sy), bottom: Math.max(...sy) };
+  }
+
+  /**
+   * Rocks still off the right edge of the view that the plane will reach
+   * within about 1.6 s at its pace: their screen height and how close they
+   * are (0 far .. 1 near), for the warning markers on that edge. At cruise
+   * the screen already shows more than that, so the markers only appear
+   * when the run is fast enough to need them.
+   */
+  private incomingRocks(): { y: number; near: number }[] {
+    if (this.state !== "playing") return [];
+    const cam = this.camera;
+    const p = this.player;
+    const pace = Math.max(p.vx, 250);
+    const WARN = 1.6;
+    const out: { y: number; near: number }[] = [];
+    for (const h of this.world.hazards) {
+      if (h.destroyed || h.gone) continue;
+      if (h.x - h.rx <= cam.right) continue; // already on screen
+      const t = (h.x - h.rx - p.x) / pace;
+      if (t > WARN) continue;
+      const sy = (h.y - cam.y) * cam.zoom;
+      if (sy < -cam.h * 0.5 || sy > cam.h * 1.5) continue; // far above or below the view
+      out.push({ y: sy, near: clamp((WARN - t) / WARN, 0, 1) });
+    }
+    return out;
   }
 
   /** The tutorial's half of a playing step: its bookkeeping and its staged rock. */
@@ -718,6 +746,28 @@ export class Game {
     if (this.input.dashTapped) this.tryDash();
   }
 
+  /**
+   * With Conserve momentum on, pull the camera back as the run speeds up so
+   * more of what is coming fits on screen (Camera.setPull). It follows the
+   * pace: quick to rise with a fast launch, slow to fall (about 1.5 s), so
+   * the view opens up when speed arrives and does not breathe in and out
+   * with every swing; it eases back when slow, or when the run ends. Off, it
+   * never moves: the view decides which anchors can be grabbed, so it is
+   * part of the 1.2 game.
+   */
+  private updateSpeedPull(dt: number) {
+    const cam = this.camera;
+    const on = this.player.conserveMomentum && this.state === "playing";
+    if (!on && cam.pull === 0) return;
+    const C = CONFIG.camera;
+    const speed = this.player.speed;
+    this.paceSpeed += (speed - this.paceSpeed) * Math.min(1, dt * (speed > this.paceSpeed ? 6 : 0.7));
+    const target = on ? smoothstep(C.speedPullFrom, C.speedPullTo, this.paceSpeed) : 0;
+    let pull = cam.pull + (target - cam.pull) * Math.min(1, dt * (target > cam.pull ? 3 : 0.7));
+    if (target === 0 && pull < 1e-3) pull = 0;
+    cam.setPull(pull, this.player.x, this.player.y);
+  }
+
   private tryDash() {
     if (this.state !== "playing") return;
     if (this.wind < CONFIG.wind.dashCost) return;
@@ -730,6 +780,7 @@ export class Game {
     if (this.state === "paused") return;
 
     this.time += dt;
+    this.updateSpeedPull(dt);
 
     if (this.state === "menu" || this.state === "gameover") {
       const glideTime = this.time - this.attractGlideStartTime;
@@ -1285,6 +1336,7 @@ export class Game {
       character: this.storage.data.character,
       characterName: characterName(this.storage.data.character),
       conserveMomentum: this.storage.data.conserveMomentum,
+      incoming: this.incomingRocks(),
       tutorial: {
         active: this.tutorial.active,
         focus: this.tutorialFocus(),

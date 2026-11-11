@@ -138,8 +138,8 @@ ones:
 
 - `world.gravitySwing` / `tether.reelRate` — how energetic and climby swings feel.
 - `tether.conserveReelRate` / `tether.swingDrag` / `tether.lapSpeedKeep` /
-  `player.conserveSmashSpeed` — the same for the **Conserve momentum** swing
-  (see below).
+  `player.conserveSmashSpeed` / `camera.speedPull*` — the same for the
+  **Conserve momentum** swing (see below).
 - `tether.idealLaunchAngleDeg` / `perfectToleranceDeg` — where and how forgiving
   the **perfect** window is.
 - `tether.perfectBoost` / `releaseBoost` — how rewarding good timing is.
@@ -185,8 +185,24 @@ Nothing else in the game changes.
   under a lap and never feels it; circling an anchor to hold top speed winds
   down instead (from a fast entry: about 1880 px/s held for ever before,
   about 960 after 12 s now).
+- **Re-grabs are the same swing.** Letting go and grabbing the same anchor
+  again within a second carries its lap count on and takes back the release
+  boost just paid out, so tapping around one anchor neither pumps speed nor
+  dodges the lap cost.
 - **Meteors need more speed:** `player.conserveSmashSpeed` (1200, against
   1.2's 1050), and the speed bar runs to 1500 so its tick stays on it.
+- **The camera pulls back at speed** (`camera.speedPull*`, this mode only):
+  as the pace (quick to rise, slow to fall) goes from 900 to 1600 px/s the
+  view zooms out by up to a quarter and the plane slides further left,
+  around the plane so nothing jumps. At speed that is about a quarter more
+  warning of what is coming (iPhone 14: 0.80 s → 1.01 s on average above
+  1000 px/s). Off, the camera never moves: grabs need the anchor on screen,
+  so the view is part of the 1.2 game.
+
+In both swings, a rock still off the right edge that the plane will reach
+within 1.6 s shows a warning puck on that edge, level with it and growing as
+it nears (drawing only). At cruise the screen already shows more than that,
+so the pucks appear only when the run is fast.
 
 Switching mid-swing carries the motion over seamlessly.
 `scripts/tether-probe.mjs` checks both swings: the option's grab keeps

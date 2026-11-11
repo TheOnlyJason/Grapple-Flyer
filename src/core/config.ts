@@ -133,6 +133,15 @@ export const CONFIG = {
     followY: 3.4, // vertical follow smoothing rate
     lookAheadSpeed: 0.16, // extra forward offset scaled by speed
     shakeDecay: 6,
+    // With Conserve momentum on, the camera pulls back at speed so more of
+    // what is coming is on screen: between these paces (px/s, smoothed) it
+    // zooms out by up to speedZoomOut and slides the plane speedAnchorShift
+    // further left. Off (the 1.2 swing) it never moves: grabs need the
+    // anchor on screen, so the view is part of the 1.2 game.
+    speedPullFrom: 900,
+    speedPullTo: 1600,
+    speedZoomOut: 0.25,
+    speedAnchorShift: 0.12,
   },
 
   scoring: {
