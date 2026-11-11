@@ -3,7 +3,8 @@ import { theme, updateTheme } from "../render/theme";
 import { Camera } from "./camera";
 import { Input } from "./input";
 import { Sound } from "./audio";
-import { Storage } from "./storage";
+import { Storage, type Swing } from "./storage";
+import { dailyKey, dailyLabel, dailySeed, dailyToday } from "./daily";
 import { Rng } from "./rng";
 import { clamp, smoothstep } from "./math";
 import { Player } from "../entities/player";
@@ -27,6 +28,7 @@ import {
   cycleCharacterId,
   characterName,
 } from "../characters/registry";
+import { TRAILS, trailDef, trailItem, type TrailId } from "../characters/trails";
 
 type GameState = "menu" | "playing" | "paused" | "crashing" | "gameover";
 
@@ -98,6 +100,23 @@ export class Game {
   private tutorialGaugeGiven = false;
   private tutorialSeaWarned = false;
   private timeScale = 1;
+  // The daily run: the home screen's DAILY RUN switch, and the day of the
+  // run under way (null for an ordinary run).
+  private dailyMode = false;
+  private runDaily: string | null = null;
+  private newDailyBest = false;
+  // The record a run counts toward: Conserve momentum's once the option has
+  // been on at any point of it, so the classic best stays the classic rope's.
+  private runConserve = false;
+  // The game-over screen shows the record of the run just flown (its swing,
+  // its day) until the player changes what the next run would chase.
+  private overRecord = false;
+  // The home screen's TRAILS picker: open, and the trail picked in it (the
+  // one worn, or a locked one being previewed on the gliding character).
+  private trailsOpen = false;
+  private trailPick: TrailId = "own";
+  // A short fade in from the sky when a daily run cuts to its own world.
+  private fade = 0;
   // The pace (smoothed speed) the camera's speed pull follows.
   private paceSpeed = 0;
 
@@ -152,6 +171,7 @@ export class Game {
     this.skimMeters = 0;
     this.wind = 0;
     this.newBest = false;
+    this.newDailyBest = false;
     this.hintTimer = 0;
     this.smashHintShown = false;
     this.clearSmash();
@@ -172,8 +192,17 @@ export class Game {
     this.world.reset(this.rng, this.startX, CONFIG.world.startY);
     this.player.reset(this.startX, CONFIG.world.startY, this.storage.data.character);
     this.player.conserveMomentum = this.storage.data.conserveMomentum;
+    this.player.trailId = this.storage.data.trail;
+    // A fresh world starts with the plain camera: no speed pull-back left
+    // over from the last run (every daily attempt sees the same opening).
+    this.clearSpeedPull();
     this.camera.snapTo(this.player.x, this.player.y);
     this.world.ensure(this.camera.right);
+  }
+
+  private clearSpeedPull() {
+    this.paceSpeed = 0;
+    this.camera.setPull(0, this.player.x, this.player.y);
   }
 
   private enterMenu() {
@@ -195,10 +224,24 @@ export class Game {
   private startRun(tutorial = false) {
     const firstFlight = !this.storage.data.tutorialDone && this.storage.data.runs === 0;
     const withTutorial = tutorial || firstFlight || this.tutorial.active;
+    this.closeTrails();
+    this.overRecord = false;
+    this.runConserve = this.storage.data.conserveMomentum;
+    // With DAILY RUN on, a run (never the tutorial) flies the day's world.
+    this.runDaily = this.dailyMode && !withTutorial ? dailyKey() : null;
+    if (this.runDaily) {
+      this.startDailyRun(this.runDaily);
+      return;
+    }
     if (this.state === "menu" || this.state === "gameover") {
       // Sync to the exact preview pose, then continue in place — no world reset.
       const glideTime = this.time - this.attractGlideStartTime;
       this.player.animateMenuGlide(0, glideTime, this.attractGlideX);
+      // A run on the classic rope has the 1.2 camera from its first frame,
+      // even straight after a fast Conserve run whose pull-back has not
+      // eased out yet (grabs are gated by the view). With the option never
+      // on the pull is already 0 and this does nothing.
+      if (!this.storage.data.conserveMomentum) this.clearSpeedPull();
       this.startX = this.player.x;
       // The difficulty ramp restarts with the run. The world does not: what
       // is on screen stays and the sky keeps its time of day; only the part
@@ -221,6 +264,27 @@ export class Game {
 
     this.seedAndReset();
     this.beginTutorial(withTutorial);
+    this.state = "playing";
+    this.timeInState = 0;
+    this.sound.resume();
+  }
+
+  /**
+   * The daily run starts from the very start of the day's world (the attract
+   * glide's sky is a random one), so every player meets the same anchors,
+   * rocks and orbs in the same order. Only world generation draws from the
+   * day's seed once the run is under way, so what a player does cannot shift
+   * what comes later, and the screen size only changes how far ahead it is
+   * built, never what is built.
+   */
+  private startDailyRun(day: string) {
+    this.stopTutorial();
+    this.seedAndReset(dailySeed(day));
+    // A rock-free launch corridor, as for any run — generated well past it
+    // first, so the corridor is the same on every screen.
+    this.world.ensure(this.startX + 1600);
+    this.world.removeHazardsNear(this.player.x + 180, this.player.y, 320);
+    this.fade = 1;
     this.state = "playing";
     this.timeInState = 0;
     this.sound.resume();
@@ -495,6 +559,96 @@ export class Game {
     const next = !this.storage.data.conserveMomentum;
     this.storage.setConserveMomentum(next);
     this.player.setConserveMomentum(next);
+    // Switched on mid-run: the run counts toward Conserve momentum's best.
+    if (next && (this.state === "playing" || this.state === "paused")) this.runConserve = true;
+  }
+
+  /** DAILY RUN and TRAILS show once the first flight is behind the player. */
+  private get extrasShown(): boolean {
+    return this.storage.data.tutorialDone || this.storage.data.runs > 0;
+  }
+
+  private toggleDaily() {
+    this.dailyMode = !this.dailyMode;
+    this.overRecord = false;
+    this.sound.collect();
+  }
+
+  private trailOwned(id: TrailId): boolean {
+    return id === "own" || this.storage.owns(trailItem(id));
+  }
+
+  private openTrails() {
+    this.trailsOpen = true;
+    this.trailPick = this.storage.data.trail;
+  }
+
+  /** Close the picker; a locked trail on preview comes off. */
+  private closeTrails() {
+    if (!this.trailsOpen) return;
+    this.trailsOpen = false;
+    this.trailPick = this.storage.data.trail;
+    this.player.trailId = this.storage.data.trail;
+  }
+
+  /** A swatch tapped: an owned trail is worn at once; a locked one is previewed. */
+  private pickTrail(id: TrailId) {
+    this.trailPick = id;
+    this.player.trailId = id;
+    if (this.trailOwned(id)) this.storage.setTrail(id);
+    this.sound.collect();
+  }
+
+  /** UNLOCK: spend the orbs and wear it. */
+  private buyTrail() {
+    const def = trailDef(this.trailPick);
+    if (this.trailOwned(def.id)) return;
+    if (!this.storage.buy(trailItem(def.id), def.price)) return;
+    this.storage.setTrail(def.id);
+    this.player.trailId = def.id;
+    this.sound.objective();
+    this.hud.flash = 0.6;
+  }
+
+  private handleTrailsInput() {
+    const keys = this.input.tapped;
+    if (keys.has("Escape") || keys.has("Enter") || keys.has("Space")) {
+      this.closeTrails();
+      return;
+    }
+    if (keys.has("ArrowLeft") || keys.has("ArrowRight")) {
+      const i = TRAILS.findIndex((t) => t.id === this.trailPick);
+      const dir = keys.has("ArrowRight") ? 1 : -1;
+      this.pickTrail(TRAILS[(i + dir + TRAILS.length) % TRAILS.length].id);
+      return;
+    }
+    if (keys.has("KeyU")) {
+      this.buyTrail();
+      return;
+    }
+    if (!this.input.pointerJustDown) return;
+    if (this.hitMuteButton()) {
+      this.toggleMute();
+      return;
+    }
+    const panel = this.hud.trailsPanel(this.camera);
+    const p = this.input.pointer;
+    for (let i = 0; i < panel.swatches.length; i++) {
+      const b = panel.swatches[i];
+      // The swatch and the price under it.
+      if (Math.abs(p.x - b.x) <= panel.pitch / 2 && p.y >= b.y - 26 && p.y <= b.y + panel.r + 20) {
+        this.pickTrail(TRAILS[i].id);
+        return;
+      }
+    }
+    if (this.hitRect(panel.action)) {
+      if (!this.trailOwned(this.trailPick)) this.buyTrail();
+      return;
+    }
+    // A near miss between the controls does nothing; DONE, or a tap
+    // anywhere off the panel, closes the picker. Neither ever flies.
+    if (this.hitRect(panel.body)) return;
+    this.closeTrails();
   }
 
   private hitPauseButton(): boolean {
@@ -528,12 +682,17 @@ export class Game {
     this.state = "gameover";
     this.timeInState = 0;
     const score = Math.floor(this.score);
-    this.newBest = this.storage.recordRun(
+    const record = this.storage.recordRun(
       score,
       Math.floor(this.distance),
       this.perfectCount,
-      this.runOrbs
+      this.runOrbs,
+      this.runConserve ? "conserve" : "classic",
+      this.runDaily
     );
+    this.newBest = record.best;
+    this.newDailyBest = record.dailyBest;
+    this.overRecord = true;
     this.magnetTime = 0;
     this.barrier = false;
     this.sound.setWind(0);
@@ -562,6 +721,10 @@ export class Game {
   }
 
   private handleAttractInput() {
+    if (this.trailsOpen) {
+      this.handleTrailsInput();
+      return;
+    }
     if (
       this.input.tapped.has("KeyC") ||
       this.input.tapped.has("ArrowRight")
@@ -580,6 +743,14 @@ export class Game {
       }
       if (this.hitRect(this.hud.howToPlayButton(this.camera))) {
         this.startRun(true);
+        return;
+      }
+      if (this.extrasShown && this.hitRect(this.hud.dailyButton(this.camera))) {
+        this.toggleDaily();
+        return;
+      }
+      if (this.extrasShown && this.hitRect(this.hud.trailsButton(this.camera).hit)) {
+        this.openTrails();
         return;
       }
       if (this.hitCharacterCycle(-1)) {
@@ -659,6 +830,7 @@ export class Game {
     }
 
     this.particles.update(dt * this.timeScale);
+    if (this.fade > 0) this.fade = Math.max(0, this.fade - dt * 2.6);
     this.tutorial.animate(dt);
     this.hud.update(dt);
     if (this.state !== "paused") this.objectives.update(dt);
@@ -1251,6 +1423,10 @@ export class Game {
     this.background.drawForeground(ctx, cam, this.time);
     this.background.drawAmbient(ctx, cam, this.time);
     this.drawVignette(ctx, cam);
+    if (this.fade > 0) {
+      ctx.fillStyle = hexA(theme.skyTop, this.fade * this.fade);
+      ctx.fillRect(0, 0, cam.w, cam.h);
+    }
     this.hud.drawScreen(ctx, cam, this.buildHudData());
   }
 
@@ -1307,12 +1483,41 @@ export class Game {
 
   private buildHudData(): HudData {
     const hintAlpha = clamp(1 - (this.hintTimer - 5.5) / 2, 0, 1);
+    // The record in view: a run's own (its swing, and its day if daily) while
+    // it is flown and on its game-over screen, so NEW BEST always sits beside
+    // the record it is about; otherwise the one the next run would chase.
+    const inRun = !this.isAttractScreen();
+    const ofRun = inRun || (this.state === "gameover" && this.overRecord);
+    const today = dailyToday();
+    const daily = ofRun ? this.runDaily : this.dailyMode ? today.key : null;
+    const swing: Swing = (ofRun ? this.runConserve : this.storage.data.conserveMomentum) ? "conserve" : "classic";
+    // A run that began before midnight belongs to its own day, by name.
+    const runDay = this.runDaily === null || this.runDaily === today.key ? "TODAY" : dailyLabel(this.runDaily);
+    // The TRAILS button's dot (home and game-over screens only).
+    let canUnlock = false;
+    if (!inRun) {
+      for (const t of TRAILS) if (!this.trailOwned(t.id) && t.price <= this.storage.data.orbs) canUnlock = true;
+    }
     return {
       state: this.state,
       score: this.score,
       distance: this.distance,
-      best: this.storage.data.bestScore,
-      bestDistance: this.storage.data.bestDistance,
+      best: this.storage.bestScoreFor(swing, daily),
+      bestDistance: this.storage.bestDistanceFor(swing, daily),
+      bestDaily: daily !== null,
+      bestConserve: swing === "conserve",
+      bestDay: daily === null || daily === today.key ? "TODAY" : dailyLabel(daily),
+      dailyFlag: !this.newDailyBest ? "" : runDay === "TODAY" ? "BEST TODAY" : `BEST OF ${runDay}`,
+      extras: this.extrasShown,
+      daily: { on: this.dailyMode, label: today.label, day: today.day },
+      trails: {
+        open: this.trailsOpen,
+        pick: this.trailPick,
+        worn: this.storage.data.trail,
+        pickOwned: this.trailOwned(this.trailPick),
+        canUnlock,
+        owned: this.trailsOpen ? TRAILS.map((t) => this.trailOwned(t.id)) : NO_TRAILS,
+      },
       wind: this.wind / CONFIG.wind.max,
       dashReady: this.wind >= CONFIG.wind.dashCost,
       speed: this.player.speed,
@@ -1349,3 +1554,5 @@ export class Game {
     };
   }
 }
+
+const NO_TRAILS: readonly boolean[] = [];

@@ -34,6 +34,8 @@ fly from the keyboard (starting a run and the pause-screen buttons take a click)
 | Mute / unmute | tap the **speaker** button (top right: by the pause button in a run) | `M` |
 | Start / restart | tap anywhere on the menu (TAP TO FLY) | — |
 | Change character | the **‹ ›** either side of its name: Paper Plane, Monkey, Monkey King, Rainbow Cat | `C` / `←` `→` |
+| Daily run on / off | tap **DAILY RUN** (top left, under HOW TO PLAY) | — |
+| Trails (spend orbs) | tap **TRAILS** (top right, under the sound) | in the picker: `←` `→` pick, `U` unlock, `Esc` done |
 
 ### The home screen
 
@@ -46,6 +48,62 @@ the best run and orbs as plain words in the bottom ones, where a resting
 thumb's tap simply flies. The game-over screen is the same page with the
 run's points, distance, perfects, goals and orbs in the middle, on a soft
 dark wash so a pale day sky cannot swallow them (`Hud.drawAttractScreen`).
+
+Once the first flight is behind the player two more controls appear in the
+top corners: **DAILY RUN** under HOW TO PLAY and **TRAILS** under the sound.
+The best in the bottom-left corner is the record the next run would chase:
+the swing in force, and today's if DAILY RUN is on. On a game-over screen it
+is the record of the run just flown (so NEW BEST always sits beside the
+record it is about) until DAILY RUN is switched there.
+
+### Bests per swing
+
+The classic rope and **Conserve momentum** keep separate bests (score and
+distance), so Conserve is a mode of its own and the classic best stays the
+classic rope's. A run counts toward Conserve's best if the option was on at
+any point of it — switching it on in the pause screen mid-run moves the run
+over, and switching it back off does not move it back. Saves from before 1.3
+had one best; it is kept as the classic one. The in-run line reads
+`BEST 6120` or `BEST 6120 · MOMENTUM`; the home screen's corner reads `BEST`
+or `BEST · MOMENTUM`.
+
+### The daily run
+
+**DAILY RUN** is a switch. While it is on (the button turns gold and the
+title's subtitle reads `DAILY RUN · NOV 11`), a tap flies the day's world: the
+same anchors, rocks, orbs, power-ups and objectives for every player, built
+from the date (`core/daily.ts`: the seed is the player's local calendar date).
+It keeps its own best for the day, per swing (`TODAY` in the corner, `BEST
+TODAY` on the game-over screen), any number of tries; a daily run still banks
+its orbs and still counts toward the all-time best. A run still in the air at
+midnight belongs to the day it began (`BEST OF NOV 11`), and the save keeps
+the last week of days, so a clock that steps back a day (a changed time zone)
+finds that day's best again rather than wiping the later one.
+
+A daily run starts from the very start of its world (`Game.startDailyRun`)
+rather than from wherever the home screen's glide happens to be, with a short
+fade in and the plain camera (no speed pull-back left over from the last
+run). Only world generation draws from the day's seed once the run is under
+way, so nothing the player does can shift what comes later, and the screen
+size only changes how far ahead the world is built, never what is built
+(`scripts/daily-probe.mjs` flies it at four screen sizes, with both swings,
+idle and by bots, after Restart Run and after a game over, and compares every
+object). The tutorial never runs in the daily world: HOW TO PLAY flies an
+ordinary run.
+
+### Trails (something to spend orbs on)
+
+Orbs are banked at the end of every run, good or bad, and **TRAILS** is where
+they go: six coloured ribbons (`characters/trails.ts`) from 60 to 800 orbs.
+Any character can wear any trail owned; **Signature** — each character's own
+trail — is always there. In the picker a tap on a swatch wears an owned trail
+at once, or previews a locked one on the gliding character with its price and
+an **UNLOCK** button (lit when the bank covers it). DONE, or a tap off the
+panel, closes it; a locked trail on preview comes off. A gold dot on the
+TRAILS button says something is affordable. Prices are set against the orb take of
+an ordinary run (5–7 for a player not chasing them), so the first unlock comes
+within an evening and the last is a long-term goal. Every character is free;
+the shop's item list is where a priced character would go.
 
 ### The loop
 
@@ -109,8 +167,9 @@ src/
     input.ts              # pointer + keyboard (tap / hold / release / dash)
     camera.ts             # smooth follow + look-ahead + screen shake
     audio.ts              # procedural WebAudio (wind, tether, release, perfect…)
-    storage.ts            # localStorage best-score / progression seed
-    math.ts, rng.ts       # helpers + seedable PRNG (ready for daily seeds)
+    storage.ts            # the save: bests per swing, daily bests, orbs, owned trails, options
+    daily.ts              # the daily run's date key and world seed
+    math.ts, rng.ts       # helpers + seedable PRNG (the daily run seeds it from the date)
   entities/
     player.ts             # ★ glide → swing (pendulum) → slingshot state machine
     anchor.ts             # tether targets (normal + moving)
@@ -122,6 +181,9 @@ src/
     objectives.ts         # 3-goal run objective system
     tutorial.ts           # first-flight tutorial: one move at a time, in slow motion
     particles.ts          # pooled particle effects
+  characters/
+    registry.ts           # the playable characters
+    trails.ts             # the trails bought with orbs (names, prices, colours)
   render/
     background.ts         # layered parallax sky, sun, ruins, cloud sea
     hud.ts                # score, objectives, wind gauge / dash, menus
@@ -197,7 +259,9 @@ Nothing else in the game changes.
   around the plane so nothing jumps. At speed that is about a quarter more
   warning of what is coming (iPhone 14: 0.80 s → 1.01 s on average above
   1000 px/s). Off, the camera never moves: grabs need the anchor on screen,
-  so the view is part of the 1.2 game.
+  so the view is part of the 1.2 game. A run that starts on the classic rope
+  therefore starts with the plain camera even straight after a fast Conserve
+  run (`Game.clearSpeedPull`), and so does every daily attempt.
 
 In both swings, a rock still off the right edge that the plane will reach
 within 1.6 s shows a warning puck on that edge, level with it and growing as
@@ -230,6 +294,8 @@ node scripts/smoke.mjs   # headless runtime smoke test (run after build)
 node scripts/tether-probe.mjs    # both swings: 1.2 rope by default, the Conserve momentum pendulum, the switch, Restart Run
 node scripts/tutorial-probe.mjs  # a new player's first flight: card order, slow motion, safety net, SKIP, HOW TO PLAY
 node scripts/powerups-probe.mjs  # power-ups, orbs, barrier, objectives, restarts
+node scripts/equiv-probe.mjs     # the default swing plays exactly like the 1.2 release, frame for frame (builds 1.2 from its commit to compare)
+node scripts/daily-probe.mjs     # the daily world is the same for everyone; bests per swing and per day; the trail shop; old and tampered saves
 node scripts/smash-probe.mjs decay|ahead|bot   # smash-speed decay, meteor-ahead outcomes, play-bot stats
 node scripts/swing-strip.mjs     # contact sheets of the pendulum: a swing, a loop, a moving anchor → screenshots/
 node scripts/shatter-strip.mjs   # contact sheet of a meteor smash → screenshots/
@@ -246,9 +312,13 @@ wisps, one hazard type, Wind Gauge + Wind Dash, 3-objective system, score /
 distance / best, parallax background, particles, procedural audio, full
 menu → play → game-over → restart loop, mobile + keyboard input.
 
-Natural next steps from the design doc: additional biomes & palettes, the Sky
-Pirate threat system (corrupted anchors), weather, daily seed runs (the RNG is
-already seedable), ghost replays, and cosmetic unlocks.
+Since then: the Conserve momentum option, the tutorial, the Alto-style home
+screen, more characters, orbs and power-ups, bests per swing, the daily run,
+and trails bought with orbs.
+
+Natural next steps: new stages every 10,000 m (biomes & palettes), weather
+(rain, snow, thunder), the Sky Pirate threat system (corrupted anchors),
+ghost replays, and more to unlock (characters).
 
 Built with **Vite + TypeScript** and an HTML5 Canvas 2D renderer. No game-engine
 dependency; the bundle is ~43 kB gzipped.

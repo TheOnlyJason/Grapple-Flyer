@@ -10,6 +10,8 @@ import {
 } from "../systems/objectives";
 import type { CharacterId } from "../characters/registry";
 import type { TutorialKey } from "../systems/tutorial";
+import { TRAILS, type TrailId } from "../characters/trails";
+import { NYAN_RAINBOW } from "./drawNyanCat";
 import {
   drawOrbIcon,
   drawPowerIcon,
@@ -56,8 +58,31 @@ export interface HudData {
   state: "menu" | "playing" | "paused" | "crashing" | "gameover";
   score: number;
   distance: number;
+  /** The best in view (see bestDaily / bestConserve for which one). */
   best: number;
   bestDistance: number;
+  /** The best shown is today's daily-run best. */
+  bestDaily: boolean;
+  /** The best shown is Conserve momentum's (its own record). */
+  bestConserve: boolean;
+  /** The day the daily best shown belongs to: "TODAY", or its date ("NOV 11") for a run begun before midnight. */
+  bestDay: string;
+  /** The daily run just flown beat its day's best: the words for it ("BEST TODAY"), else "". */
+  dailyFlag: string;
+  /** DAILY RUN and TRAILS are on the home screen (after the first flight). */
+  extras: boolean;
+  /** The DAILY RUN switch, and today's date for it. */
+  daily: { on: boolean; label: string; day: number };
+  /** The TRAILS picker: open, the trail picked and the one worn, and what is owned (per TRAILS entry, while open). */
+  trails: {
+    open: boolean;
+    pick: TrailId;
+    worn: TrailId;
+    pickOwned: boolean;
+    /** Some locked trail is affordable (a dot on the button says so). */
+    canUnlock: boolean;
+    owned: readonly boolean[];
+  };
   wind: number; // 0..1
   dashReady: boolean;
   speed: number;
@@ -119,6 +144,8 @@ export class Hud {
   // Drawn widths of the corner labels, so their touch targets cover them.
   private howLabelW = 120;
   private soundLabelW = 70;
+  private dailyLabelW = 96;
+  private trailsLabelW = 64;
   private attractTop: CanvasGradient | null = null;
   private attractBottom: CanvasGradient | null = null;
   private attractGradH = 0;
@@ -271,6 +298,65 @@ export class Hud {
     return { x: cam.insets.left + 22, y: cam.insets.top + 18, w: 50 + this.howLabelW + 10, h };
   }
 
+  /** DAILY RUN, under HOW TO PLAY (a switch: on, runs fly the day's world). */
+  dailyButton(cam: Camera): { x: number; y: number; w: number; h: number } {
+    const how = this.howToPlayButton(cam);
+    return { x: how.x, y: how.y + how.h + 8, w: 50 + this.dailyLabelW + 10, h: 44 };
+  }
+
+  /** TRAILS, under the sound button: the circle, and the strip (with its label) that takes the tap. */
+  trailsButton(cam: Camera): { x: number; y: number; r: number; hit: { x: number; y: number; w: number; h: number } } {
+    const m = this.muteButton(cam, true);
+    const r = m.r;
+    const y = m.y + 52;
+    const left = m.x - r - 10 - this.trailsLabelW - 8;
+    return { x: m.x, y, r, hit: { x: left, y: y - 22, w: m.x + 22 - left, h: 44 } };
+  }
+
+  /**
+   * The TRAILS picker, right of centre so the gliding character on the left
+   * shows the trail picked: a header, the swatches, the picked trail's name,
+   * its UNLOCK button (or WEARING), and DONE where TAP TO FLY sits.
+   */
+  trailsPanel(cam: Camera): {
+    cx: number;
+    pitch: number;
+    r: number;
+    headerY: number;
+    rowY: number;
+    nameY: number;
+    doneY: number;
+    swatches: { x: number; y: number }[];
+    /** UNLOCK's touch target (44 pt tall; the pill drawn in it is slimmer). */
+    action: { x: number; y: number; w: number; h: number };
+    /** The panel from its header to under UNLOCK: a tap in it that misses a control is not a "close". */
+    body: { x: number; y: number; w: number; h: number };
+  } {
+    const n = TRAILS.length;
+    const pitch = clamp(cam.w * 0.075, 44, 56);
+    const half = (pitch * n) / 2;
+    const ins = cam.insets;
+    const cx = Math.min(cam.w * 0.62, cam.w - ins.right - 16 - half);
+    const doneY = this.playButton(cam).y;
+    const actionY = doneY - 50;
+    const nameY = actionY - 38;
+    const rowY = nameY - 52;
+    const swatches = [];
+    for (let i = 0; i < n; i++) swatches.push({ x: cx - half + pitch * (i + 0.5), y: rowY });
+    return {
+      cx,
+      pitch,
+      r: 16,
+      headerY: rowY - 40,
+      rowY,
+      nameY,
+      doneY,
+      swatches,
+      action: { x: cx - 100, y: actionY - 22, w: 200, h: 44 },
+      body: { x: cx - half - 12, y: rowY - 40 - 14, w: half * 2 + 24, h: actionY + 22 + 4 - (rowY - 40 - 14) },
+    };
+  }
+
   /** The pause screen's two buttons (also their hit-test rectangles). */
   pauseMenuButtons(cam: Camera): {
     restart: { x: number; y: number; w: number; h: number };
@@ -321,17 +407,7 @@ export class Hud {
     align: "left" | "center" | "right" = "center",
     shadowAlpha = 0
   ): number {
-    const key = `${weight}|${size}|${trackEm}|${s}`;
-    this.setFont(ctx, weight, size);
-    let run = this.spacedCache.get(key);
-    if (!run) {
-      const widths = [...s].map((ch) => ctx.measureText(ch).width);
-      const track = size * trackEm;
-      const total = widths.reduce((a, b) => a + b, 0) + track * Math.max(0, widths.length - 1);
-      run = { widths, track, total };
-      if (this.spacedCache.size > 64) this.spacedCache.clear();
-      this.spacedCache.set(key, run);
-    }
+    const run = this.spacedRun(ctx, s, size, weight, trackEm);
     let cx = align === "center" ? x - run.total / 2 : align === "right" ? x - run.total : x;
     const align0 = ctx.textAlign;
     ctx.textAlign = "left";
@@ -347,6 +423,28 @@ export class Hud {
     }
     ctx.textAlign = align0;
     return run.total;
+  }
+
+  /** The glyph widths and total width of a letter-spaced run (cached; leaves the font set). */
+  private spacedRun(
+    ctx: CanvasRenderingContext2D,
+    s: string,
+    size: number,
+    weight: string,
+    trackEm: number
+  ): { widths: number[]; track: number; total: number } {
+    const key = `${weight}|${size}|${trackEm}|${s}`;
+    this.setFont(ctx, weight, size);
+    let run = this.spacedCache.get(key);
+    if (!run) {
+      const widths = [...s].map((ch) => ctx.measureText(ch).width);
+      const track = size * trackEm;
+      const total = widths.reduce((a, b) => a + b, 0) + track * Math.max(0, widths.length - 1);
+      run = { widths, track, total };
+      if (this.spacedCache.size > 64) this.spacedCache.clear();
+      this.spacedCache.set(key, run);
+    }
+    return run;
   }
 
   // Screen-space HUD during a run.
@@ -379,7 +477,9 @@ export class Hud {
     );
     this.text(
       ctx,
-      `BEST ${Math.floor(d.best)}`,
+      d.bestDaily && d.best <= 0
+        ? `DAILY RUN${d.bestConserve ? " · MOMENTUM" : ""}`
+        : `${d.bestDaily ? d.bestDay : "BEST"} ${Math.floor(d.best)}${d.bestConserve ? " · MOMENTUM" : ""}`,
       26 + ins.left,
       84 + ins.top,
       12,
@@ -919,23 +1019,26 @@ export class Hud {
     this.spaced(ctx, "GALE", w / 2, titleY, titleSize, "300", white, 0.32, "center", 0.22);
     const titleBottom = titleY + tBox.bottom;
     const subY = titleBottom + (over ? 8 : 12);
-    this.spaced(ctx, "SKY · SAILING", w / 2, subY, over ? 10 : 12, "700", hexA(PALETTE.anchorPerfect, 0.9), 0.5, "center", 0.25);
+    const subtitle = d.daily.on ? `DAILY RUN · ${d.daily.label}` : "SKY · SAILING";
+    // (The TRAILS picker's header takes its place on short screens.)
+    if (!d.trails.open) this.spaced(ctx, subtitle, w / 2, subY, over ? 10 : 12, "700", hexA(PALETTE.anchorPerfect, 0.9), 0.5, "center", 0.25);
 
     // --- The run just flown (game over only): a big light score, one line of
     // the rest, on a soft dark wash so a pale day sky cannot swallow it.
-    if (over) {
+    if (over && !d.trails.open) {
       let y = subY + 10 + Math.max(16, h * 0.05);
       const stackTop = y;
       const scoreSize = Math.round(clamp(w * 0.07, 40, 64));
-      const stackH = (d.newBest ? 20 : 0) + scoreSize + 8 + 22 + 16;
+      const flag = d.newBest ? "NEW BEST" : d.dailyFlag;
+      const stackH = (flag ? 20 : 0) + scoreSize + 8 + 22 + 16;
       const wash = ctx.createRadialGradient(w / 2, stackTop + stackH / 2, 10, w / 2, stackTop + stackH / 2, Math.max(w * 0.34, 190));
       wash.addColorStop(0, hexA("#0a0d24", 0.34));
       wash.addColorStop(1, hexA("#0a0d24", 0));
       ctx.fillStyle = wash;
       ctx.fillRect(0, stackTop - 60, w, stackH + 120);
-      if (d.newBest) {
+      if (flag) {
         const a = 0.8 + 0.2 * Math.sin(now / 200);
-        this.spaced(ctx, "NEW BEST", w / 2, y, 12, "800", hexA(PALETTE.anchorPerfect, a), 0.45, "center", 0.45);
+        this.spaced(ctx, flag, w / 2, y, 12, "800", hexA(PALETTE.anchorPerfect, a), 0.45, "center", 0.45);
         y += 20;
       }
       const sBox = this.ink(ctx, `${Math.floor(d.score)}`, scoreSize, "300");
@@ -966,6 +1069,25 @@ export class Hud {
       this.text(ctx, "?", cx, cy + 1, 18, "600", hexA(white, 0.9));
       this.howLabelW = this.spaced(ctx, "HOW TO PLAY", cx + 30, cy + 1, 11, "700", hexA(white, 0.9), 0.28, "left", 0.3);
     }
+    if (d.extras) {
+      // DAILY RUN: a calendar face with today's date; gold while it is on.
+      const r = this.dailyButton(cam);
+      const cx = r.x + 20;
+      const cy = r.y + r.h / 2;
+      const on = d.daily.on;
+      const gold = PALETTE.anchorPerfect;
+      ctx.fillStyle = on ? hexA(gold, 0.92) : hexA(white, 0.14);
+      ctx.beginPath();
+      ctx.arc(cx, cy, 20, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = on ? hexA(gold, 1) : hexA(white, 0.32);
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      this.text(ctx, `${d.daily.day}`, cx, cy + 1, 15, "700", on ? "#0a0d24" : hexA(white, 0.9));
+      this.dailyLabelW = this.spaced(ctx, "DAILY RUN", cx + 30, cy + 1, 11, "700", on ? hexA(gold, 1) : hexA(white, 0.9), 0.28, "left", 0.3);
+    }
     this.drawMuteButton(ctx, cam, d, true);
     {
       const m = this.muteButton(cam, true);
@@ -973,16 +1095,54 @@ export class Hud {
       ctx.textBaseline = "middle";
       this.soundLabelW = this.spaced(ctx, COARSE_POINTER ? label : `${label} · M`, m.x - m.r - 10, m.y + 1, 11, "700", hexA(white, 0.9), 0.28, "right", 0.3);
     }
+    if (d.extras) {
+      // TRAILS: three short streaks in the trail worn, and a gold dot while
+      // some locked trail is affordable.
+      const b = this.trailsButton(cam);
+      ctx.fillStyle = hexA(white, 0.14);
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = hexA(white, 0.32);
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      const cols = this.trailColors(d.trails.worn, d.character);
+      ctx.lineCap = "round";
+      ctx.lineWidth = 3;
+      for (let i = 0; i < 3; i++) {
+        const oy = (i - 1) * 5.5;
+        const ox = (1 - Math.abs(i - 1)) * 3;
+        ctx.strokeStyle = cols[Math.floor((i * cols.length) / 3)];
+        ctx.beginPath();
+        ctx.moveTo(b.x - 9 + ox, b.y + oy + 3);
+        ctx.lineTo(b.x + 7 + ox, b.y + oy - 3);
+        ctx.stroke();
+      }
+      ctx.lineCap = "butt";
+      if (d.trails.canUnlock && !d.trails.open) {
+        ctx.fillStyle = ORB_COLOR;
+        ctx.beginPath();
+        ctx.arc(b.x + b.r * 0.72, b.y - b.r * 0.72, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.textBaseline = "middle";
+      this.trailsLabelW = this.spaced(ctx, "TRAILS", b.x - b.r - 10, b.y + 1, 11, "700", hexA(white, 0.9), 0.28, "right", 0.3);
+    }
 
     // --- Bottom corners: the best run (left) and the orb bank (right) —
     // plain words, so a resting thumb's tap there just flies.
     ctx.textBaseline = "top";
     const left = ins.left + 26;
     const baseY = h - ins.bottom - 24;
+    const bestLabel = `${d.bestDaily ? d.bestDay : "BEST"}${d.bestConserve ? " · MOMENTUM" : ""}`;
     if (d.bestDistance > 0) {
       const best = `${Math.floor(d.bestDistance)}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-      this.spaced(ctx, "BEST", left, baseY - 40, 11, "700", hexA(white, 0.75), 0.4, "left", 0.3);
+      this.spaced(ctx, bestLabel, left, baseY - 40, 11, "700", hexA(white, 0.75), 0.4, "left", 0.3);
       this.spaced(ctx, `${best} m`, left, baseY - 24, 22, "300", white, 0.04, "left", 0.3);
+    } else if (d.bestDaily || d.bestConserve) {
+      // A record of its own not set yet (today's, or Conserve momentum's).
+      this.spaced(ctx, bestLabel, left, baseY - 40, 11, "700", hexA(white, 0.75), 0.4, "left", 0.3);
+      this.spaced(ctx, "—", left, baseY - 24, 22, "300", white, 0.04, "left", 0.3);
     } else {
       this.spaced(ctx, "FIRST FLIGHT", left, baseY - 14, 11, "700", hexA(white, 0.75), 0.4, "left", 0.3);
     }
@@ -994,6 +1154,13 @@ export class Hud {
       this.spaced(ctx, `${d.orbBank}`.replace(/\B(?=(\d{3})+(?!\d))/g, ","), ox - 18, oy + 1, 19, "600", ORB_COLOR, 0.04, "right", 0.3);
       ctx.textBaseline = "top";
       this.spaced(ctx, "ORBS", ox + 9, oy + 14, 10, "700", hexA(white, 0.75), 0.4, "right", 0.3);
+    }
+
+    if (d.trails.open) {
+      this.drawTrailsPanel(ctx, cam, d, breathe);
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      return;
     }
 
     // --- Bottom centre: the character, then TAP TO FLY. On the narrowest
@@ -1019,6 +1186,106 @@ export class Hud {
     this.spaced(ctx, tapText, w / 2, tap.y, tapSize, "700", hexA(white, 0.62 + 0.35 * breathe), over && w < 640 ? 0.3 : 0.42, "center", 0.35);
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
+  }
+
+  /** A trail's colours for its swatch and icon; "own" shows the character's own trail. */
+  private trailColors(id: TrailId, character: CharacterId): readonly string[] {
+    if (id !== "own") return TRAILS.find((t) => t.id === id)!.colors;
+    if (character === "nyan") return NYAN_RAINBOW;
+    if (character === "monkey") return OWN_GOLD;
+    return OWN_WHITE;
+  }
+
+  private drawTrailsPanel(ctx: CanvasRenderingContext2D, cam: Camera, d: HudData, breathe: number) {
+    const P = this.trailsPanel(cam);
+    const white = PALETTE.text;
+    const gold = PALETTE.anchorPerfect;
+    // A soft dark wash under it, as under the game-over score.
+    const midY = (P.headerY + P.doneY) / 2;
+    const wash = ctx.createRadialGradient(P.cx, midY, 10, P.cx, midY, Math.max(P.pitch * 4.6, 220));
+    wash.addColorStop(0, hexA("#0a0d24", 0.36));
+    wash.addColorStop(1, hexA("#0a0d24", 0));
+    ctx.fillStyle = wash;
+    ctx.fillRect(P.cx - P.pitch * 5, P.headerY - 60, P.pitch * 10, P.doneY - P.headerY + 120);
+
+    ctx.textBaseline = "middle";
+    this.spaced(ctx, "TRAILS", P.cx, P.headerY, 12, "800", hexA(gold, 0.95), 0.45, "center", 0.4);
+
+    for (let i = 0; i < TRAILS.length; i++) {
+      const t = TRAILS[i];
+      const s = P.swatches[i];
+      const owned = d.trails.owned[i] ?? t.id === "own";
+      const cols = this.trailColors(t.id, d.character);
+      ctx.save();
+      ctx.globalAlpha = owned ? 1 : 0.42;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, P.r, 0, Math.PI * 2);
+      ctx.clip();
+      const bandH = (P.r * 2) / cols.length;
+      for (let b = 0; b < cols.length; b++) {
+        ctx.fillStyle = cols[b];
+        ctx.fillRect(s.x - P.r, s.y - P.r + b * bandH - 0.5, P.r * 2, bandH + 1);
+      }
+      ctx.restore();
+      if (t.id === d.trails.pick) {
+        ctx.strokeStyle = hexA(white, 0.95);
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, P.r + 5, 0, Math.PI * 2);
+        ctx.stroke();
+      } else if (t.id === d.trails.worn) {
+        // Still worn while a locked one is on preview.
+        ctx.fillStyle = hexA(white, 0.85);
+        ctx.beginPath();
+        ctx.arc(s.x, s.y + P.r + 9, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      if (!owned) {
+        ctx.textAlign = "center";
+        this.text(ctx, `${t.price}`, s.x, s.y + P.r + 12, 10, "700", hexA(ORB_COLOR, 0.95));
+      }
+    }
+
+    const pick = TRAILS.find((t) => t.id === d.trails.pick) ?? TRAILS[0];
+    this.spaced(ctx, pick.name.toUpperCase(), P.cx, P.nameY, 14, "700", hexA(white, 0.95), 0.3, "center", 0.3);
+
+    const a = P.action;
+    const ay = a.y + a.h / 2;
+    if (d.trails.pickOwned) {
+      this.spaced(ctx, pick.id === "own" ? "EACH CHARACTER'S OWN" : "WEARING", P.cx, ay, 11, "700", hexA(white, 0.7), 0.35, "center", 0.3);
+    } else if (d.orbBank >= pick.price) {
+      ctx.fillStyle = hexA(gold, 0.95);
+      this.roundRect(ctx, a.x, a.y + 4, a.w, a.h - 8, (a.h - 8) / 2);
+      ctx.fill();
+      const label = "UNLOCK";
+      const price = `${pick.price}`;
+      const lw = this.spacedRun(ctx, label, 12, "800", 0.3).total;
+      this.setFont(ctx, "700", 13);
+      const pw = ctx.measureText(price).width;
+      const total = lw + 14 + 14 + pw;
+      let x = P.cx - total / 2;
+      this.spaced(ctx, label, x, ay + 1, 12, "800", "#0a0d24", 0.3, "left");
+      x += lw + 14;
+      // The orb glyph in the button's ink (a gold orb would vanish on gold).
+      ctx.strokeStyle = "#0a0d24";
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.arc(x + 6, ay, 5.5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = "#0a0d24";
+      ctx.beginPath();
+      ctx.arc(x + 6, ay, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      x += 14;
+      ctx.textAlign = "left";
+      this.text(ctx, price, x, ay + 1, 13, "700", "#0a0d24");
+    } else {
+      const need = pick.price - d.orbBank;
+      const line = `${pick.price} ORBS  ·  ${need} MORE TO GO`;
+      this.spaced(ctx, line, P.cx, ay, 11, "700", hexA(white, 0.75), 0.25, "center", 0.3);
+    }
+
+    this.spaced(ctx, "DONE", P.cx, P.doneY, 13, "700", hexA(white, 0.62 + 0.35 * breathe), 0.42, "center", 0.35);
   }
 
   /**
@@ -1099,3 +1366,6 @@ export class Hud {
     ctx.closePath();
   }
 }
+
+const OWN_WHITE: readonly string[] = ["#ffffff"];
+const OWN_GOLD: readonly string[] = ["#ffd45a"];

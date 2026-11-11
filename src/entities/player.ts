@@ -12,6 +12,7 @@ import {
 } from "../render/drawMonkey";
 import { drawNyanCat, NYAN_RAINBOW } from "../render/drawNyanCat";
 import type { CharacterId } from "../characters/registry";
+import { trailDef, type TrailId } from "../characters/trails";
 import { angleDelta, clamp, rad, TAU } from "../core/math";
 import { makeScratch, Scratch } from "../render/rcache";
 import { Anchor, hexA } from "./anchor";
@@ -46,6 +47,8 @@ export class Player {
   angle = 0; // visual facing, follows velocity
   state: PlayerState = "glide";
   characterId: CharacterId = "plane";
+  /** The trail worn: "own" is the character's own (see characters/trails.ts). */
+  trailId: TrailId = "own";
   alive = true;
 
   anchor: Anchor | null = null;
@@ -681,7 +684,9 @@ export class Player {
 
   draw(ctx: CanvasRenderingContext2D, time: number, menuPreview = false) {
     if (this.characterId === "baseMonkey") this.updatePlainHang(time, menuPreview);
-    if (this.characterId === "plane" || this.characterId === "baseMonkey") {
+    if (this.trailId !== "own") {
+      this.drawRibbonTrail(ctx, time, trailDef(this.trailId).colors);
+    } else if (this.characterId === "plane" || this.characterId === "baseMonkey") {
       this.drawMotionTrail(ctx, time);
     } else if (this.characterId === "monkey") {
       this.drawNimbusTrail(ctx, time);
@@ -896,6 +901,82 @@ export class Player {
       }
     }
 
+    ctx.restore();
+  }
+
+  /**
+   * A bought trail: a soft ribbon of one to three flat colour bands, widest
+   * at the character and drawn out to a point at the tail, with a few sparks
+   * at the head (the same cadence as the character trails). Each band is one
+   * filled outline in one flat colour — no gradient along it, so a loop
+   * around an anchor cannot cut the ribbon in half, and where the ribbon
+   * crosses itself a band never blends over itself.
+   */
+  private drawRibbonTrail(ctx: CanvasRenderingContext2D, time: number, colors: readonly string[]) {
+    const n = this.trail.length;
+    if (n < 3 || this.speed < 50 || colors.length === 0) return;
+    const pts = this.trail;
+    const r = CONFIG.player.radius;
+    const bands = colors.length;
+    // About as wide as the cat's rainbow at the head.
+    const full = r * (bands === 1 ? 1.2 : bands === 2 ? 1.3 : 1.42);
+    const speedT = clamp(this.speed / 420, 0.55, 1);
+
+    if (trailNX.length < n) {
+      trailNX = new Float32Array(Math.max(n, CONFIG.player.trailMax));
+      trailNY = new Float32Array(trailNX.length);
+    }
+    if (trailW.length < n) trailW = new Float32Array(Math.max(n, CONFIG.player.trailMax));
+    for (let i = 0; i < n; i++) {
+      const a = pts[Math.max(0, i - 1)];
+      const b = pts[Math.min(n - 1, i + 1)];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const len = Math.hypot(dx, dy) || 1;
+      trailNX[i] = -dy / len;
+      trailNY[i] = dx / len;
+      const t = i / (n - 1); // 0 at the tail, 1 at the head
+      trailW[i] = full * Math.sqrt(t);
+    }
+
+    ctx.save();
+    ctx.globalAlpha = 0.86 * speedT;
+    for (let b = 0; b < bands; b++) {
+      // This band's edges as fractions of the ribbon width, -0.5..0.5.
+      const lo = b / bands - 0.5;
+      const hi = (b + 1) / bands - 0.5;
+      ctx.fillStyle = colors[b];
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < n; i++) {
+        ctx.lineTo(pts[i].x + trailNX[i] * trailW[i] * lo, pts[i].y + trailNY[i] * trailW[i] * lo);
+      }
+      for (let i = n - 1; i >= 1; i--) {
+        ctx.lineTo(pts[i].x + trailNX[i] * trailW[i] * hi, pts[i].y + trailNY[i] * trailW[i] * hi);
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Sparks near the head, in the ribbon's colours.
+    ctx.globalCompositeOperation = "lighter";
+    for (let i = Math.floor(n * 0.45); i < n; i += 2) {
+      const t = i / n;
+      const p = pts[i];
+      const phase = i * 2.1 + time * 4.2;
+      const across = trailW[i] * Math.cos(phase * 0.7) * 0.6;
+      ctx.fillStyle = colors[i % bands];
+      ctx.globalAlpha = t * 0.55 * speedT;
+      ctx.beginPath();
+      ctx.arc(
+        p.x + Math.sin(phase) * 4 * t + trailNX[i] * across,
+        p.y + Math.cos(phase * 1.1) * 3 * t + trailNY[i] * across,
+        0.8 + t * 1.4,
+        0,
+        TAU
+      );
+      ctx.fill();
+    }
     ctx.restore();
   }
 
@@ -1207,6 +1288,8 @@ export class Player {
 /** Per-point trail normals for the rainbow bands, reused across frames. */
 let trailNX = new Float32Array(0);
 let trailNY = new Float32Array(0);
+/** Per-point ribbon widths for bought trails. */
+let trailW = new Float32Array(0);
 
 /** Nimbus puff circle radius in sprite px — max on-screen size at 2x DPR. */
 const NIMBUS_PUFF_R = Math.ceil(CONFIG.player.radius * 0.4 * 2);
