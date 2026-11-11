@@ -3,14 +3,23 @@ import { TAU } from "../core/math";
 import { hexA } from "../entities/anchor";
 
 export type LatchArm = "right" | "left";
+/** "king": crowned, seated on the golden cloud. "plain": no crown, no cloud, flies in a leap. */
+export type MonkeyKind = "king" | "plain";
 
 /** Vertical offset applied so the monkey sits on the nimbus deck. */
 export function monkeySitLift(): number {
   return CONFIG.player.radius * 0.34;
 }
 
-export function monkeyShoulder(latchArm: LatchArm): { x: number; y: number } {
+export function monkeyShoulder(
+  latchArm: LatchArm,
+  kind: MonkeyKind = "king"
+): { x: number; y: number } {
   const r = CONFIG.player.radius;
+  if (kind === "plain") {
+    // Stretched out in a leap: the shoulders sit at the front of the torso.
+    return latchArm === "right" ? { x: r * 0.42, y: -r * 0.08 } : { x: r * 0.3, y: -r * 0.16 };
+  }
   const lift = monkeySitLift();
   return {
     x: latchArm === "right" ? r * 0.12 : -r * 0.12,
@@ -20,6 +29,8 @@ export function monkeyShoulder(latchArm: LatchArm): { x: number; y: number } {
 
 export interface MonkeyPose {
   menuPreview: boolean;
+  /** Mid wind dash (the plain monkey goes arrow-straight). */
+  dash?: boolean;
   swing?: {
     latchArm: LatchArm;
     latchAngle: number;
@@ -215,6 +226,39 @@ function drawMonkeyCrown(ctx: CanvasRenderingContext2D, r: number) {
   ctx.fill();
 }
 
+// The head both monkeys share: fur, two ears, the lighter face, the eyes.
+function drawMonkeyHead(
+  ctx: CanvasRenderingContext2D,
+  r: number,
+  hx: number,
+  hy: number,
+  furA: string,
+  face: string
+) {
+  ctx.fillStyle = furA;
+  ctx.beginPath();
+  ctx.arc(hx, hy, r * 0.62, 0, TAU);
+  ctx.fill();
+
+  for (const side of [-1, 1]) {
+    ctx.beginPath();
+    ctx.arc(hx + side * r * 0.48, hy - r * 0.26, r * 0.22, 0, TAU);
+    ctx.fill();
+  }
+
+  ctx.fillStyle = hexA(face, 0.95);
+  ctx.beginPath();
+  ctx.ellipse(hx + r * 0.2, hy + r * 0.06, r * 0.3, r * 0.36, 0.15, 0, TAU);
+  ctx.fill();
+
+  ctx.fillStyle = hexA("#1a1220", 0.85);
+  for (const side of [-1, 1]) {
+    ctx.beginPath();
+    ctx.arc(hx + r * 0.14 + side * r * 0.16, hy - r * 0.02, r * 0.07, 0, TAU);
+    ctx.fill();
+  }
+}
+
 function drawMonkeyBody(ctx: CanvasRenderingContext2D, pose: MonkeyPose) {
   const r = CONFIG.player.radius;
   const fur = "#8B5E34";
@@ -253,29 +297,7 @@ function drawMonkeyBody(ctx: CanvasRenderingContext2D, pose: MonkeyPose) {
     furDarkA
   );
 
-  // Head.
-  ctx.fillStyle = furA;
-  ctx.beginPath();
-  ctx.arc(r * 0.38, -r * 0.72, r * 0.62, 0, TAU);
-  ctx.fill();
-
-  for (const side of [-1, 1]) {
-    ctx.beginPath();
-    ctx.arc(r * 0.38 + side * r * 0.48, -r * 0.98, r * 0.22, 0, TAU);
-    ctx.fill();
-  }
-
-  ctx.fillStyle = hexA(face, 0.95);
-  ctx.beginPath();
-  ctx.ellipse(r * 0.58, -r * 0.66, r * 0.3, r * 0.36, 0.15, 0, TAU);
-  ctx.fill();
-
-  ctx.fillStyle = hexA("#1a1220", 0.85);
-  for (const side of [-1, 1]) {
-    ctx.beginPath();
-    ctx.arc(r * 0.52 + side * r * 0.16, -r * 0.74, r * 0.07, 0, TAU);
-    ctx.fill();
-  }
+  drawMonkeyHead(ctx, r, r * 0.38, -r * 0.72, furA, face);
 
   drawMonkeyCrown(ctx, r);
 
@@ -309,6 +331,84 @@ export function drawMonkey(
   ctx.translate(0, -r * 0.34);
   drawMonkeyBody(ctx, pose);
   ctx.restore();
+}
+
+/**
+ * The plain monkey: the same monkey without the crown or the cloud. With
+ * nothing to sit on it flies the way a monkey would — stretched out in a
+ * leap, arms ahead, legs and tail streaming behind and rippling in the wind.
+ * On the rope one arm reaches for the anchor and the rest of it hangs; in a
+ * wind dash it goes arrow-straight.
+ */
+export function drawPlainMonkey(
+  ctx: CanvasRenderingContext2D,
+  time: number,
+  pose: MonkeyPose
+) {
+  const r = CONFIG.player.radius;
+  const fur = "#8B5E34";
+  const furDark = "#5C3A1E";
+  const face = "#C9956A";
+  const furA = hexA(fur, 0.98);
+  const furDarkA = hexA(furDark, 0.94);
+  const ripple = Math.sin(time * 9);
+  const swing = pose.swing;
+  const dash = !!pose.dash;
+  const near = monkeyShoulder("right", "plain");
+  const far = monkeyShoulder("left", "plain");
+
+  // Limb angles: 0 points down, negative forward, positive back.
+  let nearArm = -1.2 + 0.06 * ripple;
+  let farArm = -1.45 - 0.06 * ripple;
+  let nearArmLen = r * 1.0;
+  let farArmLen = r * 1.0;
+  let nearLeg = 1.05 - 0.1 * ripple;
+  let farLeg = 1.25 + 0.1 * ripple;
+  if (dash) {
+    nearArm = -1.48;
+    farArm = -1.56;
+    nearArmLen = farArmLen = r * 1.12;
+    nearLeg = 1.34;
+    farLeg = 1.44;
+  } else if (swing) {
+    // Hanging from one hand: the free arm and the legs drop.
+    nearLeg = 0.45 - 0.05 * ripple;
+    farLeg = 0.78 + 0.05 * ripple;
+    if (swing.latchArm === "right") {
+      nearArm = swing.latchAngle;
+      nearArmLen = swing.latchLength;
+      farArm = 0.55;
+    } else {
+      farArm = swing.latchAngle;
+      farArmLen = swing.latchLength;
+      nearArm = 0.4;
+    }
+  }
+
+  // Tail: streams out behind, rippling.
+  const wave = ripple * r * (dash ? 0.06 : 0.16);
+  ctx.strokeStyle = furDarkA;
+  ctx.lineWidth = r * 0.26;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.8, r * 0.14);
+  ctx.quadraticCurveTo(-r * 1.3, r * 0.5 + wave, -r * 1.78, -r * 0.02 - wave);
+  ctx.stroke();
+
+  // Far leg and far arm, behind the body.
+  drawLimb(ctx, -r * 0.5, r * 0.34, farLeg, r * 0.95, r * 0.25, furDarkA);
+  drawLimb(ctx, far.x, far.y, farArm, farArmLen, r * 0.24, furDarkA);
+
+  // Torso, stretched along the line of flight.
+  ctx.fillStyle = furA;
+  ctx.beginPath();
+  ctx.ellipse(-r * 0.12, r * 0.12, r * 0.92, r * 0.66, -0.12, 0, TAU);
+  ctx.fill();
+
+  // Near leg, head, near arm.
+  drawLimb(ctx, -r * 0.42, r * 0.4, nearLeg, r * 0.95, r * 0.27, furA);
+  drawMonkeyHead(ctx, r, r * 0.62, -r * 0.5, furA, face);
+  drawLimb(ctx, near.x, near.y, nearArm, nearArmLen, r * 0.27, furA);
 }
 
 export function computeLatchArmAngle(

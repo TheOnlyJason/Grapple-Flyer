@@ -33,7 +33,7 @@ fly from the keyboard (starting a run and the pause-screen buttons take a click)
 | **Wind Dash** (gauge full) | tap the **DASH** button | `Shift` / `D` |
 | Mute / unmute | tap the **speaker** button (top right: by the pause button in a run) | `M` |
 | Start / restart | tap anywhere on the menu (TAP TO FLY) | — |
-| Change character | the **‹ ›** either side of its name | `C` / `←` `→` |
+| Change character | the **‹ ›** either side of its name: Paper Plane, Monkey, Monkey King, Rainbow Cat | `C` / `←` `→` |
 
 ### The home screen
 

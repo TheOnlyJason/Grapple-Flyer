@@ -1,7 +1,14 @@
 import { CONFIG } from "../core/config";
 import { theme, mixColor } from "../render/theme";
 import { getPlayerSprite, isPlayerSpriteReady, PLAYER_SPRITE } from "../render/playerAsset";
-import { drawMonkey, computeLatchArmAngle, monkeyShoulder, type LatchArm } from "../render/drawMonkey";
+import {
+  drawMonkey,
+  drawPlainMonkey,
+  computeLatchArmAngle,
+  monkeyShoulder,
+  type LatchArm,
+  type MonkeyKind,
+} from "../render/drawMonkey";
 import { drawNyanCat, NYAN_RAINBOW } from "../render/drawNyanCat";
 import type { CharacterId } from "../characters/registry";
 import { angleDelta, clamp, rad, TAU } from "../core/math";
@@ -641,7 +648,7 @@ export class Player {
   // --- Rendering -----------------------------------------------------------
 
   draw(ctx: CanvasRenderingContext2D, time: number, menuPreview = false) {
-    if (this.characterId === "plane") {
+    if (this.characterId === "plane" || this.characterId === "baseMonkey") {
       this.drawMotionTrail(ctx, time);
     } else if (this.characterId === "monkey") {
       this.drawNimbusTrail(ctx, time);
@@ -900,12 +907,18 @@ export class Player {
     ctx.restore();
   }
 
-  /** World position of the hand gripping the anchor (monkey only). */
+  /** Which monkey the character is, if it is one: the crowned cloud-rider or the plain one. */
+  private get monkeyKind(): MonkeyKind | null {
+    return this.characterId === "monkey" ? "king" : this.characterId === "baseMonkey" ? "plain" : null;
+  }
+
+  /** World position of the hand gripping the anchor (the monkeys only). */
   private latchedHandWorld(): { x: number; y: number } | null {
-    if (this.characterId !== "monkey" || this.state !== "swing" || !this.anchor) {
+    const kind = this.monkeyKind;
+    if (!kind || this.state !== "swing" || !this.anchor) {
       return null;
     }
-    const { x: shoulderX, y: shoulderY } = monkeyShoulder(this.latchArm);
+    const { x: shoulderX, y: shoulderY } = monkeyShoulder(this.latchArm, kind);
     const latch = computeLatchArmAngle(
       this.anchor.x,
       this.anchor.y,
@@ -930,7 +943,7 @@ export class Player {
     time: number,
     menuPreview: boolean
   ) {
-    if (this.characterId === "monkey") {
+    if (this.monkeyKind) {
       this.drawMonkeyCharacter(ctx, time, menuPreview);
       return;
     }
@@ -1017,7 +1030,8 @@ export class Player {
     ctx.restore();
     if (charged) this.drawChargeRing(ctx, 0, 0, glowR);
 
-    drawMonkey(ctx, time, this.buildMonkeyPose(menuPreview));
+    if (this.monkeyKind === "plain") drawPlainMonkey(ctx, time, this.buildMonkeyPose(menuPreview));
+    else drawMonkey(ctx, time, this.buildMonkeyPose(menuPreview));
     ctx.restore();
   }
 
@@ -1027,7 +1041,7 @@ export class Player {
     }
 
     if (this.state === "swing" && this.anchor) {
-      const { x: shoulderX, y: shoulderY } = monkeyShoulder(this.latchArm);
+      const { x: shoulderX, y: shoulderY } = monkeyShoulder(this.latchArm, this.monkeyKind ?? "king");
       const latch = computeLatchArmAngle(
         this.anchor.x,
         this.anchor.y,
@@ -1049,6 +1063,7 @@ export class Player {
 
     return {
       menuPreview: false as const,
+      dash: this.state === "dash",
     };
   }
 

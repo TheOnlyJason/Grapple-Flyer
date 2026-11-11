@@ -1,4 +1,4 @@
-export type CharacterId = "plane" | "monkey" | "nyan";
+export type CharacterId = "plane" | "baseMonkey" | "monkey" | "nyan";
 
 export interface CharacterDef {
   id: CharacterId;
@@ -7,7 +7,11 @@ export interface CharacterDef {
 
 export const CHARACTERS: CharacterDef[] = [
   { id: "plane", name: "Paper Plane" },
-  { id: "monkey", name: "Monkey" },
+  // The plain monkey: no crown, no cloud — it leaps and swings on its own.
+  { id: "baseMonkey", name: "Monkey" },
+  // The crowned monkey on its golden cloud. The internal id stays "monkey"
+  // for save-data compatibility (it was the only monkey until 1.3).
+  { id: "monkey", name: "Monkey King" },
   // Display name steers clear of the "Nyan Cat" trademark (App Review 5.2);
   // the internal id stays for save-data compatibility.
   { id: "nyan", name: "Rainbow Cat" },
