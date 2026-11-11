@@ -6,6 +6,7 @@ import {
   drawPlainMonkey,
   computeLatchArmAngle,
   monkeyShoulder,
+  plainLatchShoulder,
   type LatchArm,
   type MonkeyKind,
 } from "../render/drawMonkey";
@@ -647,7 +648,39 @@ export class Player {
 
   // --- Rendering -----------------------------------------------------------
 
+  // The plain monkey eases between its leap (0) and hanging from the rope
+  // (1) — in over about 0.1 s, out over about 0.12 s — and remembers the grip
+  // it last held so the arm can ease back from it after a release.
+  private plainHang = 0;
+  private plainTime = -1;
+  private plainLastLatch: { latchArm: LatchArm; latchAngle: number; latchLength: number } | null = null;
+
+  private updatePlainHang(time: number, menuPreview: boolean) {
+    const dt = this.plainTime < 0 ? 0 : clamp(time - this.plainTime, 0, 0.05);
+    this.plainTime = time;
+    const onRope = !menuPreview && this.state === "swing" && this.anchor !== null;
+    this.plainHang = onRope ? Math.min(1, this.plainHang + dt / 0.1) : Math.max(0, this.plainHang - dt / 0.12);
+    if (onRope) {
+      const g = this.plainLatch();
+      if (g) this.plainLastLatch = { latchArm: this.latchArm, latchAngle: g.angle, latchLength: g.length };
+    }
+  }
+
+  /** The plain monkey's grip on the rope: its shoulder, and the arm's angle and length. */
+  private plainLatch(): { sx: number; sy: number; angle: number; length: number } | null {
+    if (!this.anchor) return null;
+    const dx = this.anchor.x - this.x;
+    const dy = this.anchor.y - this.y;
+    const d = Math.hypot(dx, dy) || 1;
+    // The direction to the anchor in the body's frame (+x = ahead).
+    const localX = (dx * Math.cos(-this.angle) - dy * Math.sin(-this.angle)) / d;
+    const { x: sx, y: sy } = plainLatchShoulder(this.latchArm, localX);
+    const latch = computeLatchArmAngle(this.anchor.x, this.anchor.y, this.x, this.y, this.angle, sx, sy);
+    return { sx, sy, angle: latch.angle, length: latch.length };
+  }
+
   draw(ctx: CanvasRenderingContext2D, time: number, menuPreview = false) {
+    if (this.characterId === "baseMonkey") this.updatePlainHang(time, menuPreview);
     if (this.characterId === "plane" || this.characterId === "baseMonkey") {
       this.drawMotionTrail(ctx, time);
     } else if (this.characterId === "monkey") {
@@ -918,8 +951,9 @@ export class Player {
     if (!kind || this.state !== "swing" || !this.anchor) {
       return null;
     }
-    const { x: shoulderX, y: shoulderY } = monkeyShoulder(this.latchArm, kind);
-    const latch = computeLatchArmAngle(
+    const plain = kind === "plain" ? this.plainLatch() : null;
+    const { x: shoulderX, y: shoulderY } = plain ? { x: plain.sx, y: plain.sy } : monkeyShoulder(this.latchArm, kind);
+    const latch = plain ?? computeLatchArmAngle(
       this.anchor.x,
       this.anchor.y,
       this.x,
@@ -1040,7 +1074,16 @@ export class Player {
       return { menuPreview: true as const };
     }
 
+    const plain = this.monkeyKind === "plain";
     if (this.state === "swing" && this.anchor) {
+      if (plain) {
+        const g = this.plainLatch()!;
+        return {
+          menuPreview: false as const,
+          hang: this.plainHang,
+          swing: { latchArm: this.latchArm, latchAngle: g.angle, latchLength: g.length, shoulderX: g.sx, shoulderY: g.sy },
+        };
+      }
       const { x: shoulderX, y: shoulderY } = monkeyShoulder(this.latchArm, this.monkeyKind ?? "king");
       const latch = computeLatchArmAngle(
         this.anchor.x,
@@ -1064,6 +1107,7 @@ export class Player {
     return {
       menuPreview: false as const,
       dash: this.state === "dash",
+      ...(plain ? { hang: this.plainHang, lastLatch: this.plainLastLatch ?? undefined } : {}),
     };
   }
 

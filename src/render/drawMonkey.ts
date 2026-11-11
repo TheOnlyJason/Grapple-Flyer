@@ -31,11 +31,42 @@ export interface MonkeyPose {
   menuPreview: boolean;
   /** Mid wind dash (the plain monkey goes arrow-straight). */
   dash?: boolean;
+  /**
+   * The plain monkey only: 0 = its flying leap, 1 = hanging from the rope,
+   * eased in between by the player so grabs and releases do not snap.
+   */
+  hang?: number;
   swing?: {
     latchArm: LatchArm;
     latchAngle: number;
     latchLength: number;
+    /** Where the gripping arm starts (the plain monkey's varies, see plainLatchShoulder). */
+    shoulderX?: number;
+    shoulderY?: number;
   };
+  /** The plain monkey easing out of a swing: the grip it just let go of. */
+  lastLatch?: {
+    latchArm: LatchArm;
+    latchAngle: number;
+    latchLength: number;
+  };
+}
+
+/**
+ * The plain monkey's gripping shoulder. Its leap puts both shoulders at the
+ * front of the torso, which is right while the anchor is ahead or overhead
+ * (every ordinary swing, the gold window included). Past the top of a loop
+ * the anchor ends up behind it, and from the front an arm cannot reach out
+ * past its own rump, so the rope seemed to plug into the fur: there the
+ * shoulder slides back toward the middle of the back. `anchorLocalX` is the
+ * x of the unit direction to the anchor in the body's frame (+ = ahead).
+ */
+export function plainLatchShoulder(latchArm: LatchArm, anchorLocalX: number): { x: number; y: number } {
+  const r = CONFIG.player.radius;
+  const base = monkeyShoulder(latchArm, "plain");
+  let t = clamp((-0.3 - anchorLocalX) / 0.5, 0, 1);
+  t = t * t * (3 - 2 * t);
+  return { x: base.x + (-r * 0.12 - base.x) * t, y: base.y };
 }
 
 function armAngles(
@@ -354,8 +385,8 @@ export function drawPlainMonkey(
   const ripple = Math.sin(time * 9);
   const swing = pose.swing;
   const dash = !!pose.dash;
-  const near = monkeyShoulder("right", "plain");
-  const far = monkeyShoulder("left", "plain");
+  let near = monkeyShoulder("right", "plain");
+  let far = monkeyShoulder("left", "plain");
 
   // Limb angles: 0 points down, negative forward, positive back.
   let nearArm = -1.2 + 0.06 * ripple;
@@ -364,24 +395,39 @@ export function drawPlainMonkey(
   let farArmLen = r * 1.0;
   let nearLeg = 1.05 - 0.1 * ripple;
   let farLeg = 1.25 + 0.1 * ripple;
+  // The arm gripping the rope (or just let go of), drawn over the body.
+  let gripArm: LatchArm | null = null;
   if (dash) {
     nearArm = -1.48;
     farArm = -1.56;
     nearArmLen = farArmLen = r * 1.12;
     nearLeg = 1.34;
     farLeg = 1.44;
-  } else if (swing) {
-    // Hanging from one hand: the free arm and the legs drop.
-    nearLeg = 0.45 - 0.05 * ripple;
-    farLeg = 0.78 + 0.05 * ripple;
-    if (swing.latchArm === "right") {
-      nearArm = swing.latchAngle;
-      nearArmLen = swing.latchLength;
-      farArm = 0.55;
-    } else {
-      farArm = swing.latchAngle;
-      farArmLen = swing.latchLength;
-      nearArm = 0.4;
+  } else {
+    // Hanging from one hand the free arm and the legs drop; they ease there
+    // and back (hang) while the gripping hand stays on the rope.
+    const h = clamp(pose.hang ?? (swing ? 1 : 0), 0, 1);
+    nearLeg += (0.45 - 0.05 * ripple - nearLeg) * h;
+    farLeg += (0.78 + 0.05 * ripple - farLeg) * h;
+    const grip = swing ?? (h > 0 ? pose.lastLatch : undefined);
+    if (grip) {
+      gripArm = grip.latchArm;
+      // Locked to the rope while swinging; easing back to the leap after.
+      const k = swing ? 1 : h;
+      if (grip.latchArm === "right") {
+        nearArm += (grip.latchAngle - nearArm) * k;
+        nearArmLen += (grip.latchLength - nearArmLen) * k;
+        farArm += (0.55 - farArm) * h;
+        if (swing && swing.shoulderX !== undefined) near = { x: swing.shoulderX, y: swing.shoulderY ?? near.y };
+      } else {
+        farArm += (grip.latchAngle - farArm) * k;
+        farArmLen += (grip.latchLength - farArmLen) * k;
+        nearArm += (0.4 - nearArm) * h;
+        if (swing && swing.shoulderX !== undefined) far = { x: swing.shoulderX, y: swing.shoulderY ?? far.y };
+      }
+    } else if (h > 0) {
+      nearArm += (0.4 - nearArm) * h;
+      farArm += (0.55 - farArm) * h;
     }
   }
 
@@ -395,15 +441,17 @@ export function drawPlainMonkey(
   ctx.quadraticCurveTo(-r * 1.3, r * 0.5 + wave, -r * 1.78, -r * 0.02 - wave);
   ctx.stroke();
 
-  // Far leg and far arm, behind the body.
+  // Far leg and far arm, behind the body — unless the far arm grips: then,
+  // like the Monkey King's back arm, it is drawn over the body.
   drawLimb(ctx, -r * 0.5, r * 0.34, farLeg, r * 0.95, r * 0.25, furDarkA);
-  drawLimb(ctx, far.x, far.y, farArm, farArmLen, r * 0.24, furDarkA);
+  if (gripArm !== "left") drawLimb(ctx, far.x, far.y, farArm, farArmLen, r * 0.24, furDarkA);
 
   // Torso, stretched along the line of flight.
   ctx.fillStyle = furA;
   ctx.beginPath();
   ctx.ellipse(-r * 0.12, r * 0.12, r * 0.92, r * 0.66, -0.12, 0, TAU);
   ctx.fill();
+  if (gripArm === "left") drawLimb(ctx, far.x, far.y, farArm, farArmLen, r * 0.24, furDarkA);
 
   // Near leg, head, near arm.
   drawLimb(ctx, -r * 0.42, r * 0.4, nearLeg, r * 0.95, r * 0.27, furA);
