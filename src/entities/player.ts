@@ -1080,7 +1080,7 @@ export class Player {
     ctx.restore();
     if (charged) this.drawChargeRing(ctx, 0, 0, glowR);
 
-    if (this.monkeyKind === "plain" && this.rig) drawMonkeyRig(ctx, this.rig, PLAIN_MONKEY_STYLE, this.latchArm === "right");
+    if (this.monkeyKind === "plain" && this.rig) drawMonkeyRig(ctx, this.rig, PLAIN_MONKEY_STYLE);
     else drawMonkey(ctx, time, this.buildMonkeyPose(menuPreview));
     ctx.restore();
   }

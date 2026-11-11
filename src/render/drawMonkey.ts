@@ -217,8 +217,8 @@ function drawMonkeyCrown(ctx: CanvasRenderingContext2D, r: number) {
   ctx.fill();
 }
 
-// The head both monkeys share: fur, two ears, the lighter face, the eyes.
-function drawMonkeyHead(
+// The head every monkey shares: fur, two ears, the lighter face, the eyes.
+export function drawMonkeyHead(
   ctx: CanvasRenderingContext2D,
   r: number,
   hx: number,

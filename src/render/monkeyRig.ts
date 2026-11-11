@@ -1,6 +1,8 @@
 // The base monkey: a jointed body every monkey is built on. A skeleton of
 // points in the body's own frame (units of the player radius; +x is the way
-// it faces, -y is up), two poses, and the drawing.
+// it faces, -y is up), two poses, and the drawing — in the game's flat,
+// soft style, the same shapes and colours as the Monkey King (its very head,
+// round-capped limbs ending in a dot, one body ellipse, one tail stroke).
 //
 //   In flight it leaps: the far arm reaching forward-up past the head for the
 //   next anchor, the near one forward-low, legs trailing with bent knees,
@@ -20,22 +22,19 @@
 import { CONFIG } from "../core/config";
 import { clamp, TAU } from "../core/math";
 import { hexA } from "../entities/anchor";
+import { drawMonkeyHead } from "./drawMonkey";
 
 export interface MonkeyStyle {
   fur: string;
   furDark: string;
   face: string;
-  belly: string;
-  hands: string;
 }
 
-/** The plain monkey's coat (the base model's own). */
+/** The plain monkey's coat: the Monkey King's own colours. */
 export const PLAIN_MONKEY_STYLE: MonkeyStyle = {
   fur: "#8B5E34",
   furDark: "#5C3A1E",
   face: "#C9956A",
-  belly: "#A97A4C",
-  hands: "#6A4226",
 };
 
 type P = { x: number; y: number };
@@ -146,7 +145,7 @@ export function solveMonkeyRig(input: RigInput): Rig {
   const fly = {
     chest: { x: 0.36, y: -0.06 },
     pelvis: { x: -0.42, y: 0.08 },
-    head: { x: 1.02, y: -0.34 },
+    head: { x: 1.0, y: -0.36 },
     headTilt: -0.12,
     nearShoulder: { x: 0.52, y: -0.26 },
     farShoulder: { x: 0.36, y: -0.24 },
@@ -192,7 +191,7 @@ export function solveMonkeyRig(input: RigInput): Rig {
     pelvis: { x: 0, y: 0.42 },
     // The head sits forward of the raised arm, a little down: it looks ahead
     // past the arm rather than up into it.
-    head: { x: 0.5, y: -0.92 },
+    head: { x: 0.6, y: -0.98 },
     headTilt: 0.18,
     nearShoulder: nearS,
     farShoulder: farS,
@@ -265,47 +264,23 @@ export function rigGripWorld(rig: Rig, gripNear: boolean, px: number, py: number
   return { x: px + (h.x * c - h.y * s) * r, y: py + (h.x * s + h.y * c) * r };
 }
 
-// The outline every part is drawn over, so overlapping fur still reads as
-// separate arms, legs and body.
-const OUTLINE = "#3a2412";
-
-function limb(
-  ctx: CanvasRenderingContext2D,
-  a: P,
-  b: P,
-  c: P,
-  wa: number,
-  wb: number,
-  color: string,
-  outline: number
-) {
+/**
+ * A two-bone limb in the Monkey King's style: one round-capped stroke per
+ * bone, the same width throughout, and a dot for the hand or foot.
+ */
+function limb(ctx: CanvasRenderingContext2D, a: P, b: P, c: P, width: number, color: string) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  for (const pass of [0, 1]) {
-    ctx.strokeStyle = pass === 0 ? hexA(OUTLINE, 0.85) : color;
-    const grow = pass === 0 ? outline * 2 : 0;
-    ctx.lineWidth = wa + grow;
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.stroke();
-    ctx.lineWidth = wb + grow;
-    ctx.beginPath();
-    ctx.moveTo(b.x, b.y);
-    ctx.lineTo(c.x, c.y);
-    ctx.stroke();
-  }
-}
-
-/** A filled ellipse with the outline drawn under it. */
-function blob(ctx: CanvasRenderingContext2D, x: number, y: number, rx: number, ry: number, rot: number, color: string, outline: number) {
-  ctx.fillStyle = hexA(OUTLINE, 0.85);
   ctx.beginPath();
-  ctx.ellipse(x, y, rx + outline, ry + outline, rot, 0, TAU);
-  ctx.fill();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.lineTo(c.x, c.y);
+  ctx.stroke();
   ctx.fillStyle = color;
   ctx.beginPath();
-  ctx.ellipse(x, y, rx, ry, rot, 0, TAU);
+  ctx.arc(c.x, c.y, width * 0.62, 0, TAU);
   ctx.fill();
 }
 
@@ -313,178 +288,51 @@ function blob(ctx: CanvasRenderingContext2D, x: number, y: number, rx: number, r
  * Draw the rig in the current transform (origin at the body's centre, not
  * yet rotated: the rig's own rotation is applied here).
  */
-export function drawMonkeyRig(ctx: CanvasRenderingContext2D, rig: Rig, style: MonkeyStyle, gripNear: boolean) {
+export function drawMonkeyRig(ctx: CanvasRenderingContext2D, rig: Rig, style: MonkeyStyle) {
   const r = CONFIG.player.radius;
   const S = (p: P): P => ({ x: p.x * r, y: p.y * r });
-  const fur = hexA(style.fur, 1);
-  const furDark = hexA(style.furDark, 1);
-  const hands = hexA(style.hands, 1);
-  const ol = r * 0.07; // outline width
+  const fur = hexA(style.fur, 0.98);
+  const furDark = hexA(style.furDark, 0.94);
 
   ctx.save();
   ctx.rotate(rig.rot);
 
-  // Tail: a tapering curve from the rump with a curl at the tip.
+  // Tail: one round-capped stroke from the rump, like the Monkey King's.
   {
     const [p0, p1, p2, p3] = rig.tail.map(S);
+    ctx.strokeStyle = furDark;
+    ctx.lineWidth = r * 0.26;
     ctx.lineCap = "round";
-    const steps = 10;
-    const pts: P[] = [p0];
-    for (let i = 1; i <= steps; i++) {
-      const t = i / steps;
-      const u = 1 - t;
-      pts.push({
-        x: u * u * u * p0.x + 3 * u * u * t * p1.x + 3 * u * t * t * p2.x + t * t * t * p3.x,
-        y: u * u * u * p0.y + 3 * u * u * t * p1.y + 3 * u * t * t * p2.y + t * t * t * p3.y,
-      });
-    }
-    for (const pass of [0, 1]) {
-      ctx.strokeStyle = pass === 0 ? hexA(OUTLINE, 0.85) : furDark;
-      for (let i = 1; i <= steps; i++) {
-        ctx.lineWidth = r * (0.22 - 0.12 * (i / steps)) + (pass === 0 ? ol * 2 : 0);
-        ctx.beginPath();
-        ctx.moveTo(pts[i - 1].x, pts[i - 1].y);
-        ctx.lineTo(pts[i].x, pts[i].y);
-        ctx.stroke();
-      }
-    }
+    ctx.beginPath();
+    ctx.moveTo(p0.x, p0.y);
+    ctx.bezierCurveTo(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y);
+    ctx.stroke();
   }
 
-  // Far limbs, behind the body.
-  limb(ctx, S(rig.farHip), S(rig.farKnee), S(rig.farFoot), r * 0.3, r * 0.25, furDark, ol);
-  limb(ctx, S(rig.farShoulder), S(rig.farElbow), S(rig.farHand), r * 0.26, r * 0.22, furDark, ol);
-  blob(ctx, rig.farHand.x * r, rig.farHand.y * r, r * (gripNear ? 0.15 : 0.18), r * (gripNear ? 0.15 : 0.18), 0, hands, ol);
-  blob(ctx, rig.farFoot.x * r, rig.farFoot.y * r, r * 0.19, r * 0.13, 0, hands, ol);
+  // The far leg and arm, in the darker fur, behind the body.
+  limb(ctx, S(rig.farHip), S(rig.farKnee), S(rig.farFoot), r * 0.27, furDark);
+  limb(ctx, S(rig.farShoulder), S(rig.farElbow), S(rig.farHand), r * 0.24, furDark);
 
-  // Torso: a broader chest tapering to the hips, with a lighter belly.
+  // Body: one soft ellipse along the spine.
   {
     const c = S(rig.chest);
     const p = S(rig.pelvis);
-    const ang = Math.atan2(p.y - c.y, p.x - c.x) - Math.PI / 2;
-    const mid = { x: (c.x + p.x) / 2, y: (c.y + p.y) / 2 };
     const len = Math.hypot(p.x - c.x, p.y - c.y);
-    // One outline under all three, then the fur, so the torso is one shape.
-    ctx.fillStyle = hexA(OUTLINE, 0.85);
-    ctx.beginPath();
-    ctx.ellipse(c.x, c.y, r * 0.56 + ol, r * 0.6 + ol, ang, 0, TAU);
-    ctx.ellipse(p.x, p.y, r * 0.48 + ol, r * 0.52 + ol, ang, 0, TAU);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.ellipse(mid.x, mid.y, r * 0.5 + ol, len * 0.62 + ol, ang, 0, TAU);
-    ctx.fill();
+    const ang = Math.atan2(p.y - c.y, p.x - c.x) - Math.PI / 2;
     ctx.fillStyle = fur;
     ctx.beginPath();
-    ctx.ellipse(c.x, c.y, r * 0.56, r * 0.6, ang, 0, TAU);
-    ctx.ellipse(p.x, p.y, r * 0.48, r * 0.52, ang, 0, TAU);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.ellipse(mid.x, mid.y, r * 0.5, len * 0.62, ang, 0, TAU);
-    ctx.fill();
-    // A lighter belly on the front of the body (+x is the way it faces).
-    ctx.fillStyle = hexA(style.belly, 0.9);
-    ctx.beginPath();
-    ctx.ellipse(mid.x + r * 0.2, mid.y + r * 0.04, r * 0.26, Math.hypot(p.x - c.x, p.y - c.y) * 0.52, ang, 0, TAU);
+    ctx.ellipse((c.x + p.x) / 2, (c.y + p.y) / 2, r * 0.68, len / 2 + r * 0.4, ang, 0, TAU);
     ctx.fill();
   }
 
-  // Near leg in front of the body.
-  limb(ctx, S(rig.nearHip), S(rig.nearKnee), S(rig.nearFoot), r * 0.33, r * 0.28, fur, ol);
-  blob(ctx, rig.nearFoot.x * r, rig.nearFoot.y * r, r * 0.21, r * 0.14, 0, hands, ol);
-
-  // If the far arm grips, the near arm hangs in front of the head; if the
-  // near arm grips it reaches up in front of it. Either way the near arm is
-  // drawn after the head.
-  drawHead(ctx, rig, style, r);
-
-  limb(ctx, S(rig.nearShoulder), S(rig.nearElbow), S(rig.nearHand), r * 0.29, r * 0.25, fur, ol);
-  // A rounded shoulder where the near arm meets the body (no outline: it
-  // blends the arm into the torso).
-  ctx.fillStyle = fur;
-  ctx.beginPath();
-  ctx.arc(rig.nearShoulder.x * r, rig.nearShoulder.y * r, r * 0.17, 0, TAU);
-  ctx.fill();
-  blob(ctx, rig.nearHand.x * r, rig.nearHand.y * r, r * (gripNear ? 0.19 : 0.17), r * (gripNear ? 0.19 : 0.17), 0, hands, ol);
-
-  ctx.restore();
-}
-
-function drawHead(ctx: CanvasRenderingContext2D, rig: Rig, style: MonkeyStyle, r: number) {
-  const hx = rig.head.x * r;
-  const hy = rig.head.y * r;
+  // The near leg, the head (the Monkey King's own), the near arm.
+  limb(ctx, S(rig.nearHip), S(rig.nearKnee), S(rig.nearFoot), r * 0.3, fur);
   ctx.save();
-  ctx.translate(hx, hy);
+  ctx.translate(rig.head.x * r, rig.head.y * r);
   ctx.rotate(rig.headTilt);
-  const fur = hexA(style.fur, 0.98);
-  const R = r * 0.52;
+  drawMonkeyHead(ctx, r, 0, 0, fur, style.face);
+  ctx.restore();
+  limb(ctx, S(rig.nearShoulder), S(rig.nearElbow), S(rig.nearHand), r * 0.27, fur);
 
-  // Ears, then the skull, each over the outline.
-  const ol = r * 0.07;
-  ctx.fillStyle = hexA(OUTLINE, 0.85);
-  ctx.beginPath();
-  ctx.arc(0, 0, R + ol, 0, TAU);
-  ctx.fill();
-  for (const [ex, ey] of [[-0.62, -0.42], [0.42, -0.62]] as const) {
-    ctx.beginPath();
-    ctx.arc(ex * R, ey * R, R * 0.36 + ol, 0, TAU);
-    ctx.fill();
-  }
-  ctx.fillStyle = fur;
-  for (const [ex, ey] of [[-0.62, -0.42], [0.42, -0.62]] as const) {
-    ctx.beginPath();
-    ctx.arc(ex * R, ey * R, R * 0.36, 0, TAU);
-    ctx.fill();
-  }
-  ctx.fillStyle = hexA(style.face, 0.75);
-  for (const [ex, ey] of [[-0.62, -0.42], [0.42, -0.62]] as const) {
-    ctx.beginPath();
-    ctx.arc(ex * R, ey * R, R * 0.19, 0, TAU);
-    ctx.fill();
-  }
-  ctx.fillStyle = fur;
-  ctx.beginPath();
-  ctx.arc(0, 0, R, 0, TAU);
-  ctx.fill();
-
-  // Face: a heart-shaped patch toward the front, a muzzle below it.
-  ctx.fillStyle = hexA(style.face, 0.96);
-  ctx.beginPath();
-  ctx.ellipse(R * 0.34, R * 0.02, R * 0.56, R * 0.66, 0.12, 0, TAU);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.ellipse(R * 0.58, R * 0.42, R * 0.4, R * 0.3, 0.2, 0, TAU);
-  ctx.fill();
-
-  // Brow, eyes, nostrils, mouth.
-  ctx.strokeStyle = hexA(style.furDark, 0.8);
-  ctx.lineWidth = R * 0.12;
-  ctx.lineCap = "round";
-  ctx.beginPath();
-  ctx.moveTo(R * 0.06, -R * 0.28);
-  ctx.quadraticCurveTo(R * 0.4, -R * 0.42, R * 0.78, -R * 0.24);
-  ctx.stroke();
-  ctx.fillStyle = hexA("#1a1220", 0.9);
-  for (const ex of [0.22, 0.62]) {
-    ctx.beginPath();
-    ctx.arc(ex * R, -R * 0.08, R * 0.12, 0, TAU);
-    ctx.fill();
-  }
-  ctx.fillStyle = hexA("#ffffff", 0.7);
-  for (const ex of [0.25, 0.65]) {
-    ctx.beginPath();
-    ctx.arc(ex * R, -R * 0.12, R * 0.04, 0, TAU);
-    ctx.fill();
-  }
-  ctx.fillStyle = hexA("#2a1810", 0.7);
-  for (const nx of [0.7, 0.86]) {
-    ctx.beginPath();
-    ctx.arc(nx * R, R * 0.32, R * 0.045, 0, TAU);
-    ctx.fill();
-  }
-  ctx.strokeStyle = hexA("#2a1810", 0.6);
-  ctx.lineWidth = R * 0.06;
-  ctx.beginPath();
-  ctx.moveTo(R * 0.46, R * 0.56);
-  ctx.quadraticCurveTo(R * 0.66, R * 0.64, R * 0.86, R * 0.52);
-  ctx.stroke();
   ctx.restore();
 }
