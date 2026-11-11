@@ -3,12 +3,12 @@ import { theme, mixColor } from "../render/theme";
 import { getPlayerSprite, isPlayerSpriteReady, PLAYER_SPRITE } from "../render/playerAsset";
 import {
   drawMonkey,
-  drawPlainMonkey,
   computeLatchArmAngle,
   monkeyShoulder,
   type LatchArm,
   type MonkeyKind,
 } from "../render/drawMonkey";
+import { drawMonkeyRig, PLAIN_MONKEY_STYLE, rigGripWorld, solveMonkeyRig, type Rig } from "../render/monkeyRig";
 import { drawNyanCat, NYAN_RAINBOW } from "../render/drawNyanCat";
 import type { CharacterId } from "../characters/registry";
 import { angleDelta, clamp, rad, TAU } from "../core/math";
@@ -647,7 +647,53 @@ export class Player {
 
   // --- Rendering -----------------------------------------------------------
 
+  // The base monkey's pose (src/render/monkeyRig.ts), solved once per draw so
+  // the rope ends in the very hand that is drawn; `rigHang` eases between
+  // flying (0) and hanging from the rope (1).
+  private rig: Rig | null = null;
+  private rigHang = 0;
+  private rigTime = -1;
+
+  private updateRig(time: number, menuPreview: boolean) {
+    const dt = this.rigTime < 0 ? 0 : clamp(time - this.rigTime, 0, 0.05);
+    this.rigTime = time;
+    const onRope = !menuPreview && this.state === "swing" && this.anchor !== null;
+    // In over about 0.12 s, out over about 0.2 s.
+    this.rigHang = onRope ? Math.min(1, this.rigHang + dt / 0.12) : Math.max(0, this.rigHang - dt / 0.2);
+    let rope: { x: number; y: number } | null = null;
+    if (this.anchor) {
+      const dx = this.anchor.x - this.x;
+      const dy = this.anchor.y - this.y;
+      const d = Math.hypot(dx, dy) || 1;
+      rope = { x: dx / d, y: dy / d };
+    }
+    const angle = menuPreview ? 0 : this.angle;
+    const rigProbe = solveMonkeyRig({
+      time,
+      angle,
+      hang: this.rigHang,
+      dash: this.state === "dash",
+      rope,
+      gripNear: this.latchArm === "right",
+      swingSpeed: 0,
+      speed: this.speed,
+    });
+    // Speed along the way the body faces: the free limbs trail behind it.
+    const swingSpeed = this.vx * Math.cos(rigProbe.rot) + this.vy * Math.sin(rigProbe.rot);
+    this.rig = solveMonkeyRig({
+      time,
+      angle,
+      hang: this.rigHang,
+      dash: this.state === "dash",
+      rope,
+      gripNear: this.latchArm === "right",
+      swingSpeed,
+      speed: this.speed,
+    });
+  }
+
   draw(ctx: CanvasRenderingContext2D, time: number, menuPreview = false) {
+    if (this.characterId === "baseMonkey") this.updateRig(time, menuPreview);
     if (this.characterId === "plane" || this.characterId === "baseMonkey") {
       this.drawMotionTrail(ctx, time);
     } else if (this.characterId === "monkey") {
@@ -918,7 +964,10 @@ export class Player {
     if (!kind || this.state !== "swing" || !this.anchor) {
       return null;
     }
-    const { x: shoulderX, y: shoulderY } = monkeyShoulder(this.latchArm, kind);
+    if (kind === "plain") {
+      return this.rig ? rigGripWorld(this.rig, this.latchArm === "right", this.x, this.y) : null;
+    }
+    const { x: shoulderX, y: shoulderY } = monkeyShoulder(this.latchArm);
     const latch = computeLatchArmAngle(
       this.anchor.x,
       this.anchor.y,
@@ -1014,7 +1063,8 @@ export class Player {
 
     ctx.save();
     ctx.translate(this.x, this.y);
-    ctx.rotate(this.angle);
+    // The base monkey turns itself (hanging from the rope it follows the rope).
+    if (this.monkeyKind !== "plain") ctx.rotate(this.angle);
 
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
@@ -1030,7 +1080,7 @@ export class Player {
     ctx.restore();
     if (charged) this.drawChargeRing(ctx, 0, 0, glowR);
 
-    if (this.monkeyKind === "plain") drawPlainMonkey(ctx, time, this.buildMonkeyPose(menuPreview));
+    if (this.monkeyKind === "plain" && this.rig) drawMonkeyRig(ctx, this.rig, PLAIN_MONKEY_STYLE, this.latchArm === "right");
     else drawMonkey(ctx, time, this.buildMonkeyPose(menuPreview));
     ctx.restore();
   }
@@ -1041,7 +1091,7 @@ export class Player {
     }
 
     if (this.state === "swing" && this.anchor) {
-      const { x: shoulderX, y: shoulderY } = monkeyShoulder(this.latchArm, this.monkeyKind ?? "king");
+      const { x: shoulderX, y: shoulderY } = monkeyShoulder(this.latchArm);
       const latch = computeLatchArmAngle(
         this.anchor.x,
         this.anchor.y,
@@ -1063,7 +1113,6 @@ export class Player {
 
     return {
       menuPreview: false as const,
-      dash: this.state === "dash",
     };
   }
 
