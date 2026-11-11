@@ -213,17 +213,26 @@ export function solveMonkeyRig(input: RigInput): Rig {
   const hangRot = input.rope ? Math.atan2(input.rope.x, -input.rope.y) : input.angle;
   const rot = lerpAngle(input.angle, hangRot, t);
 
-  const nearShoulder = pick("nearShoulder");
-  const farShoulder = pick("farShoulder");
-  const nearHip = pick("nearHip");
-  const farHip = pick("farHip");
-  // Elbows: a reaching arm bends out ahead of the line; a hanging arm bends
-  // back. Knees bend forward.
-  const armBend = (hangT: number): 1 | -1 => (hangT > 0.5 ? 1 : -1);
-  const nearArm = joint(nearShoulder, pick("nearHand"), UPPER_ARM, FOREARM, input.gripNear ? -1 : armBend(t));
-  const farArm = joint(farShoulder, pick("farHand"), UPPER_ARM, FOREARM, input.gripNear ? armBend(t) : -1);
-  const nearLeg = joint(nearHip, pick("nearFoot"), THIGH, SHIN, t > 0.5 ? -1 : 1);
-  const farLeg = joint(farHip, pick("farFoot"), THIGH, SHIN, t > 0.5 ? -1 : 1);
+  // Each pose solves its own elbows and knees with its own natural bends
+  // (in flight the reaching arms bend out ahead and the trailing legs bend
+  // down; hanging, a free arm bends back and the knees forward), and the two
+  // solutions blend, so no joint flips to its other side mid-grab.
+  type Limbs = { ns: P; ne: P; nh: P; fs: P; fe: P; fh: P; nhip: P; nk: P; nf: P; fhip: P; fk: P; ff: P };
+  const solve = (q: typeof fly, hanging: boolean): Limbs => {
+    const nArm = joint(q.nearShoulder, q.nearHand, UPPER_ARM, FOREARM, hanging ? (input.gripNear ? -1 : 1) : -1);
+    const fArm = joint(q.farShoulder, q.farHand, UPPER_ARM, FOREARM, hanging ? (input.gripNear ? 1 : -1) : -1);
+    const nLeg = joint(q.nearHip, q.nearFoot, THIGH, SHIN, hanging ? -1 : 1);
+    const fLeg = joint(q.farHip, q.farFoot, THIGH, SHIN, hanging ? -1 : 1);
+    return {
+      ns: q.nearShoulder, ne: nArm.mid, nh: nArm.end,
+      fs: q.farShoulder, fe: fArm.mid, fh: fArm.end,
+      nhip: q.nearHip, nk: nLeg.mid, nf: nLeg.end,
+      fhip: q.farHip, fk: fLeg.mid, ff: fLeg.end,
+    };
+  };
+  const a = solve(fly, false);
+  const b = solve(hangPose, true);
+  const L = (k: keyof Limbs) => lerpP(a[k], b[k], t);
 
   return {
     rot,
@@ -231,18 +240,18 @@ export function solveMonkeyRig(input: RigInput): Rig {
     pelvis: pick("pelvis"),
     head: pick("head"),
     headTilt: lerp(fly.headTilt, hangPose.headTilt, t),
-    nearShoulder,
-    nearElbow: nearArm.mid,
-    nearHand: nearArm.end,
-    farShoulder,
-    farElbow: farArm.mid,
-    farHand: farArm.end,
-    nearHip,
-    nearKnee: nearLeg.mid,
-    nearFoot: nearLeg.end,
-    farHip,
-    farKnee: farLeg.mid,
-    farFoot: farLeg.end,
+    nearShoulder: L("ns"),
+    nearElbow: L("ne"),
+    nearHand: L("nh"),
+    farShoulder: L("fs"),
+    farElbow: L("fe"),
+    farHand: L("fh"),
+    nearHip: L("nhip"),
+    nearKnee: L("nk"),
+    nearFoot: L("nf"),
+    farHip: L("fhip"),
+    farKnee: L("fk"),
+    farFoot: L("ff"),
     tail: fly.tail.map((p, i) => lerpP(p, hangPose.tail[i], t)),
   };
 }
