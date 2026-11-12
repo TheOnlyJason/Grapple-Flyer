@@ -171,6 +171,25 @@ play-bot (`LEGACY=1` the 1.2 ramp, `NOASSIST=1`, `NONE=`/`FULL=` other
 thresholds). The thresholds are a first guess from the bot (help in about a
 third to a half of its runs) and should be set from real play.
 
+### Zones: every 10,000 m
+
+A run passes through zones (`systems/zones.ts`, `CONFIG.zones`): every
+10,000 m the scenery and the weather change and the sky gains a twist, and a
+banner names it (ZONE 2 · RAIN · ROCKS DRIFT).
+
+| Zone | From | Weather | Twist |
+| --- | --- | --- | --- |
+| 1 Dusk Peaks | 0 m | the sky as it always was | — |
+| 2 Rain | 10,000 m | a cool tint, rain | rocks drift up and down |
+| 3 Snow | 20,000 m | a pale tint, snow | frosted anchors give way 0.9 s after a grab (you drop off with your speed, no slingshot) |
+| 4 Storm | 30,000 m | dark, heavy rain | lightning marks a column (1.2 s), then strikes it: in it when it strikes ends the run, a barrier takes it, a dash rides through |
+
+After the storm the last three go round again (rain at 40,000 m), each pass a
+quarter stronger. Twists come from the world's seeded generator and only in
+segments past the first zone, so the first 10,000 m are object for object
+what they were, and the daily run's zones are the same for everyone. The
+weather is drawing only, eased in over a zone's first 300 m.
+
 ### Chasing the best
 
 During a run a thin dashed gold line stands across the sky at the best

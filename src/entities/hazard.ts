@@ -34,6 +34,11 @@ export class Hazard {
   readonly ry: number;
   destroyed = false;
   shatter = 0; // remaining life of the break effect (1 → 0), then it's culled
+  // Rain zone: the rock drifts up and down, y = baseY + amp·sin(speed·t + phase).
+  private driftAmp = 0;
+  private driftSpeed = 0;
+  private driftPhase = 0;
+  private baseY = 0;
   private poly: Pt[] = [];
   private litFace: Pt[] = [];
   private shadowFace: Pt[] = [];
@@ -239,7 +244,27 @@ export class Hazard {
     }
   }
 
-  update(dt: number) {
+  /** Make the rock drift (rain zone). */
+  setDrift(amp: number, speed: number, phase: number) {
+    this.baseY = this.y;
+    this.driftAmp = amp;
+    this.driftSpeed = speed;
+    this.driftPhase = phase;
+  }
+
+  get drifting(): boolean {
+    return this.driftAmp > 0;
+  }
+
+  /** The vertical span a drifting rock sweeps (its centre's range). */
+  driftRange(): { min: number; max: number } {
+    return { min: this.baseY - this.driftAmp, max: this.baseY + this.driftAmp };
+  }
+
+  update(dt: number, time = 0) {
+    if (this.driftAmp > 0 && !this.destroyed) {
+      this.y = this.baseY + Math.sin(time * this.driftSpeed + this.driftPhase) * this.driftAmp;
+    }
     if (!this.destroyed) return;
     this.age += dt;
     this.shatter = Math.max(0, 1 - this.age / SH.life);

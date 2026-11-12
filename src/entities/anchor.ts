@@ -18,6 +18,13 @@ export class Anchor {
   pulse = 0; // grab feedback, decays to 0
   highlight = 0; // 0..1 grab-candidate emphasis (cyan), set by player each frame
   perfectGlow = 0; // 0..1 perfect-release window (gold), set while tethered
+  // Snow zone: a crumbling anchor gives way a moment after it is grabbed.
+  crumble = false;
+  /** Seconds left before it gives way once grabbed (< 0: not counting down). */
+  crumbleT = -1;
+  /** Given way: no longer grabbable, fading out (1 → 0). */
+  broken = false;
+  brokenFade = 1;
 
   constructor(
     x: number,
@@ -59,6 +66,7 @@ export class Anchor {
 
   update(dt: number, t: number) {
     if (this.kind === "moving") this.y = this.yAt(t);
+    if (this.broken) this.brokenFade = Math.max(0, this.brokenFade - dt * 2.5);
     if (this.pulse > 0) this.pulse = Math.max(0, this.pulse - dt * 2.2);
     // highlight / perfectGlow are set externally each frame; ease them down here.
     this.highlight *= Math.max(0, 1 - dt * 8);
@@ -66,6 +74,46 @@ export class Anchor {
   }
 
   draw(ctx: CanvasRenderingContext2D, t: number) {
+    if (this.broken) {
+      // Given way: a few icy shards falling away, fading.
+      const f = this.brokenFade;
+      if (f <= 0) return;
+      ctx.save();
+      ctx.globalAlpha = f * 0.8;
+      ctx.fillStyle = "#e8f4ff";
+      const fall = (1 - f) * 40;
+      for (let i = 0; i < 5; i++) {
+        const a = (i / 5) * TAU + 0.4;
+        ctx.beginPath();
+        ctx.arc(this.x + Math.cos(a) * (6 + fall * 0.4), this.y + Math.sin(a) * 6 + fall, 2.2, 0, TAU);
+        ctx.fill();
+      }
+      ctx.restore();
+      return;
+    }
+    this.drawAnchor(ctx, t);
+    if (this.crumble) {
+      // Frosted over: a pale ring and hairline cracks that open as it gives way.
+      const shake = this.crumbleT >= 0 ? Math.sin(t * 60) * 1.2 : 0;
+      ctx.save();
+      ctx.strokeStyle = "rgba(232,244,255,0.85)";
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.arc(this.x + shake, this.y, 12.5, 0, TAU);
+      ctx.stroke();
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      for (let i = 0; i < 3; i++) {
+        const a = i * 2.1 + 0.6;
+        ctx.moveTo(this.x + shake + Math.cos(a) * 4, this.y + Math.sin(a) * 4);
+        ctx.lineTo(this.x + shake + Math.cos(a + 0.3) * 11, this.y + Math.sin(a + 0.3) * 11);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  private drawAnchor(ctx: CanvasRenderingContext2D, t: number) {
     const moving = this.kind === "moving";
     const pulseR = 1 + this.pulse * 0.6;
     const baseR = 9;

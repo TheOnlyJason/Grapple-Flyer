@@ -78,6 +78,10 @@ if (!CASE) {
   for (const [label, ok, detail] of tamper.checks) check(ok, label, detail);
   const views = run("views", { FAKE_DATE: "2026-11-11T23:59:00" });
   for (const [label, ok, detail] of views.checks) check(ok, label, detail);
+  const zonesA = run("zones", { SIZE: "1280x720" });
+  const zonesB = run("zones", { SIZE: "568x320", ONLY_WORLD: "1" });
+  for (const [label, ok, detail] of zonesA.checks) check(ok, label, detail);
+  check(JSON.stringify(zonesA.deep) === JSON.stringify(zonesB.deep) && zonesA.deep.length > 100, "the daily world deep into the zones is the same on any screen", `${zonesA.deep.length} twists to 40 km`);
   const diff = run("difficulty", { FAKE_DATE: "2026-11-11T10:00:00" });
   for (const [label, ok, detail] of diff.checks) check(ok, label, detail);
   const intro = run("intro", { SIZE: "852x393", GALE_INTRO: "1", FAKE_DATE: "2026-11-11T10:00:00" });
@@ -265,6 +269,97 @@ if (CASE === "tamper") {
     ["tampered save: an unknown item cannot be bought", S.buy("trail:nope", 0) === false],
   ];
   console.log(JSON.stringify({ checks }));
+  process.exit(0);
+}
+
+if (CASE === "zones") {
+  // Every 10,000 m: rain (rocks drift), snow (anchors crumble), storm (lightning).
+  const checks = [];
+  const ok = (label, cond, detail = "") => checks.push([label, !!cond, detail]);
+  const Z = globalThis.window.GALE_CONFIG.zones;
+  // The day's world, generated eagerly 40 km out: where are the twists?
+  openPage("daily");
+  flyDaily();
+  for (let i = 0; i < 300 && game.state === "intro"; i++) frame();
+  const x0 = game.startX;
+  world.ensure(x0 + 40000 / 0.05);
+  const km = (x) => (x - x0) * 0.05;
+  const drift = world.hazards.filter((h) => h.drifting).map((h) => km(h.x));
+  const crumble = world.anchors.filter((a) => a.crumble).map((a) => km(a.x));
+  const bolts = world.lightning.map((b) => km(b.x));
+  const deep = [
+    ...world.hazards.filter((h) => h.drifting).map((h) => ["drift", Math.round(h.x - x0), Math.round(h.driftRange().min)]),
+    ...world.anchors.filter((a) => a.crumble).map((a) => ["crumble", Math.round(a.x - x0)]),
+    ...world.lightning.map((b) => ["bolt", Math.round(b.x - x0)]),
+  ].map((o) => JSON.stringify(o)).sort();
+  if (process.env.ONLY_WORLD) {
+    console.log(JSON.stringify({ checks, deep }));
+    process.exit(0);
+  }
+  // (Counted clear of the zone edges: a segment begun just before one can reach just past it.)
+  const inZ = (list, a, b) => list.filter((m) => m >= a + 50 && m < b - 50).length;
+  const BoltClass = world.lightning[0]?.constructor;
+  ok("the first 10 km has no twists (the sky as it always was)", inZ(drift, 0, 10000) + inZ(crumble, 0, 10000) + inZ(bolts, 0, 10000) === 0);
+  ok("10-20 km: rain, rocks drift", inZ(drift, 10000, 20000) > 5 && inZ(crumble, 10000, 20000) === 0 && inZ(bolts, 10000, 20000) === 0, `${inZ(drift, 10000, 20000)} drifting rocks`);
+  ok("20-30 km: snow, anchors crumble", inZ(crumble, 20000, 30000) > 5 && inZ(drift, 20000, 30000) === 0, `${inZ(crumble, 20000, 30000)} crumbling anchors`);
+  ok("30-40 km: storm, lightning", inZ(bolts, 30000, 40000) > 5 && inZ(crumble, 30000, 40000) === 0, `${inZ(bolts, 30000, 40000)} strikes`);
+  game.endRun({});
+  frame(150);
+  tapHome();
+
+  // In play. Put the run 20 km in (snow) and hang the player on a crumbling anchor.
+  flyTap();
+  for (let i = 0; i < 300 && game.state === "intro"; i++) frame();
+  const Anchor = world.anchors[0].constructor;
+  const quiet = (keep) => {
+    world.genX = player.x + 1e6;
+    world.hazards.length = 0;
+    world.lightning.length = 0;
+    world.anchors.length = 0;
+    if (keep) world.anchors.push(...keep);
+  };
+  game.startX = player.x - 20500 / 0.05;
+  frame(2);
+  ok("past 10 km a new zone's banner shows", game.buildHudData().zoneBanner && game.buildHudData().zoneBanner.name === "SNOW", JSON.stringify(game.buildHudData().zoneBanner));
+  const a = new Anchor(player.x + 120, player.y - 160, "normal");
+  a.crumble = true;
+  quiet([a]);
+  player.vx = 400;
+  player.vy = 0;
+  dispatch("pointerdown", { clientX: VW / 2, clientY: VH * 0.45, pointerId: 1 });
+  let grabbedAt = -1;
+  let droppedAt = -1;
+  for (let i = 0; i < 240; i++) {
+    frame();
+    if (grabbedAt < 0 && player.anchor === a) grabbedAt = i;
+    if (grabbedAt >= 0 && droppedAt < 0 && player.anchor !== a) droppedAt = i;
+  }
+  dispatch("pointerup", { clientX: VW / 2, clientY: VH * 0.45, pointerId: 1 });
+  frame(2);
+  const held = (droppedAt - grabbedAt) / 120;
+  ok("a crumbling anchor gives way about a second after the grab", grabbedAt >= 0 && Math.abs(held - Z.crumble.after) < 0.05 && a.broken, `held ${held.toFixed(2)} s`);
+  ok("...and cannot be grabbed again", player.findGrabTarget([a], game.camera) === null);
+
+  // Lightning: in its column when it strikes ends the run; a barrier takes it.
+  game.startX = player.x - 30500 / 0.05;
+  quiet([]);
+  player.state = "glide";
+  player.anchor = null;
+  player.vx = 5;
+  player.vy = -200;
+  const strike = () => {
+    const b = new BoltClass(player.x);
+    b.t = Z.lightning.warn - 0.005;
+    world.lightning.push(b);
+  };
+  game.barrier = true;
+  strike();
+  frame(3);
+  ok("a strike on a player with a barrier breaks the barrier, not the run", game.state === "playing" && !game.barrier);
+  strike();
+  frame(3);
+  ok("a strike in its column ends the run", game.state === "gameover" || game.state === "crashing", game.state);
+  console.log(JSON.stringify({ checks, deep }));
   process.exit(0);
 }
 

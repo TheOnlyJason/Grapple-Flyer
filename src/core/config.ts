@@ -121,6 +121,21 @@ export const CONFIG = {
     recentRuns: 3, // runs averaged (fewer than this on the swing: no assist)
   },
 
+  // Zones: every lengthM of a run the scenery and weather change and the sky
+  // gains a twist (see systems/zones.ts). Zone 1 is the sky as it always was.
+  zones: {
+    lengthM: 10000,
+    blendM: 300, // the weather eases in over this much of a zone's start
+    // Rain: rocks drift up and down.
+    drift: { chance: 0.6, amp: [40, 110], speed: [0.5, 1.1] },
+    // Snow: an anchor may crumble this long after it is grabbed.
+    crumble: { chance: 0.35, after: 0.9 },
+    // Storm: lightning marks a column (warn), then strikes it.
+    lightning: { chance: 0.32, warn: 1.2, strike: 0.35, width: 64 },
+    // After the storm the zones go round again, each pass this much stronger.
+    loopBoost: 0.25,
+  },
+
   // The moment between the tap that starts a run and the run: READY, GO.
   // Nothing is taken in it, so a first tap-and-let-go is not a wasted grab.
   intro: {

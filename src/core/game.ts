@@ -22,6 +22,7 @@ import { World } from "../systems/world";
 import { Particles } from "../systems/particles";
 import { Objectives } from "../systems/objectives";
 import { Tutorial } from "../systems/tutorial";
+import { zoneAt, type Zone } from "../systems/zones";
 import { Background } from "../render/background";
 import { Hud, HudData, type Page } from "../render/hud";
 import {
@@ -129,6 +130,13 @@ export class Game {
   private runAssist = 0;
   // The run has flown past the best marker (its pop is shown once).
   private bestPassed = false;
+  // Zones: the one the run is in (its banner shows on entering), the storm's
+  // flash, and the strikes already taken (a barrier takes one strike once).
+  private zoneIndex = 0;
+  private zoneBannerT = 0;
+  private stormFlash = 0;
+  private strikeSpent = new WeakSet<object>();
+  private frameDt = 1 / 60;
   // The pace (smoothed speed) the camera's speed pull follows.
   private paceSpeed = 0;
 
@@ -178,6 +186,8 @@ export class Game {
 
   private resetRunStats() {
     this.bestPassed = false;
+    this.zoneIndex = 0;
+    this.zoneBannerT = 0;
     this.distance = 0;
     this.bonus = 0;
     this.perfectCount = 0;
@@ -961,6 +971,18 @@ export class Game {
     }
 
     this.particles.update(dt * this.timeScale);
+    this.frameDt = dt;
+    // A new zone: its banner (the first zone has none).
+    if (this.state === "playing") {
+      const z = zoneAt(this.distance);
+      if (z.index > this.zoneIndex) {
+        this.zoneIndex = z.index;
+        this.zoneBannerT = ZONE_BANNER;
+        this.sound.objective();
+      }
+    }
+    if (this.zoneBannerT > 0 && this.state !== "paused") this.zoneBannerT = Math.max(0, this.zoneBannerT - dt);
+    if (this.stormFlash > 0) this.stormFlash = Math.max(0, this.stormFlash - dt * 3);
     if (this.fade > 0) this.fade = Math.max(0, this.fade - dt * 2.6);
     this.tutorial.animate(dt);
     this.hud.update(dt);
@@ -1193,6 +1215,7 @@ export class Game {
     this.handleCollectibles();
     this.handlePowerUps();
     this.handleHazards();
+    if (this.state === "playing") this.handleZoneTwists(dt);
 
     // Cloud-sea death floor — skid to a stop before run over.
     if (this.player.y >= this.world.seaLevel && this.tutorial.active) {
@@ -1267,6 +1290,9 @@ export class Game {
       switch (e.type) {
         case "grab": {
           this.tutorial.onGrab();
+          // Snow zone: a crumbling anchor starts to give way.
+          const a = this.player.anchor;
+          if (a && a.crumble && a.crumbleT < 0 && !a.broken) a.crumbleT = CONFIG.zones.crumble.after;
           this.sound.grab();
           this.particles.emit(e.x, e.y, {
             count: 8,
@@ -1431,6 +1457,52 @@ export class Game {
   // second rock overlapping the first can't end the run on the next step. It
   // has its own timer: it is not a speed smash, so it must not light the
   // smash HUD, fire the smash hint or count toward the smash objective.
+  /**
+   * The zones' twists that act on the run: a crumbling anchor gives way
+   * (snow), lightning strikes its column (storm). Rocks drifting (rain)
+   * need nothing here: a rock is a rock wherever it is.
+   */
+  private handleZoneTwists(dt: number) {
+    const p = this.player;
+    for (const a of this.world.anchors) {
+      if (a.crumbleT < 0 || a.broken) continue;
+      a.crumbleT -= dt;
+      if (a.crumbleT > 0) continue;
+      a.broken = true;
+      if (p.anchor === a) p.dropTether();
+      this.particles.emit(a.x, a.y, {
+        count: 12,
+        speed: [40, 180],
+        life: [0.3, 0.7],
+        size: [1.5, 3.5],
+        color: "#e8f4ff",
+        gravity: 260,
+        additive: false,
+      });
+      this.sound.shatter();
+    }
+    for (const b of this.world.lightning) {
+      const wasStriking = b.striking;
+      b.update(dt, this.camera.right);
+      if (b.striking && !wasStriking) {
+        this.stormFlash = 1;
+        this.camera.addShake(6);
+        this.sound.crash();
+      }
+      if (!b.striking || this.strikeSpent.has(b) || !b.hits(p.x, CONFIG.player.radius)) continue;
+      // A dash rides through it; the barrier takes it; otherwise it ends the run.
+      if (p.hazardInvuln > 0) continue;
+      this.strikeSpent.add(b);
+      if (this.barrier) {
+        this.breakBarrier(p.x, p.y);
+        continue;
+      }
+      p.kill();
+      this.endRun({ crashSound: true });
+      return;
+    }
+  }
+
   private breakBarrier(x: number, y: number) {
     this.barrier = false;
     this.barrierGrace = CONFIG.powerups.barrier.grace;
@@ -1574,6 +1646,14 @@ export class Game {
 
     this.background.drawForeground(ctx, cam, this.time);
     this.background.drawAmbient(ctx, cam, this.time);
+    this.drawWeather(ctx, cam);
+    // Lightning over the weather (the storm's dark must not dim a strike).
+    if (this.world.lightning.length) {
+      ctx.save();
+      cam.apply(ctx);
+      for (const b of this.world.lightning) b.draw(ctx, cam.y - 40, this.world.seaLevel);
+      ctx.restore();
+    }
     this.drawBestMarker(ctx, cam);
     this.drawVignette(ctx, cam);
     if (this.fade > 0) {
@@ -1581,6 +1661,64 @@ export class Game {
       ctx.fillRect(0, 0, cam.w, cam.h);
     }
     this.hud.drawScreen(ctx, cam, this.buildHudData());
+  }
+
+  /** The zone the screen shows: the run's, or none on the menus. */
+  private viewZone(): Zone | null {
+    if (this.state !== "playing" && this.state !== "paused" && this.state !== "crashing") return null;
+    const z = zoneAt(this.distance);
+    return z.index > 0 ? z : null;
+  }
+
+  /**
+   * The zone's weather over the scene: a tint, then rain streaks or snow
+   * (screen space, a fixed few dozen, cheap), and in the storm the flash of
+   * a strike. Drawing only.
+   */
+  private drawWeather(ctx: CanvasRenderingContext2D, cam: Camera) {
+    const z = this.viewZone();
+    if (!z) return;
+    const k = z.blend;
+    const id = z.def.id;
+    const { w, h } = cam;
+    const dt = this.state === "paused" ? 0 : this.frameDt;
+    ctx.save();
+    ctx.fillStyle =
+      id === "rain" ? `rgba(60,82,112,${0.16 * k})` : id === "snow" ? `rgba(236,243,255,${0.14 * k})` : `rgba(12,14,34,${0.34 * k})`;
+    ctx.fillRect(0, 0, w, h);
+    if (id === "snow") {
+      ctx.fillStyle = `rgba(255,255,255,${0.85 * k})`;
+      for (const f of FLAKES) {
+        f.y += f.v * dt;
+        f.x += Math.sin(this.time * 1.3 + f.p) * 20 * dt - this.player.vx * 0.02 * dt;
+        if (f.y > 1) f.y -= 1.05;
+        if (f.x < -0.02) f.x += 1.04;
+        ctx.beginPath();
+        ctx.arc(f.x * w, f.y * h, f.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else {
+      const storm = id === "storm";
+      ctx.strokeStyle = `rgba(205,222,255,${(storm ? 0.42 : 0.32) * k})`;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      const n = storm ? DROPS.length : Math.floor(DROPS.length * 0.65);
+      for (let i = 0; i < n; i++) {
+        const d = DROPS[i];
+        d.y += d.v * dt;
+        if (d.y > 1.05) d.y -= 1.1;
+        const x = d.x * w;
+        const y = d.y * h;
+        ctx.moveTo(x, y);
+        ctx.lineTo(x - 4, y + 16);
+      }
+      ctx.stroke();
+      if (storm && this.stormFlash > 0) {
+        ctx.fillStyle = `rgba(235,240,255,${0.38 * this.stormFlash})`;
+        ctx.fillRect(0, 0, w, h);
+      }
+    }
+    ctx.restore();
   }
 
   /** The best distance in view during a run (its swing's, or the day's): 0 for none. */
@@ -1726,6 +1864,10 @@ export class Game {
       // The run just flown against the record it counts toward (below it: "91% OF YOUR BEST").
       bestPct: ofRun && this.state === "gameover" && !this.newBest && !this.newDailyBest ? this.percentOfBest(swing, daily) : 0,
       page: this.page,
+      zoneBanner:
+        this.zoneBannerT > 0
+          ? { index: this.zoneIndex + 1, ...zoneAt(this.distance).def, alpha: Math.min(1, (ZONE_BANNER - this.zoneBannerT) / 0.3, this.zoneBannerT / 0.6) }
+          : null,
       intro: { t: this.introT, total: CONFIG.intro.seconds },
       extras: this.extrasShown,
       // The result on a page is the daily try just flown (the home screen's is state "gameover").
@@ -1785,6 +1927,11 @@ export class Game {
 }
 
 const NO_TRAILS: readonly boolean[] = [];
+/** Seconds a new zone's banner stays up. */
+const ZONE_BANNER = 3.2;
+/** Weather particles, in screen fractions (drawing only). */
+const DROPS = Array.from({ length: 90 }, (_, i) => ({ x: ((i * 0.6180339) % 1), y: ((i * 0.381966 + 0.13) % 1.1), v: 0.9 + ((i * 0.7548) % 1) * 0.6 }));
+const FLAKES = Array.from({ length: 60 }, (_, i) => ({ x: ((i * 0.6180339) % 1), y: ((i * 0.27 + 0.05) % 1), v: 0.05 + ((i * 0.7548) % 1) * 0.06, r: 1.2 + ((i * 0.31) % 1) * 1.8, p: i * 1.7 }));
 /** Seconds after HOME before a tap on the home screen flies (a double tap on HOME stays home). */
 const HOME_GUARD = 0.4;
 /** Seconds after a daily try ends before FLY takes a tap (the result is seen first). */

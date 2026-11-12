@@ -169,6 +169,7 @@ export class Player {
     const range = CONFIG.tether.grabRange;
     const VIS = 12; // anchor centre must be this far inside the screen edge
     for (const a of anchors) {
+      if (a.broken) continue; // a crumbled anchor (snow zone) is gone
       const dx = a.x - this.x;
       const dy = a.y - this.y;
       const d = Math.hypot(dx, dy);
@@ -253,6 +254,19 @@ export class Player {
     this.state = "glide";
     this.inPerfectWindow = false;
     this.perfectQuality = 0;
+  }
+
+  /**
+   * The anchor gives way under the player (snow zone): off the rope with the
+   * speed they have, no slingshot.
+   */
+  dropTether() {
+    if (!this.anchor) return;
+    this.anchor = null;
+    this.state = "glide";
+    this.inPerfectWindow = false;
+    this.perfectQuality = 0;
+    this.regrabAnchor = null;
   }
 
   startDash(): boolean {

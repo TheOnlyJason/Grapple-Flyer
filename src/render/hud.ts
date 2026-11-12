@@ -62,6 +62,8 @@ type Circle = { x: number; y: number; r: number };
 
 export interface HudData {
   state: "menu" | "intro" | "playing" | "paused" | "crashing" | "gameover";
+  /** A new zone's banner while it shows: its number, name, twist, and opacity. */
+  zoneBanner: { index: number; name: string; twist: string; alpha: number } | null;
   /** The intro between the tap and the run: seconds into it, and its length. */
   intro: { t: number; total: number };
   score: number;
@@ -602,6 +604,7 @@ export class Hud {
 
     if (d.tutorial.active || d.tutorial.alpha > 0.01) this.drawTutorial(ctx, cam, d);
 
+    if (d.zoneBanner && !paused) this.drawZoneBanner(ctx, cam, d.zoneBanner);
     if (paused) this.drawPauseOverlay(ctx, cam, d);
 
     // --- Pause / resume and mute (top-right corner, above overlay) ---
@@ -1083,6 +1086,21 @@ export class Hud {
     else if (d.page === "settings") this.drawSettingsPage(ctx, cam, d);
     else if (d.page === "daily") this.drawDailyPage(ctx, cam, d, now);
     else this.drawHomePage(ctx, cam, d, mode === "gameover", breathe, now);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+  }
+
+  /** A new zone: ZONE 2, its name, and what is new in it — quiet type in the upper sky. */
+  private drawZoneBanner(ctx: CanvasRenderingContext2D, cam: Camera, z: { index: number; name: string; twist: string; alpha: number }) {
+    const cx = cam.w / 2;
+    const cy = Math.max(cam.insets.top + 70, cam.h * 0.24);
+    ctx.save();
+    ctx.globalAlpha = clamp(z.alpha, 0, 1);
+    ctx.textBaseline = "middle";
+    this.spaced(ctx, `ZONE ${z.index}`, cx, cy - 30, 11, "800", hexA(PALETTE.anchorPerfect, 0.95), 0.45, "center", 0.35);
+    this.spaced(ctx, z.name, cx, cy, Math.round(clamp(cam.w * 0.045, 26, 40)), "300", PALETTE.text, 0.35, "center", 0.35);
+    if (z.twist) this.spaced(ctx, z.twist, cx, cy + 30, 11, "700", hexA(PALETTE.text, 0.85), 0.35, "center", 0.35);
+    ctx.restore();
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
   }

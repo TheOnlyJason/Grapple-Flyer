@@ -6,6 +6,8 @@ import { Cloud } from "../entities/cloud";
 import { Collectible } from "../entities/collectible";
 import { Hazard } from "../entities/hazard";
 import { PowerUp, POWERUP_KINDS } from "../entities/powerup";
+import { Lightning } from "../entities/lightning";
+import { twistChance, zoneAt } from "./zones";
 
 const SPAWN_BUFFER = 700;
 const CULL_BUFFER = 500;
@@ -25,6 +27,8 @@ export class World {
   collectibles: Collectible[] = [];
   hazards: Hazard[] = [];
   powerups: PowerUp[] = [];
+  /** Storm zone: lightning columns. */
+  lightning: Lightning[] = [];
 
   private rng = new Rng();
   private genX = 0;
@@ -58,6 +62,7 @@ export class World {
     this.collectibles = [];
     this.hazards = [];
     this.powerups = [];
+    this.lightning = [];
     this.genX = startX;
     this.runOriginX = startX;
     this.nextPowerX = startX + CONFIG.powerups.firstAt;
@@ -161,6 +166,9 @@ export class World {
     for (const h of this.hazards) if (h.x - h.rx <= keepUntilX) this.hazards[w++] = h;
     this.hazards.length = w;
     w = 0;
+    for (const b of this.lightning) if (b.x <= keepUntilX) this.lightning[w++] = b;
+    this.lightning.length = w;
+    w = 0;
     for (const p of this.powerups) if (p.x <= keepUntilX) this.powerups[w++] = p;
     this.powerups.length = w;
 
@@ -223,6 +231,7 @@ export class World {
     }
 
     const segAnchors: Anchor[] = [];
+    const hazardsBefore = this.hazards.length;
     for (let i = 0; i < anchorCount; i++) {
       const rescue = drought && i === 0;
       const ax = rescue
@@ -350,6 +359,44 @@ export class World {
       this.powerups.push(new PowerUp(px, py, kind));
       this.nextPowerX = segEnd + rng.range(CONFIG.powerups.gap[0], CONFIG.powerups.gap[1]);
     }
+
+    // --- The zone's twist. Drawn last, and only past the first zone, so the
+    // first zone's sky is exactly what it always was.
+    const zone = zoneAt((segStart - this.runOriginX) * CONFIG.world.metersPerPixel);
+    if (zone.index > 0) this.addTwist(zone, segStart, segEnd, hazardsBefore, segAnchors);
+  }
+
+  private addTwist(
+    zone: ReturnType<typeof zoneAt>,
+    segStart: number,
+    segEnd: number,
+    hazardsBefore: number,
+    segAnchors: Anchor[]
+  ) {
+    const rng = this.rng;
+    const Z = CONFIG.zones;
+    const { top, bottom } = this.altitudeBounds();
+    if (zone.def.id === "rain") {
+      for (let i = hazardsBefore; i < this.hazards.length; i++) {
+        const h = this.hazards[i];
+        if (!rng.chance(twistChance(Z.drift.chance, zone))) continue;
+        let amp = rng.range(Z.drift.amp[0], Z.drift.amp[1]);
+        amp = Math.min(amp, Math.max(0, h.y - top), Math.max(0, bottom - h.y));
+        h.setDrift(amp, rng.range(Z.drift.speed[0], Z.drift.speed[1]), rng.range(0, Math.PI * 2));
+        // No orb may sit in the band the rock sweeps.
+        const span = h.driftRange();
+        for (const c of this.collectibles) {
+          if (c.kind !== "orb" || c.collected) continue;
+          if (Math.abs(c.baseX - h.x) < h.rx + 22 && c.baseY > span.min - h.ry - 22 && c.baseY < span.max + h.ry + 22) c.collected = true;
+        }
+      }
+    } else if (zone.def.id === "snow") {
+      for (const a of segAnchors) if (rng.chance(twistChance(Z.crumble.chance, zone))) a.crumble = true;
+    } else if (zone.def.id === "storm") {
+      if (rng.chance(twistChance(Z.lightning.chance, zone))) {
+        this.lightning.push(new Lightning(rng.range(segStart + 60, segEnd - 60)));
+      }
+    }
   }
 
   private addOrb(x: number, y: number) {
@@ -374,7 +421,7 @@ export class World {
   ) {
     for (const a of this.anchors) a.update(dt, time);
     for (const c of this.clouds) c.update(dt);
-    for (const h of this.hazards) h.update(dt);
+    for (const h of this.hazards) h.update(dt, time);
     for (const p of this.powerups) p.update(time);
 
     for (const col of this.collectibles) {
@@ -429,6 +476,14 @@ export class World {
       if (p.x > limit && !p.collected) powerups[w++] = p;
     }
     powerups.length = w;
+
+    const bolts = this.lightning;
+    w = 0;
+    for (let i = 0; i < bolts.length; i++) {
+      const b = bolts[i];
+      if (b.x + b.width > limit && !b.done) bolts[w++] = b;
+    }
+    bolts.length = w;
 
     const hazards = this.hazards;
     w = 0;
