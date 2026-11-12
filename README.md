@@ -202,6 +202,11 @@ into the bottom edge of the screen and whips past (mossy spires trickling
 water, snow-laden pine tops, dead branching trees), soft and dark so it reads
 as scenery and never as something to dodge.
 
+Behind the mountains each zone has a sky effect (`Background.drawZoneSky`):
+a rainbow as the rain begins (gone after its first 2 km), an aurora over the
+snow at night, and lightning flickering far off on the storm's horizon (a
+picture only; the strikes that matter are the marked columns).
+
 After the storm the last three go round again (rain at 40,000 m), each pass a
 quarter stronger. Twists come from the world's seeded generator and only in
 segments past the first zone, so the first 10,000 m are object for object

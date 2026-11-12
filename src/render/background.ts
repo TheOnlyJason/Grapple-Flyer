@@ -443,10 +443,101 @@ export class Background {
   // it has eased in (0..1): islands, wildlife and the foreground follow it.
   private zone: string | null = null;
   private zoneK = 0;
+  private zoneInto = 0;
 
-  setZone(zone: string | null, k: number) {
+  setZone(zone: string | null, k: number, intoM = 0) {
     this.zone = zone;
     this.zoneK = zone ? clamp(k, 0, 1) : 0;
+    this.zoneInto = intoM;
+  }
+
+  /**
+   * The zone's sky effect, behind the mountains: a rainbow as the rain
+   * begins (it fades after the first ~2 km), an aurora over the snow at
+   * night, and in the storm lightning flickering far off on the horizon
+   * (only a picture: the strikes that matter are the marked columns).
+   */
+  drawZoneSky(ctx: CanvasRenderingContext2D, cam: Camera, time: number) {
+    const id = this.zone;
+    const k = this.zoneK;
+    if (!id || k <= 0.02) return;
+    const { w, h } = cam;
+    ctx.save();
+    if (id === "rain") {
+      const a = k * clamp(1 - (this.zoneInto - 800) / 1400, 0, 1) * 0.22;
+      if (a > 0.005) {
+        const cx = w * 0.62 - cam.x * 0.01 % w;
+        const cy = h * 1.02;
+        const r0 = h * 0.62;
+        const bands = ["#ff6b6b", "#ffb36b", "#ffe46b", "#7fe08a", "#6fb6ff", "#a88bff"];
+        ctx.lineWidth = h * 0.022;
+        for (let b = 0; b < bands.length; b++) {
+          ctx.strokeStyle = hexA(bands[b], a);
+          ctx.beginPath();
+          ctx.arc(cx, cy, r0 - b * ctx.lineWidth, Math.PI, TAU);
+          ctx.stroke();
+        }
+      }
+    } else if (id === "snow") {
+      const night = clamp((theme.night - 0.35) / 0.5, 0, 1);
+      const a = k * night * 0.22;
+      if (a > 0.005) {
+        ctx.globalCompositeOperation = "lighter";
+        const cols = ["#7affc1", "#6fd0ff", "#c58bff"];
+        for (let r = 0; r < 3; r++) {
+          const y0 = h * (0.26 + r * 0.05);
+          const g = ctx.createLinearGradient(0, y0 - h * 0.12, 0, y0 + h * 0.06);
+          g.addColorStop(0, hexA(cols[r], 0));
+          g.addColorStop(0.7, hexA(cols[r], a));
+          g.addColorStop(1, hexA(cols[r], 0));
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          const step = w / 12;
+          ctx.moveTo(0, y0 + h * 0.06);
+          for (let i = 0; i <= 12; i++) {
+            const x = i * step;
+            const wave = Math.sin(i * 0.7 + time * (0.25 + r * 0.07) + r * 2) * h * 0.04;
+            ctx.lineTo(x, y0 - h * 0.12 + wave);
+          }
+          for (let i = 12; i >= 0; i--) {
+            const x = i * step;
+            const wave = Math.sin(i * 0.7 + time * (0.25 + r * 0.07) + r * 2) * h * 0.04;
+            ctx.lineTo(x, y0 + h * 0.06 + wave);
+          }
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+    } else if (id === "storm") {
+      // A far bolt every few seconds, somewhere along the horizon.
+      for (let n = 0; n < 2; n++) {
+        const period = 3.3 + n * 1.9;
+        const cycle = Math.floor((time + n * 1.3) / period);
+        const u = ((time + n * 1.3) % period) / period;
+        if (u > 0.06) continue;
+        const flick = u < 0.02 || (u > 0.035 && u < 0.05) ? 1 : 0.35;
+        const a = k * flick;
+        const x = w * (0.15 + hash01(cycle * 7 + n * 3) * 0.7);
+        const top = h * 0.18;
+        const bottom = h * (0.5 + hash01(cycle * 3 + n) * 0.12);
+        const g = ctx.createRadialGradient(x, bottom, 4, x, bottom, h * 0.35);
+        g.addColorStop(0, `rgba(220,200,255,${0.25 * a})`);
+        g.addColorStop(1, "rgba(220,200,255,0)");
+        ctx.fillStyle = g;
+        ctx.fillRect(x - h * 0.35, bottom - h * 0.35, h * 0.7, h * 0.7);
+        ctx.strokeStyle = `rgba(240,235,255,${0.55 * a})`;
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.moveTo(x, top);
+        const steps = 6;
+        for (let i = 1; i <= steps; i++) {
+          const y = top + ((bottom - top) * i) / steps;
+          ctx.lineTo(x + (hash01(cycle * 31 + i + n * 17) - 0.5) * h * 0.06, y);
+        }
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
   }
 
   /** How strongly a zone's look applies now (0 when the run is elsewhere). */

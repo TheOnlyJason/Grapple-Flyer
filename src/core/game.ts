@@ -943,7 +943,7 @@ export class Game {
     const vz = this.viewZone();
     updateTheme(this.time, vz ? vz.def.id : null, vz ? vz.blend : 0);
     // ...its islands, wildlife and foreground...
-    this.background.setZone(vz ? vz.def.id : null, vz ? vz.blend : 0);
+    this.background.setZone(vz ? vz.def.id : null, vz ? vz.blend : 0, vz ? vz.into : 0);
     // ...and its sound (silent while paused).
     this.sound.setZone(vz && this.state !== "paused" ? vz.def.id : null, vz ? vz.blend : 0);
     if (this.input.anyInteraction) this.sound.resume();
@@ -1619,6 +1619,7 @@ export class Game {
 
     this.background.drawSky(ctx, cam, this.time);
     this.background.drawSkyClouds(ctx, cam, this.time);
+    this.background.drawZoneSky(ctx, cam, this.time);
     this.background.drawMountains(ctx, cam);
     this.background.drawFar(ctx, cam, this.time);
     this.background.drawMid(ctx, cam);

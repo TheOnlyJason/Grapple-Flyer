@@ -29,6 +29,8 @@ export interface Zone {
   loop: number;
   /** How far into the zone, 0..1 over its first blendM (its weather eases in). */
   blend: number;
+  /** Metres into the zone. */
+  into: number;
 }
 
 /** The zone at `metres` into a run. */
@@ -37,9 +39,9 @@ export function zoneAt(metres: number): Zone {
   const m = Math.max(0, metres);
   const index = Math.floor(m / Z.lengthM);
   const into = m - index * Z.lengthM;
-  if (index === 0) return { index, def: ZONES[0], loop: 0, blend: 1 };
+  if (index === 0) return { index, def: ZONES[0], loop: 0, blend: 1, into };
   const k = index - 1;
-  return { index, def: ZONES[1 + (k % 3)], loop: Math.floor(k / 3), blend: Math.min(1, into / Z.blendM) };
+  return { index, def: ZONES[1 + (k % 3)], loop: Math.floor(k / 3), blend: Math.min(1, into / Z.blendM), into };
 }
 
 /** A twist's chance in a zone: stronger on each loop, never certain. */
