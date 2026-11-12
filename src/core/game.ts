@@ -942,6 +942,8 @@ export class Game {
     // The time of day, and the zone the run is in (its own sky eases in).
     const vz = this.viewZone();
     updateTheme(this.time, vz ? vz.def.id : null, vz ? vz.blend : 0);
+    // ...its islands, wildlife and foreground...
+    this.background.setZone(vz ? vz.def.id : null, vz ? vz.blend : 0);
     // ...and its sound (silent while paused).
     this.sound.setZone(vz && this.state !== "paused" ? vz.def.id : null, vz ? vz.blend : 0);
     if (this.input.anyInteraction) this.sound.resume();

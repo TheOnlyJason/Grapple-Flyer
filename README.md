@@ -193,6 +193,15 @@ sound, made in code like everything else (`Sound.setZone`): a soft rain hiss,
 a hollow wind for the snow, rain and a low rumble for the storm, and thunder
 on each strike; silent while paused or muted.
 
+The scenery follows the zone too (`Background.setZone`): in the rain water
+pours off the islands' undersides and birds fly low; in the snow the islands
+and their trees wear snow caps and slow white snow owls glide by; in the storm
+the islands are bare rock with a glowing violet crystal or two and only bats
+fly, day or night. Butterflies stay in Dusk Peaks. A near foreground rises
+into the bottom edge of the screen and whips past (mossy spires trickling
+water, snow-laden pine tops, dead branching trees), soft and dark so it reads
+as scenery and never as something to dodge.
+
 After the storm the last three go round again (rain at 40,000 m), each pass a
 quarter stronger. Twists come from the world's seeded generator and only in
 segments past the first zone, so the first 10,000 m are object for object

@@ -439,6 +439,20 @@ const REGION_LEN = 3000; // world units per region band
 // come from the live time-of-day `theme`, so the whole scene re-grades together
 // through dawn / day / golden hour / dusk / night.
 export class Background {
+  // The zone the run is in ("rain" | "snow" | "storm", or null) and how far
+  // it has eased in (0..1): islands, wildlife and the foreground follow it.
+  private zone: string | null = null;
+  private zoneK = 0;
+
+  setZone(zone: string | null, k: number) {
+    this.zone = zone;
+    this.zoneK = zone ? clamp(k, 0, 1) : 0;
+  }
+
+  /** How strongly a zone's look applies now (0 when the run is elsewhere). */
+  private z(id: string): number {
+    return this.zone === id ? this.zoneK : 0;
+  }
   // Screen-static gradients, rebuilt only when the quantized palette changes
   // (theme.version) or their anchoring geometry moves a few px (quantized
   // keys). Gradients tied to a moving point — sun halo/disc, moon halo, the
@@ -832,9 +846,16 @@ export class Background {
       this.drawFloatingIsland(ctx, sx, sy, scale, i, farCol, r2 > 0.35, time);
     }
 
-    this.drawBirds(ctx, cam, time);
-    this.drawBats(ctx, cam, time);
-    this.drawButterflies(ctx, cam, time);
+    // Wildlife: birds keep low in the rain and leave in the storm; bats come
+    // out in the storm at any hour; butterflies stay away from rain, snow and
+    // storm; snow owls glide through the snow.
+    const rain = this.z("rain");
+    const snow = this.z("snow");
+    const storm = this.z("storm");
+    this.drawBirds(ctx, cam, time, 1 - storm, rain);
+    this.drawBats(ctx, cam, time, storm);
+    this.drawButterflies(ctx, cam, time, 1 - Math.max(rain, snow, storm));
+    if (snow > 0) this.drawOwls(ctx, cam, time, snow);
 
     // Closer ridge — slightly larger islands, less fog.
     const spacing2 = 480;
@@ -870,19 +891,19 @@ export class Background {
     ctx.fill();
   }
 
-  private drawBirds(ctx: CanvasRenderingContext2D, cam: Camera, time: number) {
+  private drawBirds(ctx: CanvasRenderingContext2D, cam: Camera, time: number, keep = 1, low = 0) {
     const daylight = 1 - theme.night;
-    if (daylight < 0.35) return;
+    if (daylight < 0.35 || keep <= 0.02) return;
     const { w, h } = cam;
     const span = w * 3;
-    ctx.fillStyle = hexA(theme.mid, 0.62 * daylight);
+    ctx.fillStyle = hexA(theme.mid, 0.62 * daylight * keep);
     for (let k = 0; k < BIRD_FLOCKS.length; k++) {
       const F = BIRD_FLOCKS[k];
       const fx =
         (((time * F.speed + k * 760 - cam.x * 0.18) % span) + span) % span -
         w * 0.4;
       const fy =
-        h * F.y - cam.y * 0.07 + Math.sin(time * 0.4 + k) * F.drift;
+        h * (F.y + low * 0.18) - cam.y * 0.07 + Math.sin(time * 0.4 + k) * F.drift;
       for (let b = 0; b < F.count; b++) {
         // V-formation: birds fan back and down from the leader.
         const bx = fx + b * 24 - (b % 2) * 6;
@@ -896,12 +917,14 @@ export class Background {
 
   // Nocturnal flyers — small bat silhouettes that come out once it's dark, so
   // the night sky isn't empty after the birds turn in.
-  private drawBats(ctx: CanvasRenderingContext2D, cam: Camera, time: number) {
-    if (theme.night < 0.45) return;
+  private drawBats(ctx: CanvasRenderingContext2D, cam: Camera, time: number, storm = 0) {
+    // Out at night, or in the storm at any hour.
+    const dark = Math.max(theme.night < 0.45 ? 0 : theme.night, storm);
+    if (dark <= 0.02) return;
     const { w, h } = cam;
     const span = w * 3.2;
     ctx.save();
-    ctx.fillStyle = hexA(theme.mid, 0.85 * theme.night);
+    ctx.fillStyle = hexA(theme.mid, 0.85 * dark);
     for (let k = 0; k < 6; k++) {
       const seed = k * 97 + 13;
       const speed = 18 + (k % 3) * 10;
@@ -948,10 +971,11 @@ export class Background {
   private drawButterflies(
     ctx: CanvasRenderingContext2D,
     cam: Camera,
-    time: number
+    time: number,
+    keep = 1
   ) {
-    const daylight = 1 - theme.night;
-    if (daylight < 0.4) return;
+    const daylight = (1 - theme.night) * keep;
+    if (daylight < 0.4 * keep || keep <= 0.02) return;
     const { w, h } = cam;
     const cols = ["#ff7eb3", "#ffd166", "#7ec8ff", "#c89bff", "#ff9f6b"];
     const span = w * 2.4;
@@ -970,6 +994,32 @@ export class Background {
       const s = 4 + hash01(seed * 5) * 3;
       const flap = Math.abs(Math.sin(time * 9 + k));
       this.drawButterflyGlyph(ctx, x, y, s, flap, col, daylight);
+    }
+    ctx.restore();
+  }
+
+  /** Snow owls: a few soft white shapes gliding slowly, wings barely moving. */
+  private drawOwls(ctx: CanvasRenderingContext2D, cam: Camera, time: number, k: number) {
+    const { w, h } = cam;
+    const span = w * 3;
+    ctx.save();
+    for (let i = 0; i < 3; i++) {
+      const seed = i * 71 + 5;
+      const x = (((time * (14 + i * 5) + seed * 53 - cam.x * 0.2) % span) + span) % span - w * 0.5;
+      const y = h * (0.2 + hash01(seed) * 0.25) - cam.y * 0.08 + Math.sin(time * 0.6 + i) * 14;
+      const s = 7 + hash01(seed * 3) * 3;
+      const lift = s * (0.25 + 0.12 * Math.sin(time * 2.2 + i));
+      ctx.fillStyle = `rgba(250,252,255,${0.85 * k})`;
+      ctx.beginPath();
+      ctx.moveTo(x - s * 1.5, y);
+      ctx.quadraticCurveTo(x - s * 0.6, y - lift, x, y + s * 0.15);
+      ctx.quadraticCurveTo(x + s * 0.6, y - lift, x + s * 1.5, y);
+      ctx.quadraticCurveTo(x + s * 0.5, y + s * 0.3, x, y + s * 0.4);
+      ctx.quadraticCurveTo(x - s * 0.5, y + s * 0.3, x - s * 1.5, y);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(x, y - s * 0.05, s * 0.32, 0, TAU);
+      ctx.fill();
     }
     ctx.restore();
   }
@@ -1554,6 +1604,94 @@ export class Background {
       if (sy < -120 || sy > h + 120) continue;
       this.drawCloudCluster(ctx, sx, sy, 180 + r1 * 140, 0.14 + r1 * 0.06);
     }
+    this.drawZoneForeground(ctx, cam, time);
+  }
+
+  /**
+   * The zone's near foreground: shapes rising into the bottom edge of the
+   * screen and whipping past (parallax 1.35) — mossy spires trickling water
+   * in the rain, snow-laden pine tops in the snow, dead branching trees in
+   * the storm. Soft and dark, and only along the bottom edge, so they read
+   * as scenery and never as something to dodge.
+   */
+  private drawZoneForeground(ctx: CanvasRenderingContext2D, cam: Camera, time: number) {
+    const id = this.zone;
+    const k = this.zoneK;
+    if (!id || k <= 0.02) return;
+    const { w, h } = cam;
+    const spacing = 420;
+    const off = cam.x * 1.35;
+    const start = Math.floor((off - w) / spacing) - 1;
+    const end = Math.ceil((off + w) / spacing) + 1;
+    const col = hexA(mixColor(theme.mid, "#0a0d24", 0.45), 0.55 * k);
+    ctx.save();
+    for (let i = start; i <= end; i++) {
+      const r = hash01(i * 29 + 7);
+      if (r < 0.35) continue;
+      const x = i * spacing + hash01(i * 3) * 160 - off + w * 0.5;
+      const ht = h * (0.1 + hash01(i * 41) * 0.1);
+      const base = h + 6;
+      ctx.fillStyle = col;
+      if (id === "rain") {
+        // A mossy spire with water trickling down it.
+        const sw = ht * 0.32;
+        ctx.beginPath();
+        ctx.moveTo(x - sw, base);
+        ctx.quadraticCurveTo(x - sw * 0.7, base - ht * 0.7, x - sw * 0.15, base - ht);
+        ctx.quadraticCurveTo(x + sw * 0.4, base - ht * 1.05, x + sw * 0.55, base - ht * 0.7);
+        ctx.quadraticCurveTo(x + sw * 0.9, base - ht * 0.3, x + sw, base);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = `rgba(215,232,255,${0.4 * k})`;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(x + sw * 0.1, base - ht * 0.95);
+        ctx.lineTo(x + sw * 0.2 + Math.sin(time * 4 + i) * 1.2, base);
+        ctx.stroke();
+      } else if (id === "snow") {
+        // A snow-laden pine top: dark tiers, each carrying a white ledge.
+        const tiers = 3;
+        for (let t = 0; t < tiers; t++) {
+          const ty = base - (ht * t) / tiers;
+          const hw = ht * (0.42 - t * 0.1);
+          ctx.fillStyle = col;
+          ctx.beginPath();
+          ctx.moveTo(x, ty - ht * 0.45);
+          ctx.lineTo(x - hw, ty);
+          ctx.lineTo(x + hw, ty);
+          ctx.closePath();
+          ctx.fill();
+          ctx.fillStyle = `rgba(248,251,255,${0.75 * k})`;
+          ctx.beginPath();
+          ctx.moveTo(x - hw * 0.95, ty - 1);
+          ctx.quadraticCurveTo(x, ty - ht * 0.12, x + hw * 0.95, ty - 1);
+          ctx.quadraticCurveTo(x, ty - ht * 0.05, x - hw * 0.95, ty - 1);
+          ctx.fill();
+        }
+      } else if (id === "storm") {
+        // A dead tree: a bent trunk and a few bare branches.
+        ctx.strokeStyle = col;
+        ctx.lineCap = "round";
+        ctx.lineWidth = Math.max(3, ht * 0.08);
+        const lean = (hash01(i * 5) - 0.5) * ht * 0.4;
+        ctx.beginPath();
+        ctx.moveTo(x, base);
+        ctx.quadraticCurveTo(x + lean * 0.3, base - ht * 0.6, x + lean, base - ht * 1.1);
+        ctx.stroke();
+        ctx.lineWidth = Math.max(1.5, ht * 0.035);
+        for (let b = 0; b < 3; b++) {
+          const by = base - ht * (0.45 + b * 0.2);
+          const bx = x + lean * (0.45 + b * 0.2);
+          const dir = b % 2 === 0 ? 1 : -1;
+          ctx.beginPath();
+          ctx.moveTo(bx, by);
+          ctx.lineTo(bx + dir * ht * 0.3, by - ht * 0.18);
+          ctx.lineTo(bx + dir * ht * 0.38, by - ht * 0.3);
+          ctx.stroke();
+        }
+      }
+    }
+    ctx.restore();
   }
 
   // --- Floating island: flat plateau top, rocky sides, tapered underside. ---
@@ -1677,7 +1815,35 @@ export class Background {
 
     this.drawIslandVines(ctx, L, scale, style.vineCol, style.leafCol);
 
-    if (withTrees) {
+    const rain = this.z("rain");
+    const snow = this.z("snow");
+    const storm = this.z("storm");
+
+    // Rain: water pours off the island's underside.
+    if (rain > 0 && hash01(seed * 7 + 2) > 0.35) {
+      const fx = rw * (0.25 + hash01(seed * 5) * 0.4) * (hash01(seed) > 0.5 ? 1 : -1);
+      const top = hang * 0.35;
+      const len = hang * 2.4;
+      const g = ctx.createLinearGradient(0, top, 0, top + len);
+      g.addColorStop(0, `rgba(220,236,255,${0.55 * rain})`);
+      g.addColorStop(1, "rgba(220,236,255,0)");
+      ctx.fillStyle = g;
+      const ww = Math.max(2, 4 * scale);
+      const wob = Math.sin(time * 3 + seed) * 1.2;
+      ctx.beginPath();
+      ctx.moveTo(fx - ww, top);
+      ctx.lineTo(fx + ww, top);
+      ctx.lineTo(fx + ww * 1.6 + wob, top + len);
+      ctx.lineTo(fx - ww * 1.6 + wob, top + len);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Storm: the islands are bare (no trees), with a glowing crystal or two.
+    const treesShown = withTrees && storm < 0.5;
+    if (treesShown) {
+      ctx.save();
+      if (storm > 0) ctx.globalAlpha *= 1 - storm * 2;
       for (let t = 0; t < L.treeX.length; t++) {
         this.drawCypressTree(
           ctx,
@@ -1687,11 +1853,61 @@ export class Background {
           style.treeCol,
           style.trunkCol
         );
+        // Snow: a white cap on each tree.
+        if (snow > 0) {
+          const tx = L.treeX[t] * scale;
+          const th = L.treeH[t] * scale;
+          const ty = L.treeY[t] * scale - th * 0.34;
+          ctx.fillStyle = `rgba(250,252,255,${0.9 * snow})`;
+          ctx.beginPath();
+          ctx.moveTo(tx, ty - th * 0.72);
+          ctx.lineTo(tx - th * 0.12, ty - th * 0.5);
+          ctx.lineTo(tx + th * 0.12, ty - th * 0.5);
+          ctx.closePath();
+          ctx.fill();
+        }
       }
+      ctx.restore();
     }
 
-    // A little critter grazing on the plateau every so often.
-    if (scale > 0.62 && L.hasCritter) {
+    // Snow: a cap of snow over the plateau.
+    if (snow > 0) {
+      ctx.fillStyle = `rgba(248,251,255,${0.9 * snow})`;
+      ctx.beginPath();
+      ctx.moveTo(-rw * 0.98, -1);
+      ctx.quadraticCurveTo(-rw * 0.4, -rh * 1.2 - 1, 0, -rh - 1);
+      ctx.quadraticCurveTo(rw * 0.4, -rh * 1.2 - 1, rw * 0.98, -1);
+      ctx.quadraticCurveTo(rw * 0.5, -rh * 0.55, rw * 0.15, -rh * 0.75);
+      ctx.quadraticCurveTo(-rw * 0.2, -rh * 0.45, -rw * 0.55, -rh * 0.7);
+      ctx.quadraticCurveTo(-rw * 0.8, -rh * 0.4, -rw * 0.98, -1);
+      ctx.fill();
+    }
+
+    if (storm > 0 && hash01(seed * 11 + 4) > 0.45) {
+      const cx = rw * (hash01(seed * 13) - 0.5) * 1.1;
+      const cy = -rh * 0.85;
+      const cs = (6 + hash01(seed * 17) * 5) * scale;
+      const glow = 0.6 + 0.4 * Math.sin(time * 2 + seed);
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const g = ctx.createRadialGradient(cx, cy - cs, 1, cx, cy - cs, cs * 3);
+      g.addColorStop(0, `rgba(190,150,255,${0.5 * storm * glow})`);
+      g.addColorStop(1, "rgba(190,150,255,0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(cx - cs * 3, cy - cs * 4, cs * 6, cs * 6);
+      ctx.restore();
+      ctx.fillStyle = `rgba(205,175,255,${0.9 * storm})`;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - cs * 2);
+      ctx.lineTo(cx + cs * 0.45, cy - cs * 0.6);
+      ctx.lineTo(cx, cy);
+      ctx.lineTo(cx - cs * 0.45, cy - cs * 0.6);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // A little critter grazing on the plateau every so often (not in the storm).
+    if (scale > 0.62 && L.hasCritter && this.z("storm") < 0.5) {
       this.drawIslandCritter(
         ctx,
         L.critterX * scale,
