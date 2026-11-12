@@ -939,7 +939,11 @@ export class Game {
   frame(dt: number) {
     this.input.beginFrame();
     // Drift the time-of-day palette. Each run starts at dawn (this.time resets).
-    updateTheme(this.time);
+    // The time of day, and the zone the run is in (its own sky eases in).
+    const vz = this.viewZone();
+    updateTheme(this.time, vz ? vz.def.id : null, vz ? vz.blend : 0);
+    // ...and its sound (silent while paused).
+    this.sound.setZone(vz && this.state !== "paused" ? vz.def.id : null, vz ? vz.blend : 0);
     if (this.input.anyInteraction) this.sound.resume();
     if (this.input.tapped.has("KeyM")) this.toggleMute();
 
@@ -1487,7 +1491,7 @@ export class Game {
       if (b.striking && !wasStriking) {
         this.stormFlash = 1;
         this.camera.addShake(6);
-        this.sound.crash();
+        this.sound.thunder();
       }
       if (!b.striking || this.strikeSpent.has(b) || !b.hits(p.x, CONFIG.player.radius)) continue;
       // A dash rides through it; the barrier takes it; otherwise it ends the run.
@@ -1617,6 +1621,7 @@ export class Game {
     this.background.drawFar(ctx, cam, this.time);
     this.background.drawMid(ctx, cam);
     this.background.drawSea(ctx, cam, this.time);
+    this.drawSeaZone(ctx, cam);
 
     ctx.save();
     cam.apply(ctx);
@@ -1671,6 +1676,60 @@ export class Game {
   }
 
   /**
+   * The cloud sea in a zone (its colours come with the zone's palette):
+   * rain rings on its surface, snow drifts along it, the storm's light
+   * flickering inside it. Drawing only, under the player.
+   */
+  private drawSeaZone(ctx: CanvasRenderingContext2D, cam: Camera) {
+    const z = this.viewZone();
+    if (!z) return;
+    const k = z.blend;
+    const sy = (this.world.seaLevel - cam.y) * cam.zoom;
+    if (sy > cam.h + 20) return;
+    const { w, h } = cam;
+    const t = this.time;
+    ctx.save();
+    if (z.def.id === "rain") {
+      ctx.strokeStyle = `rgba(225,235,255,${0.5 * k})`;
+      ctx.lineWidth = 1.2;
+      for (let i = 0; i < 16; i++) {
+        const u = (t * 0.8 + i * 0.37) % 1;
+        const x = (((i * 0.6180339 + Math.floor(t * 0.8 + i * 0.37) * 0.29) % 1) * w);
+        const y = sy + 8 + ((i * 0.53) % 1) * Math.max(10, h - sy - 16);
+        ctx.globalAlpha = 1 - u;
+        ctx.beginPath();
+        ctx.ellipse(x, y, 4 + u * 22, (4 + u * 22) * 0.28, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    } else if (z.def.id === "snow") {
+      ctx.fillStyle = `rgba(255,255,255,${0.45 * k})`;
+      const step = 150;
+      const off = ((cam.x * cam.zoom * 0.9) % step + step) % step;
+      for (let x = -step - off; x < w + step; x += step) {
+        const i = Math.round((x + cam.x * cam.zoom * 0.9) / step);
+        const r = 55 + ((i * 37) % 40 + 40) % 40;
+        ctx.beginPath();
+        ctx.ellipse(x, sy + 4, r, r * 0.22, 0, Math.PI, 0);
+        ctx.fill();
+      }
+    } else if (z.def.id === "storm") {
+      for (let i = 0; i < 3; i++) {
+        const pulse = Math.sin(t * 1.7 + i * 2.3);
+        if (pulse < 0.9) continue;
+        const a = ((pulse - 0.9) / 0.1) * 0.4 * k;
+        const x = (((i * 0.37 + Math.floor(t * 0.27 + i) * 0.61) % 1) * w);
+        const y = sy + 40;
+        const g = ctx.createRadialGradient(x, y, 4, x, y, 140);
+        g.addColorStop(0, `rgba(210,190,255,${a})`);
+        g.addColorStop(1, "rgba(210,190,255,0)");
+        ctx.fillStyle = g;
+        ctx.fillRect(x - 140, y - 140, 280, 280);
+      }
+    }
+    ctx.restore();
+  }
+
+  /**
    * The zone's weather over the scene: a tint, then rain streaks or snow
    * (screen space, a fixed few dozen, cheap), and in the storm the flash of
    * a strike. Drawing only.
@@ -1684,7 +1743,7 @@ export class Game {
     const dt = this.state === "paused" ? 0 : this.frameDt;
     ctx.save();
     ctx.fillStyle =
-      id === "rain" ? `rgba(60,82,112,${0.16 * k})` : id === "snow" ? `rgba(236,243,255,${0.14 * k})` : `rgba(12,14,34,${0.34 * k})`;
+      id === "rain" ? `rgba(60,82,112,${0.08 * k})` : id === "snow" ? `rgba(40,60,100,${0.06 * k})` : `rgba(12,14,34,${0.16 * k})`;
     ctx.fillRect(0, 0, w, h);
     if (id === "snow") {
       ctx.fillStyle = `rgba(255,255,255,${0.85 * k})`;

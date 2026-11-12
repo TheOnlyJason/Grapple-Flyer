@@ -288,6 +288,94 @@ export class Sound {
     osc.stop(t + dur + 0.02);
   }
 
+  // --- Zone ambience: rain, snow wind, storm rumble. One looping noise feeds
+  // three filtered beds whose levels follow the zone the run is in.
+  private zoneBeds: { rain: GainNode; wind: GainNode; rumble: GainNode } | null = null;
+
+  private initZoneBeds() {
+    if (!this.ctx || !this.master) return;
+    const ctx = this.ctx;
+    const buf = ctx.createBuffer(1, ctx.sampleRate * 3, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    const bed = (type: BiquadFilterType, hz: number, q: number) => {
+      const f = ctx.createBiquadFilter();
+      f.type = type;
+      f.frequency.value = hz;
+      f.Q.value = q;
+      const g = ctx.createGain();
+      g.gain.value = 0;
+      src.connect(f);
+      f.connect(g);
+      g.connect(this.master!);
+      return { f, g };
+    };
+    // Rain: a soft hiss, high and a little bright.
+    const rain = bed("bandpass", 3200, 0.5);
+    // Snow: a hollow wind, its pitch drifting slowly (an LFO on the filter).
+    const wind = bed("bandpass", 520, 6);
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 0.11;
+    const lfoAmt = ctx.createGain();
+    lfoAmt.gain.value = 260;
+    lfo.connect(lfoAmt);
+    lfoAmt.connect(wind.f.frequency);
+    lfo.start();
+    // Storm: a low rumble under the rain.
+    const rumble = bed("lowpass", 110, 0.7);
+    src.start();
+    this.zoneBeds = { rain: rain.g, wind: wind.g, rumble: rumble.g };
+  }
+
+  /**
+   * The zone's ambience: `zone` its id (or null for none) and `k` 0..1 how
+   * far it has eased in. Called every frame; levels glide, so it is cheap.
+   */
+  setZone(zone: string | null, k: number) {
+    if (!this.ctx || !this.master) return;
+    if (!this.zoneBeds) {
+      if (!zone) return;
+      this.initZoneBeds();
+      if (!this.zoneBeds) return;
+    }
+    const t = this.ctx.currentTime;
+    const on = this.enabled ? Math.max(0, Math.min(1, k)) : 0;
+    const B = this.zoneBeds;
+    B.rain.gain.setTargetAtTime(zone === "rain" ? 0.05 * on : zone === "storm" ? 0.075 * on : 0, t, 0.6);
+    B.wind.gain.setTargetAtTime(zone === "snow" ? 0.09 * on : 0, t, 0.8);
+    B.rumble.gain.setTargetAtTime(zone === "storm" ? 0.12 * on : 0, t, 0.8);
+  }
+
+  /** A strike: a sharp crack, then a long low roll. */
+  thunder() {
+    if (!this.ctx || !this.master || !this.enabled) return;
+    this.noise(0.25, 0.5, 2200, 0.7);
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const len = Math.floor(ctx.sampleRate * 2.2);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const f = ctx.createBiquadFilter();
+    f.type = "lowpass";
+    f.frequency.setValueAtTime(400, t);
+    f.frequency.exponentialRampToValueAtTime(70, t + 2);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.6, t + 0.06);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 2.1);
+    src.connect(f);
+    f.connect(g);
+    g.connect(this.master);
+    src.start(t);
+    src.stop(t + 2.2);
+  }
+
   // Filtered white-noise burst — the "crack" layer of impact sounds. The
   // noise buffer is generated once and shared.
   private noiseBuf: AudioBuffer | null = null;

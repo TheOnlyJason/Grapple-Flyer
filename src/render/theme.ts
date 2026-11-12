@@ -170,13 +170,76 @@ export const theme: Theme = {
 // units — imperceptible — while letting every gradient/sprite cache downstream
 // key off theme.version instead of rebuilding 60x per second.
 const PHASE_STEPS = 512;
-let lastBucket = -1;
 
-export function updateTheme(phaseSeconds: number) {
+/**
+ * A zone's own sky (rain, snow, storm), blended over the time of day so dawn
+ * and night still show through it. Only the atmosphere changes; the readable
+ * foreground colours never do.
+ */
+type ZoneMood = Omit<Mood, "night">;
+const ZONE_MOODS: Record<string, ZoneMood> = {
+  rain: {
+    skyTop: "#3a4654",
+    skyMid: "#6c7c88",
+    skyHorizon: "#a9b8b4",
+    skyGlow: "#d4ddd6",
+    sun: "#e6ece6",
+    far: "#5d6b72",
+    mid: "#46525a",
+    sea: "#8b9aa2",
+    seaDeep: "#5f6e78",
+    cloud: "#c9d2d6",
+    fog: "#8d9aa2",
+    ambient: "#cfe0ff",
+  },
+  snow: {
+    // Deep enough at the top for the white HUD type to stay readable.
+    skyTop: "#4a6690",
+    skyMid: "#86a3c4",
+    skyHorizon: "#dce8f3",
+    skyGlow: "#ffffff",
+    sun: "#f4f8ff",
+    far: "#9fb2c9",
+    mid: "#8296ae",
+    // An icy blue-white, not paper white: the bottom HUD must still read on it.
+    sea: "#c9d6e6",
+    seaDeep: "#94a8c2",
+    cloud: "#ffffff",
+    fog: "#a9bad0",
+    ambient: "#ffffff",
+  },
+  storm: {
+    skyTop: "#120f22",
+    skyMid: "#2a2140",
+    skyHorizon: "#8a3f3a",
+    skyGlow: "#d0704a",
+    sun: "#e8c8b0",
+    far: "#2c2740",
+    mid: "#1d1930",
+    sea: "#3a3550",
+    seaDeep: "#211d33",
+    cloud: "#5a5470",
+    fog: "#3a3450",
+    ambient: "#9aa0c8",
+  },
+};
+/** How far a zone's sky takes over from the time of day, at its fullest. */
+const ZONE_STRENGTH = 0.7;
+let lastKey = "";
+
+/**
+ * The palette for a moment of the day cycle, and the zone the run is in
+ * (`zone` its id, `k` 0..1 how far its sky has eased in). Quantized, so the
+ * palette (and theme.version) changes only a few times a second.
+ */
+export function updateTheme(phaseSeconds: number, zone: string | null = null, k = 0) {
   const phase = phaseSeconds / CYCLE_SECONDS;
   const bucket = Math.floor((((phase % 1) + 1) % 1) * PHASE_STEPS);
-  if (bucket === lastBucket) return;
-  lastBucket = bucket;
+  const zm = zone ? ZONE_MOODS[zone] : undefined;
+  const kq = zm ? Math.round(Math.min(1, Math.max(0, k)) * 32) / 32 : 0;
+  const key = `${bucket}|${zm ? zone : ""}|${kq}`;
+  if (key === lastKey) return;
+  lastKey = key;
   theme.version++;
 
   const n = MOODS.length;
@@ -186,8 +249,9 @@ export function updateTheme(phaseSeconds: number) {
   t = t * t * (3 - 2 * t); // smoothstep for gentle transitions
   const a = MOODS[i];
   const b = MOODS[(i + 1) % n];
-  for (const k of ATMOS_KEYS) {
-    theme[k] = mixColor(a[k], b[k], t);
+  for (const key2 of ATMOS_KEYS) {
+    const base = mixColor(a[key2], b[key2], t);
+    theme[key2] = zm && kq > 0 ? mixColor(base, zm[key2], kq * ZONE_STRENGTH) : base;
   }
   theme.night = a.night + (b.night - a.night) * t;
 }

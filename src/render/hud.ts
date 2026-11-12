@@ -646,7 +646,9 @@ export class Hud {
       spY - 18,
       10,
       "700",
-      d.smashReady ? PALETTE.collectible : PALETTE.textDim
+      d.smashReady ? PALETTE.collectible : PALETTE.textDim,
+      true, // a soft shadow: it must read over the snow zone's pale ground too
+      0.35
     );
 
     // --- Active power-ups: chips beside the speed bar ---
@@ -1041,6 +1043,11 @@ export class Hud {
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     this.setFont(ctx, "800", 13);
+    if (!d.dashReady) {
+      // A soft shadow so the waiting label reads over a pale ground (snow).
+      ctx.fillStyle = hexA("#0a0d24", 0.35);
+      ctx.fillText("DASH", b.x + 1.5, b.y + 1.5);
+    }
     ctx.fillStyle = d.dashReady ? "#06241a" : PALETTE.textDim;
     ctx.fillText("DASH", b.x, b.y);
     ctx.textBaseline = "top";

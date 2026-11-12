@@ -184,6 +184,15 @@ banner names it (ZONE 2 · RAIN · ROCKS DRIFT).
 | 3 Snow | 20,000 m | a pale tint, snow | frosted anchors give way 0.9 s after a grab (you drop off with your speed, no slingshot) |
 | 4 Storm | 30,000 m | dark, heavy rain | lightning marks a column (1.2 s), then strikes it: in it when it strikes ends the run, a barrier takes it, a dash rides through |
 
+Each zone also has its own sky (`ZONE_MOODS` in `render/theme.ts`, blended
+over the time of day so dawn and night still show through): slate and grey-
+green rain, an icy blue snow sky, a purple-black storm with a red horizon.
+The cloud sea takes the zone's colours too, with rain rings on its surface,
+snow drifts along it, or the storm's light flickering inside it. And its
+sound, made in code like everything else (`Sound.setZone`): a soft rain hiss,
+a hollow wind for the snow, rain and a low rumble for the storm, and thunder
+on each strike; silent while paused or muted.
+
 After the storm the last three go round again (rain at 40,000 m), each pass a
 quarter stronger. Twists come from the world's seeded generator and only in
 segments past the first zone, so the first 10,000 m are object for object
