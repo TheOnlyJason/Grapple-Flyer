@@ -125,6 +125,8 @@ export class Game {
   private introT = 0;
   private introTutorial = false;
   private introFromGlide = false;
+  // The difficulty assist the run began with (0 = none).
+  private runAssist = 0;
   // The pace (smoothed speed) the camera's speed pull follows.
   private paceSpeed = 0;
 
@@ -282,6 +284,11 @@ export class Game {
       // on the pull is already 0 and this does nothing.
       if (!this.storage.data.conserveMomentum) this.clearSpeedPull();
       this.startX = this.player.x;
+      // A struggling player's sky is eased (what spawns, never the physics),
+      // fading out toward their best; never in the tutorial or a daily run.
+      const swing: Swing = this.runConserve ? "conserve" : "classic";
+      this.runAssist = withTutorial ? 0 : this.storage.assist(swing);
+      this.world.setAssist(this.runAssist, this.storage.best(swing).distance / CONFIG.world.metersPerPixel);
       // The difficulty ramp restarts with the run. The world does not: what
       // is on screen stays and the sky keeps its time of day; only the part
       // not yet in view is rebuilt on the fresh ramp.

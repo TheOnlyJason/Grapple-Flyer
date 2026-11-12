@@ -149,6 +149,28 @@ The run after GO is exactly the run a tap started before; the headless probes
 turn the intro off (`GALE_INTRO=1` keeps it) and `scripts/daily-probe.mjs`
 checks it.
 
+### How hard the sky gets: the curve and the assist
+
+The spawner reads one difficulty number (`World.difficulty`). In 1.2 it rose in
+a straight line and was at its hardest by 650 m, so every stretch after that
+was the same. Now it rises with distance and levels off without stopping —
+`base = d / (d + halfPx)`, times `scale` — so the 1.2 game's hardest sky comes
+at about 2,000 m and the ceiling is half again past it (with caps on the gap,
+rock and moving-anchor chances so it stays flyable). Roughly 0.25 at 200 m,
+0.6 at 650 m, 1.0 at 2,000 m, 1.25 at 5,000 m.
+
+A struggling player gets an **assist**: at the start of a run the game
+averages the last three scores on that swing against its best; at
+`assistNone` (40%) of the best or more there is none, at `assistFull` (15%)
+or less the full `assistMax` (30% easier), and in between on a line. It
+changes only what spawns — never gravity, the rope or the swing — and fades
+out as the run nears the player's best distance, so a record is still
+earned. Never in the tutorial or a daily run. All of it is in
+`CONFIG.difficulty`; `scripts/difficulty-bot.mjs` compares the ramps with a
+play-bot (`LEGACY=1` the 1.2 ramp, `NOASSIST=1`, `NONE=`/`FULL=` other
+thresholds). The thresholds are a first guess from the bot (help in about a
+third to a half of its runs) and should be set from real play.
+
 ### The loop
 
 1. **Glide** forward, losing altitude slowly. Scan for the next anchor (it lights
@@ -340,6 +362,7 @@ node scripts/tether-probe.mjs    # both swings: 1.2 rope by default, the Conserv
 node scripts/tutorial-probe.mjs  # a new player's first flight: card order, slow motion, safety net, SKIP, HOW TO PLAY
 node scripts/powerups-probe.mjs  # power-ups, orbs, barrier, objectives, restarts
 node scripts/equiv-probe.mjs     # the default swing plays exactly like the 1.2 release, frame for frame (builds 1.2 from its commit to compare)
+node scripts/difficulty-bot.mjs  # a bot's run distances on the 1.2 ramp, the new curve, and with the assist
 node scripts/daily-probe.mjs     # the daily world is the same for everyone; two tries a day; bests per swing and per day; the pages and their HOME buttons; the shop; old and tampered saves
 node scripts/smash-probe.mjs decay|ahead|bot   # smash-speed decay, meteor-ahead outcomes, play-bot stats
 node scripts/swing-strip.mjs     # contact sheets of the pendulum: a swing, a loop, a moving anchor → screenshots/

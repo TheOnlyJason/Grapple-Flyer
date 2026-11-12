@@ -102,6 +102,25 @@ export const CONFIG = {
   },
 
   // Orbs are the currency: collected in a run, banked into the save when it ends.
+  // How hard the sky gets. The spawner's difficulty rises with distance and
+  // levels off without ever stopping: base = d / (d + halfPx), scaled so the
+  // 1.2 game's hardest sky (difficulty 1) comes at about 2,000 m and the
+  // ceiling is half again past it. A struggling player gets an assist from
+  // their recent runs that eases what spawns (never the physics), fading out
+  // as they near their best so a record is still earned.
+  difficulty: {
+    legacy: false, // true: the 1.2 ramp (linear, at its hardest by 650 m) — the equivalence probe uses it
+    halfPx: 20000, // world px at which base reaches 0.5 (1,000 m)
+    scale: 1.5, // difficulty = base * scale, so 1.0 (the old hardest) at 2,000 m and 1.5 at the limit
+    assistMax: 0.3, // at most 30% easier
+    // A best is a player's luckiest run, so ordinary runs sit well below it:
+    // these were set (with scripts/difficulty-bot.mjs) so the assist is on in
+    // about a third to a half of runs, not nearly all. Tune with real play.
+    assistNone: 0.4, // recent runs averaging this share of the best or more: no assist
+    assistFull: 0.15, // this share or less: the full assist
+    recentRuns: 3, // runs averaged (fewer than this on the swing: no assist)
+  },
+
   // The moment between the tap that starts a run and the run: READY, GO.
   // Nothing is taken in it, so a first tap-and-let-go is not a wasted grab.
   intro: {

@@ -78,6 +78,8 @@ if (!CASE) {
   for (const [label, ok, detail] of tamper.checks) check(ok, label, detail);
   const views = run("views", { FAKE_DATE: "2026-11-11T23:59:00" });
   for (const [label, ok, detail] of views.checks) check(ok, label, detail);
+  const diff = run("difficulty", { FAKE_DATE: "2026-11-11T10:00:00" });
+  for (const [label, ok, detail] of diff.checks) check(ok, label, detail);
   const intro = run("intro", { SIZE: "852x393", GALE_INTRO: "1", FAKE_DATE: "2026-11-11T10:00:00" });
   for (const [label, ok, detail] of intro.checks) check(ok, label, detail);
   const guards = run("guards", { SIZE: "852x393", FAKE_DATE: "2026-11-11T10:00:00" });
@@ -262,6 +264,64 @@ if (CASE === "tamper") {
     ["tampered save: buying with too few orbs fails", S.buy("trail:lilac", 120) === false && S.data.orbs === 30],
     ["tampered save: an unknown item cannot be bought", S.buy("trail:nope", 0) === false],
   ];
+  console.log(JSON.stringify({ checks }));
+  process.exit(0);
+}
+
+if (CASE === "difficulty") {
+  // The curve that keeps rising, and the assist for a player far below their best.
+  const checks = [];
+  const ok = (label, cond, detail = "") => checks.push([label, !!cond, detail]);
+  const S = game.storage;
+  const D = globalThis.window.GALE_CONFIG.difficulty;
+  const at = (metres, assist = 0, bestM = 0) => {
+    world.setAssist(assist, bestM / 0.05);
+    const g = world.genX;
+    const o = world.runOriginX;
+    world.runOriginX = 0;
+    world.genX = metres / 0.05;
+    const v = world.difficulty();
+    world.genX = g;
+    world.runOriginX = o;
+    world.setAssist(0, 0);
+    return v;
+  };
+  const r2 = (v) => Math.round(v * 100) / 100;
+  ok("the curve: easy at the start, the old hardest at about 2,000 m", at(0) === 0 && Math.abs(at(2000) - 1) < 0.01, `200 m ${r2(at(200))}, 650 m ${r2(at(650))}, 2,000 m ${r2(at(2000))}`);
+  ok("...and it keeps rising, never past its ceiling", at(5000) > at(3000) && at(3000) > at(2000) && at(1e7) < D.scale, `3,000 m ${r2(at(3000))}, 5,000 m ${r2(at(5000))}, 20,000 m ${r2(at(20000))}`);
+  ok("the assist eases it, fading out to nothing at the best", r2(at(500, 0.3, 2000)) === r2(at(500) * (1 - 0.3 * 0.75)) && at(2000, 0.3, 2000) === at(2000) && at(2500, 0.3, 2000) === at(2500));
+  // The assist from the last runs on the swing.
+  S.data.bestScore = 18000;
+  S.data.recent.classic = [8000, 9000];
+  ok("no assist before three runs on the swing", S.assist("classic") === 0);
+  S.data.recent.classic = [8000, 9000, 2000];
+  const expect = D.assistMax * Math.min(1, Math.max(0, (D.assistNone - 19000 / 3 / 18000) / (D.assistNone - D.assistFull)));
+  ok("the example: best 18k, last runs 8k, 9k, 2k: eased by the configured share", expect > 0 && Math.abs(S.assist("classic") - expect) < 1e-9, `${(S.assist("classic") * 100).toFixed(1)}%`);
+  S.data.recent.classic = [8000, 9000, 9000];
+  ok("runs near the best: no assist", S.assist("classic") === 0);
+  S.data.recent.classic = [500, 900, 1000];
+  ok("runs far below it: the full 30%", Math.abs(S.assist("classic") - D.assistMax) < 1e-9);
+  ok("each swing has its own", S.assist("conserve") === 0);
+  S.recordRun(700, 300, 0, 0, "classic", null);
+  ok("a run's score joins the last three", JSON.stringify(S.data.recent.classic) === JSON.stringify([900, 1000, 700]));
+  // In the game.
+  S.data.bestDistance = 6000;
+  flyTap();
+  frame(5);
+  ok("a struggling player's run starts with the assist", game.state === "playing" && game.runAssist > 0.25 && world.assist === game.runAssist, `${game.runAssist}`);
+  game.endRun({});
+  frame(150);
+  openPage("daily");
+  flyDaily();
+  frame(5);
+  ok("a daily run never has it (the same sky for everyone)", game.runDaily && world.assist === 0);
+  game.endRun({});
+  frame(150);
+  tapHome();
+  openPage("settings");
+  tapAt(...centre(game.hud.settingsRows(game.camera).howTo));
+  frame(5);
+  ok("nor the tutorial", game.tutorial.active && world.assist === 0);
   console.log(JSON.stringify({ checks }));
   process.exit(0);
 }

@@ -2,6 +2,7 @@
 
 import { isCharacterId, type CharacterId } from "../characters/registry";
 import { isTrailId, TRAILS, trailItem, type TrailId } from "../characters/trails";
+import { CONFIG } from "./config";
 
 /** A best run: its score and its distance (each kept on its own). */
 export interface Best {
@@ -35,6 +36,8 @@ interface SaveData {
   /** Conserve momentum's best: a second mode with its own record. */
   conserveBestScore: number;
   conserveBestDistance: number;
+  /** The last few scores on each swing, newest last (for the difficulty assist). */
+  recent: { classic: number[]; conserve: number[] };
   /** Daily-run bests by day (YYYY-MM-DD, see core/daily.ts), per swing; each day starts from nothing. */
   daily: Record<string, DayBests>;
   runs: number;
@@ -97,6 +100,13 @@ function cleanDaily(v: unknown): Record<string, DayBests> {
   return out;
 }
 
+function cleanRecent(v: unknown): { classic: number[]; conserve: number[] } {
+  const o = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
+  const list = (x: unknown) =>
+    Array.isArray(x) ? x.filter((n): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0).slice(-CONFIG.difficulty.recentRuns) : [];
+  return { classic: list(o.classic), conserve: list(o.conserve) };
+}
+
 const SHOP_ITEMS = new Set(TRAILS.filter((t) => t.price > 0).map((t) => trailItem(t.id)));
 
 /** A new save (a fresh object each time: its lists and maps are written to). */
@@ -107,6 +117,7 @@ function freshSave(): SaveData {
     conserveBestScore: 0,
     conserveBestDistance: 0,
     daily: {},
+    recent: { classic: [], conserve: [] },
     runs: 0,
     totalPerfect: 0,
     orbs: 0,
@@ -143,6 +154,7 @@ export class Storage {
           conserveBestScore: cleanCount(parsed.conserveBestScore),
           conserveBestDistance: cleanCount(parsed.conserveBestDistance),
           daily: cleanDaily(parsed.daily),
+          recent: cleanRecent(parsed.recent),
           runs: cleanCount(parsed.runs),
           totalPerfect: cleanCount(parsed.totalPerfect),
           owned,
@@ -214,6 +226,9 @@ export class Storage {
     this.data.orbs = cleanOrbs(this.data.orbs + cleanOrbs(orbs));
     const prev = this.best(swing);
     const best = score > prev.score;
+    const recent = this.data.recent[swing];
+    recent.push(Math.max(0, score));
+    if (recent.length > CONFIG.difficulty.recentRuns) recent.splice(0, recent.length - CONFIG.difficulty.recentRuns);
     const next = { score: Math.max(prev.score, score), distance: Math.max(prev.distance, distance) };
     if (swing === "conserve") {
       this.data.conserveBestScore = next.score;
@@ -262,6 +277,22 @@ export class Storage {
     this.day(date).tries += 1;
     this.save();
     return true;
+  }
+
+  /**
+   * The difficulty assist for a run on this swing, from how the last few runs
+   * compare with the best: none while they average assistNone of it or more,
+   * the full assistMax at assistFull or less, in between on a line. None
+   * until the swing has that many runs.
+   */
+  assist(swing: Swing): number {
+    const D = CONFIG.difficulty;
+    const recent = this.data.recent[swing];
+    const best = this.best(swing).score;
+    if (recent.length < D.recentRuns || best <= 0) return 0;
+    const ratio = recent.reduce((a, b) => a + b, 0) / recent.length / best;
+    const struggle = Math.min(1, Math.max(0, (D.assistNone - ratio) / (D.assistNone - D.assistFull)));
+    return D.assistMax * struggle;
   }
 
   owns(item: string): boolean {

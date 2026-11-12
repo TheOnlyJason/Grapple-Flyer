@@ -35,6 +35,9 @@ export class World {
   /** World-x past which the next power-up pickup spawns. */
   private nextPowerX = 0;
   private powerCount = 0;
+  /** The run's assist (0..CONFIG.difficulty.assistMax), and the distance (px) by which it has faded out. */
+  private assist = 0;
+  private assistFadePx = 0;
 
   get seaLevel() {
     return CONFIG.world.seaLevel;
@@ -48,6 +51,8 @@ export class World {
 
   reset(rng: Rng, startX: number, startY: number) {
     this.rng = rng;
+    this.assist = 0;
+    this.assistFadePx = 0;
     this.anchors = [];
     this.clouds = [];
     this.collectibles = [];
@@ -166,8 +171,27 @@ export class World {
     this.nextPowerX = Math.min(this.nextPowerX, this.genX + CONFIG.powerups.firstAt);
   }
 
-  private difficulty(): number {
-    return clamp((this.genX - this.runOriginX) / 13000, 0, 1);
+  /**
+   * The run's assist: `assist` (0..assistMax) eases the difficulty, fading
+   * out linearly to nothing at `fadePx` into the run (the player's best).
+   * Set before beginRun; a reset (and so every daily run) has none.
+   */
+  setAssist(assist: number, fadePx: number) {
+    this.assist = clamp(assist, 0, CONFIG.difficulty.assistMax);
+    this.assistFadePx = fadePx > 0 ? fadePx : 0;
+  }
+
+  /**
+   * How hard the segment being built is: 0 at the run's start, 1 at the 1.2
+   * game's hardest, up to CONFIG.difficulty.scale far out (see config).
+   */
+  difficulty(): number {
+    const D = CONFIG.difficulty;
+    const d = Math.max(0, this.genX - this.runOriginX);
+    if (D.legacy) return clamp(d / 13000, 0, 1);
+    const base = d / (d + D.halfPx);
+    const fade = this.assistFadePx > 0 ? Math.max(0, 1 - d / this.assistFadePx) : 0;
+    return base * D.scale * (1 - this.assist * fade);
   }
 
   ensure(cameraRight: number) {
@@ -192,7 +216,7 @@ export class World {
     // outgrows a good slingshot, and the rescue spawns EARLY in the segment
     // at a mid-altitude band the player can actually reach.
     const drought = segEnd - this.lastAnchorX > 850;
-    const emptyChance = lerp(0.08, 0.28, diff);
+    const emptyChance = Math.min(lerp(0.08, 0.28, diff), 0.38);
     let anchorCount = 0;
     if (drought || !rng.chance(emptyChance)) {
       anchorCount = rng.int(1, diff > 0.45 ? 2 : 1);
@@ -207,7 +231,7 @@ export class World {
       const ay = rescue
         ? rng.range(-650, Math.min(bottom, 350))
         : rng.range(top, bottom);
-      const moving = rng.chance(lerp(0.06, 0.38, diff));
+      const moving = rng.chance(Math.min(lerp(0.06, 0.38, diff), 0.55));
       const anchor = moving
         ? new Anchor(ax, ay, "moving", {
             amp: rng.range(50, 130),
@@ -254,9 +278,9 @@ export class World {
 
     // --- Hazards: scattered anywhere in the segment (not on a line). ---
     if (segEnd - this.runOriginX > 1400) {
-      const hazardChance = lerp(0.12, 0.52, diff);
+      const hazardChance = Math.min(lerp(0.12, 0.52, diff), 0.7);
       if (rng.chance(hazardChance)) {
-        const count = rng.chance(diff * 0.5) ? 2 : 1;
+        const count = rng.chance(Math.min(diff * 0.5, 0.7)) ? 2 : 1;
         for (let i = 0; i < count; i++) {
           const hx = rng.range(segStart + 30, segEnd - 30);
           const hy = rng.range(top + 60, bottom - 20);

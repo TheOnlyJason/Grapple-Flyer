@@ -174,6 +174,13 @@ await import(path.join(assetsDir, bundle));
 // The READY / GO intro before a run is off here (it changes nothing in the run
 // itself); GALE_INTRO=1 keeps it. scripts/daily-probe.mjs checks it.
 if (globalThis.window.GALE_CONFIG?.intro && process.env.GALE_INTRO !== "1") globalThis.window.GALE_CONFIG.intro.seconds = 0;
+// The 1.2 build's difficulty ramp, so the two builds fly the same skies and
+// the comparison is of the swing and the run itself (the new curve and the
+// assist only change what spawns).
+if (globalThis.window.GALE_CONFIG?.difficulty) globalThis.window.GALE_CONFIG.difficulty.legacy = true;
+// The menu's world was built as the game loaded, before that switch: build it
+// again, in both builds alike (the same clock, so the same seed in each).
+globalThis.window.GALE.enterMenu();
 const game = globalThis.window.GALE;
 if (!game) throw new Error("game instance not exposed on window.GALE");
 const player = game.player;
