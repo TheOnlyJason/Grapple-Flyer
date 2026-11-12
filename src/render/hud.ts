@@ -77,6 +77,8 @@ export interface HudData {
   bestDay: string;
   /** The daily run just flown beat its day's best: the words for it ("BEST TODAY"), else "". */
   dailyFlag: string;
+  /** On a game over that set no best: the run as a share of the best, in percent (0 = not shown). */
+  bestPct: number;
   /** The menu page in view (menu and game-over states). */
   page: Page;
   /** The shop and the daily run can be opened from the home screen (after the first flight). */
@@ -1184,7 +1186,9 @@ export class Hud {
     ctx.textBaseline = "top";
     let y = top;
     const scoreSize = Math.round(clamp(w * 0.07, 40, 64));
-    const flag = d.newBest ? "NEW BEST" : d.dailyFlag;
+    const flag = d.newBest
+      ? "NEW BEST"
+      : d.dailyFlag || (d.bestPct > 0 ? `${d.bestPct}% OF ${d.bestDaily ? "TODAY'S" : "YOUR"} BEST` : "");
     const stackH = (flag ? 20 : 0) + scoreSize + 8 + 22 + 16;
     const wash = ctx.createRadialGradient(cx, top + stackH / 2, 10, cx, top + stackH / 2, Math.max(w * 0.34, 190));
     wash.addColorStop(0, hexA("#0a0d24", 0.34));

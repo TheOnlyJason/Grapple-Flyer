@@ -127,6 +127,8 @@ export class Game {
   private introFromGlide = false;
   // The difficulty assist the run began with (0 = none).
   private runAssist = 0;
+  // The run has flown past the best marker (its pop is shown once).
+  private bestPassed = false;
   // The pace (smoothed speed) the camera's speed pull follows.
   private paceSpeed = 0;
 
@@ -175,6 +177,7 @@ export class Game {
   // --- State transitions ---------------------------------------------------
 
   private resetRunStats() {
+    this.bestPassed = false;
     this.distance = 0;
     this.bonus = 0;
     this.perfectCount = 0;
@@ -1571,12 +1574,69 @@ export class Game {
 
     this.background.drawForeground(ctx, cam, this.time);
     this.background.drawAmbient(ctx, cam, this.time);
+    this.drawBestMarker(ctx, cam);
     this.drawVignette(ctx, cam);
     if (this.fade > 0) {
       ctx.fillStyle = hexA(theme.skyTop, this.fade * this.fade);
       ctx.fillRect(0, 0, cam.w, cam.h);
     }
     this.hud.drawScreen(ctx, cam, this.buildHudData());
+  }
+
+  /** The best distance in view during a run (its swing's, or the day's): 0 for none. */
+  private percentOfBest(swing: Swing, daily: string | null): number {
+    const best = this.storage.bestScoreFor(swing, daily);
+    return best > 0 ? Math.min(99, Math.floor((Math.floor(this.score) / best) * 100)) : 0;
+  }
+
+  private markerDistance(): number {
+    if (this.state !== "playing" && this.state !== "paused" && this.state !== "crashing") return 0;
+    if (this.tutorial.active) return 0;
+    const swing: Swing = this.runConserve ? "conserve" : "classic";
+    const m = this.storage.bestDistanceFor(swing, this.runDaily);
+    return m >= 50 ? m : 0;
+  }
+
+  /**
+   * The best marker: a thin dashed gold line across the sky at the best
+   * distance, with BEST and the distance at its head. Passing it pops NEW
+   * BEST once (drawing and sound only: nothing in the run changes).
+   */
+  private drawBestMarker(ctx: CanvasRenderingContext2D, cam: Camera) {
+    const m = this.markerDistance();
+    if (m <= 0) return;
+    const mx = this.startX + m / CONFIG.world.metersPerPixel;
+    if (!this.bestPassed && this.state === "playing" && this.player.x >= mx) {
+      this.bestPassed = true;
+      this.hud.popup(this.player.x, this.player.y - 60, "NEW BEST", theme.anchorPerfect, 1.3);
+      this.sound.objective();
+    }
+    const sx = (mx - cam.x) * cam.zoom;
+    if (sx < -40 || sx > cam.w + 40) return;
+    const top = cam.insets.top + 64;
+    const bottom = Math.min(cam.h, (this.world.seaLevel - cam.y) * cam.zoom);
+    const gold = theme.anchorPerfect;
+    const a = this.bestPassed ? 0.3 : 0.75;
+    ctx.save();
+    ctx.strokeStyle = hexA(gold, a * 0.7);
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 8]);
+    ctx.beginPath();
+    ctx.moveTo(sx, top + 26);
+    ctx.lineTo(sx, bottom);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = hexA(gold, a);
+    ctx.beginPath();
+    ctx.arc(sx, top + 26, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = "800 10px ui-sans-serif, system-ui, -apple-system, sans-serif";
+    ctx.fillText(this.runDaily ? "TODAY'S BEST" : "BEST", sx, top + 2);
+    ctx.font = "600 13px ui-sans-serif, system-ui, -apple-system, sans-serif";
+    ctx.fillText(`${Math.floor(m).toLocaleString("en-US")} m`, sx, top + 16);
+    ctx.restore();
   }
 
   // Cheap post-process: radial vignette + a touch of top/bottom grade for depth
@@ -1663,6 +1723,8 @@ export class Game {
       bestConserve: swing === "conserve",
       bestDay: daily === null || daily === today.key ? "TODAY" : dailyLabel(daily),
       dailyFlag: !this.newDailyBest ? "" : runDay === "TODAY" ? "BEST TODAY" : `BEST OF ${runDay}`,
+      // The run just flown against the record it counts toward (below it: "91% OF YOUR BEST").
+      bestPct: ofRun && this.state === "gameover" && !this.newBest && !this.newDailyBest ? this.percentOfBest(swing, daily) : 0,
       page: this.page,
       intro: { t: this.introT, total: CONFIG.intro.seconds },
       extras: this.extrasShown,

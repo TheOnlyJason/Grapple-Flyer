@@ -171,6 +171,15 @@ play-bot (`LEGACY=1` the 1.2 ramp, `NOASSIST=1`, `NONE=`/`FULL=` other
 thresholds). The thresholds are a first guess from the bot (help in about a
 third to a half of its runs) and should be set from real play.
 
+### Chasing the best
+
+During a run a thin dashed gold line stands across the sky at the best
+distance (the run's swing's, or today's on a daily run), labelled `BEST
+1,834 m`; flying past it pops NEW BEST once, with a chime
+(`Game.drawBestMarker`; drawing and sound only). A game over that sets no
+best shows the run's share of it where NEW BEST would be: `91% OF YOUR BEST`
+(`91% OF TODAY'S BEST` after a daily try).
+
 ### The loop
 
 1. **Glide** forward, losing altitude slowly. Scan for the next anchor (it lights

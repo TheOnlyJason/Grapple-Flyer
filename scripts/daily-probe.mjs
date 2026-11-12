@@ -304,7 +304,25 @@ if (CASE === "difficulty") {
   ok("each swing has its own", S.assist("conserve") === 0);
   S.recordRun(700, 300, 0, 0, "classic", null);
   ok("a run's score joins the last three", JSON.stringify(S.data.recent.classic) === JSON.stringify([900, 1000, 700]));
-  // In the game.
+  // The best marker, and the share of the best on the game-over screen.
+  S.data.bestDistance = 300;
+  S.data.bestScore = 2000;
+  S.data.recent.classic = [];
+  flyTap();
+  frame(5);
+  game.startX = player.x - 300 / 0.05 + 40;
+  for (let i = 0; i < 600 && !game.bestPassed && game.state === "playing"; i++) frame();
+  ok("flying past the best distance pops NEW BEST, once", game.bestPassed && game.hud.popups.some((q) => q.text === "NEW BEST"));
+  game.startX = player.x;
+  game.distance = 900;
+  game.bonus = 920;
+  game.endRun({});
+  frame(5);
+  ok("a game over below the best shows its share of it", game.buildHudData().bestPct === 91, `${game.buildHudData().bestPct}%`);
+  frame(150);
+  // In the game (the struggling player again: best 18k, last runs 900, 1000, 700).
+  S.data.bestScore = 18000;
+  S.data.recent.classic = [900, 1000, 700];
   S.data.bestDistance = 6000;
   flyTap();
   frame(5);
