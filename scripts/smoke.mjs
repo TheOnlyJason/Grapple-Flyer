@@ -185,6 +185,11 @@ assert(game.state === "menu", `expected menu state, got ${game.state}`);
   assert(game.state === "menu" && c1 !== c0 && game.storage.data.character === c0, `tapping the name did not cycle the character (${c0} -> ${c1} -> ${game.storage.data.character}, state ${game.state})`);
   tapCircle(mid(game.hud.backButton(game.camera)));
   assert(game.state === "menu" && game.page === "home", "HOME did not leave the shop");
+  // A second tap straight after HOME stays home (no run by a double tap)...
+  tapCircle({ x: game.camera.w / 2, y: game.camera.h * 0.45 });
+  assert(game.state === "menu", "a tap straight after HOME started a run");
+  // ...and a moment later a tap flies as ever.
+  tick(60);
 }
 // 2) Start the run + hold to swing (pointerdown).
 dispatch("pointerdown", { clientX: 400, clientY: 300, pointerId: 1 });

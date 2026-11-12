@@ -62,7 +62,11 @@ if (!CASE) {
     check(same && a.length > 10, `${name}: the same world as generated eagerly`, `${b.length} objects to x ${Math.round(upTo)}, ${c.note}`);
     check(JSON.stringify(c.objectives) === JSON.stringify(ref.objectives), `${name}: the same objectives`, c.objectives.join(" | "));
   }
-  const other = run("world", { SIZE: "1280x720", EAGER: "1", FAKE_DATE: "2026-11-12T09:00:00" });
+  // Another day: three days from today, whatever today is.
+  const later = new Date(Date.now() + 3 * 86400000);
+  const pad = (n) => String(n).padStart(2, "0");
+  const otherDay = `${later.getFullYear()}-${pad(later.getMonth() + 1)}-${pad(later.getDate())}T09:00:00`;
+  const other = run("world", { SIZE: "1280x720", EAGER: "1", FAKE_DATE: otherDay });
   check(JSON.stringify(other.objects.slice(0, 40)) !== JSON.stringify(ref.objects.slice(0, 40)), "another day: a different world", `${ref.day} vs ${other.day}`);
   const normal = run("world", { SIZE: "1280x720", EAGER: "1", NORMAL: "1" });
   check(JSON.stringify(normal.objects.slice(0, 40)) !== JSON.stringify(ref.objects.slice(0, 40)), "an ordinary run: not the daily world");
@@ -73,6 +77,8 @@ if (!CASE) {
   for (const [label, ok, detail] of tamper.checks) check(ok, label, detail);
   const views = run("views", { FAKE_DATE: "2026-11-11T23:59:00" });
   for (const [label, ok, detail] of views.checks) check(ok, label, detail);
+  const guards = run("guards", { SIZE: "852x393", FAKE_DATE: "2026-11-11T10:00:00" });
+  for (const [label, ok, detail] of guards.checks) check(ok, label, detail);
 
   console.log(failures ? `\n${failures} FAILED` : "\nall daily checks passed");
   process.exit(failures ? 1 : 0);
@@ -221,9 +227,10 @@ const openPage = (name) => {
   tapAt(b.x, b.y);
   frame(3);
 };
+// HOME, then the beat the home screen waits before a tap flies again.
 const tapHome = () => {
   tapAt(...centre(game.hud.backButton(game.camera)));
-  frame(3);
+  frame(60);
 };
 const flyDaily = () => {
   if (game.page !== "daily") openPage("daily");
@@ -249,6 +256,129 @@ if (CASE === "tamper") {
     ["tampered save: buying with too few orbs fails", S.buy("trail:lilac", 120) === false && S.data.orbs === 30],
     ["tampered save: an unknown item cannot be bought", S.buy("trail:nope", 0) === false],
   ];
+  console.log(JSON.stringify({ checks }));
+  process.exit(0);
+}
+
+if (CASE === "guards") {
+  // Taps that must not act by accident: a daily try spent the instant the
+  // last one ends, the press on FLY taken as a grab, a page button's name
+  // that flies, the second tap of a double tap on HOME.
+  const checks = [];
+  const ok = (label, cond, detail = "") => checks.push([label, !!cond, detail]);
+  const S = game.storage;
+  performance.now = () => t;
+  game.resize(VW, VH, 2, { top: 0, left: 59, right: 59, bottom: 21 });
+  frame(2);
+  const press = (x, y) => dispatch("pointerdown", { clientX: x, clientY: y, pointerId: 1 });
+  const lift = (x, y) => dispatch("pointerup", { clientX: x, clientY: y, pointerId: 1 });
+  const fly = () => game.hud.dailyPanel(game.camera).fly;
+
+  // 1. The press on FLY is not a grab: held, the first anchor is not latched under the fade.
+  openPage("daily");
+  const f = fly();
+  press(f.x + f.w / 2, f.y + f.h / 2);
+  let swung = false;
+  for (let i = 0; i < 14; i++) {
+    frame();
+    if (player.state === "swing") swung = true;
+  }
+  lift(f.x + f.w / 2, f.y + f.h / 2);
+  frame();
+  ok("the press on FLY is not taken as a grab", game.state === "playing" && game.runDaily && !swung, `state ${game.state}, swung ${swung}`);
+  ok("...and the next press grabs as usual", (() => {
+    for (let i = 0; i < 240 && !player.findGrabTarget(world.anchors, game.camera); i++) frame();
+    press(VW / 2, VH * 0.45);
+    let g = false;
+    for (let i = 0; i < 30; i++) {
+      frame();
+      if (player.state === "swing") g = true;
+    }
+    lift(VW / 2, VH * 0.45);
+    frame();
+    return g;
+  })());
+
+  // 2. A try ends; a press on FLY that lands straight after does nothing.
+  game.endRun({ crashSound: true });
+  frame(1);
+  const g = fly();
+  tapAt(g.x + g.w / 2, g.y + g.h / 2);
+  ok("FLY straight after a try ends does nothing (the result is seen first)", game.state === "gameover" && game.page === "daily" && S.dailyTries("2026-11-11") === 1, `state ${game.state}, tries ${S.dailyTries("2026-11-11")}`);
+  dispatch("keydown", { code: "Enter" });
+  frame(1);
+  dispatch("keyup", { code: "Enter" });
+  frame(1);
+  ok("...nor does Enter", game.state === "gameover" && S.dailyTries("2026-11-11") === 1);
+  ok("...and FLY is drawn as not yet ready", game.buildHudData().daily.armed === false);
+  frame(120);
+  ok("a moment later FLY is ready", game.buildHudData().daily.armed === true);
+  tapAt(g.x + g.w / 2, g.y + g.h / 2);
+  ok("...and begins the second try", game.state === "playing" && S.dailyTries("2026-11-11") === 2);
+  game.endRun({});
+  frame(150);
+  tapHome();
+
+  // 3. The page buttons: their names, and the gaps between them, are part of them.
+  for (const name of ["settings", "shop", "daily"]) {
+    const b = game.hud.navButtons(game.camera, true)[name];
+    tapAt(b.x, b.y + b.r + 12);
+    ok(`a tap on the name under ${name.toUpperCase()} opens its page`, game.state === "menu" && game.page === name, `state ${game.state}, page ${game.page}`);
+    tapHome();
+    frame(60);
+  }
+  {
+    const nav = game.hud.navButtons(game.camera, true);
+    tapAt((nav.shop.x + nav.settings.x) / 2, nav.shop.y);
+    ok("a tap between two page buttons never flies", game.state === "menu", `state ${game.state}, page ${game.page}`);
+    if (game.page !== "home") tapHome();
+    frame(60);
+  }
+
+  // 4. A double tap on HOME lands on the home screen and stays there.
+  const homeAt = () => centre(game.hud.backButton(game.camera));
+  openPage("shop");
+  {
+    const [hx, hy] = homeAt();
+    tapAt(hx, hy);
+    frame(10);
+    tapAt(hx, hy);
+    ok("a double tap on HOME on a page: home, no run", game.state === "menu" && game.page === "home", `state ${game.state}`);
+  }
+  frame(60);
+  flyTap();
+  frame(20);
+  game.endRun({});
+  frame(150);
+  {
+    const [hx, hy] = homeAt();
+    tapAt(hx, hy);
+    frame(10);
+    tapAt(hx, hy);
+    ok("a double tap on HOME on a game-over screen: home, no run", game.state === "menu" && game.page === "home", `state ${game.state}`);
+  }
+  frame(60);
+  flyTap();
+  frame(20);
+  game.togglePause();
+  frame(2);
+  {
+    const b = game.hud.pauseMenuButtons(game.camera).home;
+    tapAt(b.x + b.w / 2, b.y + b.h / 2);
+    frame(10);
+    tapAt(b.x + b.w / 2, b.y + b.h / 2);
+    ok("a double tap on HOME on the pause screen: home, no run", game.state === "menu" && game.page === "home", `state ${game.state}`);
+  }
+  frame(60);
+  flyTap();
+  frame(5);
+  ok("a moment later a tap on the home screen flies as ever", game.state === "playing");
+
+  // 5. The ordinary game-over screen keeps 1.2's instant TAP TO FLY AGAIN.
+  game.endRun({});
+  frame(1);
+  flyTap();
+  ok("an ordinary game over still flies again on the very next tap (as in 1.2)", game.state === "playing");
   console.log(JSON.stringify({ checks }));
   process.exit(0);
 }
@@ -353,6 +483,7 @@ if (CASE === "views") {
   tapAt(...centre(game.hud.pauseMenuButtons(game.camera).home));
   frame(5);
   ok("HOME on the pause screen during the tutorial: home, nothing recorded", game.state === "menu" && game.page === "home" && S.data.runs === runsBefore && !game.tutorial.active);
+  frame(60); // the beat after HOME
   flyTap();
   frame(10);
   game.togglePause();

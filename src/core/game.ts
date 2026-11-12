@@ -117,6 +117,8 @@ export class Game {
   private trailPick: TrailId = "own";
   // A short fade in from the sky when a daily run cuts to its own world.
   private fade = 0;
+  // Seconds the home screen's tap-anywhere-flies waits after HOME.
+  private homeGuard = 0;
   // The pace (smoothed speed) the camera's speed pull follows.
   private paceSpeed = 0;
 
@@ -293,6 +295,9 @@ export class Game {
     this.fade = 1;
     this.state = "playing";
     this.timeInState = 0;
+    // The press that began on FLY (or RESTART) is not a grab: the day's
+    // first anchor would be latched under the fade, for as long as the tap.
+    this.dashLatch = true;
     this.sound.resume();
   }
 
@@ -583,12 +588,17 @@ export class Game {
     this.goHome();
   }
 
-  /** The plain home screen: no page open, and no run's result on it. */
+  /**
+   * The plain home screen: no page open, and no run's result on it. Its
+   * tap-anywhere-flies waits a beat, so the second tap of a double tap on
+   * HOME does not start a run.
+   */
   private goHome() {
     this.leavePage();
     this.page = "home";
     if (this.state === "gameover") this.state = "menu";
     this.overRecord = false;
+    this.homeGuard = HOME_GUARD;
   }
 
   /** The mute button (or M): sound off or on, remembered in the save. */
@@ -666,18 +676,10 @@ export class Game {
     this.hud.flash = 0.6;
   }
 
-  private hitCircle(c: { x: number; y: number; r: number }): boolean {
-    const p = this.input.pointer;
-    const r = Math.max(c.r, 22);
-    const dx = p.x - c.x;
-    const dy = p.y - c.y;
-    return dx * dx + dy * dy <= r * r;
-  }
-
   /** Every page: Esc, or its title in the top-left corner, goes back to the home screen. */
   private pageBack(): boolean {
     if (this.input.tapped.has("Escape") || (this.input.pointerJustDown && this.hitRect(this.hud.backButton(this.camera)))) {
-      this.leavePage();
+      this.goHome();
       return true;
     }
     return false;
@@ -734,9 +736,19 @@ export class Game {
     } else if (this.hitRect(rows.howTo)) this.startRun(true);
   }
 
+  /**
+   * FLY is ready: not in the first moments after a try ends, when a press
+   * already on its way (the next swing, the tap-to-retry habit) would land on
+   * it and spend the next try before the result was seen.
+   */
+  private get dailyArmed(): boolean {
+    return !(this.state === "gameover" && this.timeInState < DAILY_ARM);
+  }
+
   /** The daily page: FLY begins one of the day's tries. */
   private handleDailyInput() {
     if (this.pageBack()) return;
+    if (!this.dailyArmed) return;
     if (this.input.tapped.has("Enter") || (this.input.pointerJustDown && this.hitRect(this.hud.dailyPanel(this.camera).fly))) {
       if (this.dailyTriesLeft > 0) this.startRun(false, true);
     }
@@ -836,19 +848,13 @@ export class Game {
       return;
     }
     if (this.input.pointerJustDown) {
-      const nav = this.hud.navButtons(this.camera, this.extrasShown);
-      if (this.hitCircle(nav.settings)) {
-        this.openPage("settings");
+      const p = this.input.pointer;
+      const page = this.hud.navHit(this.camera, this.extrasShown, p.x, p.y);
+      if (page) {
+        this.openPage(page);
         return;
       }
-      if (nav.shop && this.hitCircle(nav.shop)) {
-        this.openPage("shop");
-        return;
-      }
-      if (nav.daily && this.hitCircle(nav.daily)) {
-        this.openPage("daily");
-        return;
-      }
+      if (this.homeGuard > 0) return;
       if (this.hitPlayButton() || this.input.pressed) {
         this.startRun();
       }
@@ -931,6 +937,7 @@ export class Game {
       this.state === "playing" ? clamp(this.player.speed / 1100, 0, 1) : 0
     );
     this.timeInState += dt;
+    if (this.homeGuard > 0) this.homeGuard = Math.max(0, this.homeGuard - dt);
 
     this.render();
   }
@@ -1616,6 +1623,7 @@ export class Game {
         tries: CONFIG.daily.tries,
         triesLeft: this.dailyTriesLeft,
         nextIn: today.nextIn,
+        armed: this.dailyArmed,
       },
       restartLabel,
       canRestart: this.canRestart,
@@ -1664,3 +1672,7 @@ export class Game {
 }
 
 const NO_TRAILS: readonly boolean[] = [];
+/** Seconds after HOME before a tap on the home screen flies (a double tap on HOME stays home). */
+const HOME_GUARD = 0.4;
+/** Seconds after a daily try ends before FLY takes a tap (the result is seen first). */
+const DAILY_ARM = 0.8;

@@ -82,7 +82,7 @@ export interface HudData {
   /** A page shows the result of the run just flown (the daily page, after a daily try). */
   result: boolean;
   /** The daily run: today's date, the tries a day allows and those left, and the time to the next day's world. */
-  daily: { label: string; day: number; tries: number; triesLeft: number; nextIn: string };
+  daily: { label: string; day: number; tries: number; triesLeft: number; nextIn: string; armed: boolean };
   /** The pause screen's RESTART RUN: its words (a daily try says what it costs) and whether it can be used. */
   restartLabel: string;
   canRestart: boolean;
@@ -303,6 +303,33 @@ export class Hud {
       shop: extras ? { x: x - pitch, y, r } : null,
       daily: extras ? { x: x - 2 * pitch, y, r } : null,
     };
+  }
+
+  /**
+   * Which page button a tap at (x, y) is for, or null. The buttons' strip,
+   * names included, belongs to them: from the first button to the screen's
+   * right edge and down past the names, each tap going to the nearest
+   * button, so a tap on a name or between two buttons never flies.
+   */
+  navHit(cam: Camera, extras: boolean, x: number, y: number): "settings" | "shop" | "daily" | null {
+    const nav = this.navButtons(cam, extras);
+    const all: ["settings" | "shop" | "daily", Circle][] = [["settings", nav.settings]];
+    if (nav.shop) all.push(["shop", nav.shop]);
+    if (nav.daily) all.push(["daily", nav.daily]);
+    const s = nav.settings;
+    let left = s.x;
+    for (const [, b] of all) left = Math.min(left, b.x);
+    if (x < left - 32 || y > s.y + s.r + 24) return null;
+    let best: "settings" | "shop" | "daily" = "settings";
+    let bestD = Infinity;
+    for (const [name, b] of all) {
+      const d = Math.abs(x - b.x);
+      if (d < bestD) {
+        bestD = d;
+        best = name;
+      }
+    }
+    return best;
   }
 
   /**
@@ -1485,10 +1512,13 @@ export class Hud {
     const a = P.fly;
     const ay = a.y + a.h / 2;
     if (left > 0) {
+      // Dimmed for the moment after a try ends, until it takes a tap.
+      ctx.globalAlpha = d.daily.armed ? 1 : 0.45;
       this.goldPill(ctx, a);
       // Which try this would be, so the count is in the button itself.
       const fly = `FLY · TRY ${d.daily.tries - left + 1} OF ${d.daily.tries}`;
       this.spaced(ctx, fly, P.cx, ay + 1, 13, "800", INK, 0.34, "center");
+      ctx.globalAlpha = 1;
     } else {
       this.spaced(ctx, `A NEW SKY IN ${d.daily.nextIn}`, P.cx, ay, 12, "700", hexA(gold, 0.95), 0.34, "center", 0.3);
     }

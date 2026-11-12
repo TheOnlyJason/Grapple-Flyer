@@ -63,6 +63,10 @@ character gliding through it, and the type sits quietly on top
 Every page has **HOME** in its top-left corner (Esc on a keyboard), its
 column sits right of centre so the gliding character stays in view, and a tap
 that misses its controls does nothing — only the home screen flies on a tap.
+The page buttons' names, and the gaps between them, are part of the buttons,
+and after HOME the home screen waits a beat before a tap flies, so a double
+tap on HOME stays home. (The game-over screen's TAP TO FLY AGAIN stays
+instant, as in 1.2.)
 The pause screen has HOME too: it ends the run there (recorded like any
 other, except the tutorial, which is simply left) and opens the home screen.
 
@@ -94,7 +98,9 @@ back; RESTART RUN on the pause screen of a daily try ends that try (recorded,
 like any other end: a try is never thrown away) and begins the next (the
 button says `RESTART · TRY 2/2`), and is off when none is left. A try
 ends back on the daily page with its result, the tries left, and FLY again or
-`A NEW SKY IN 6H 38M` once both are spent.
+`A NEW SKY IN 6H 38M` once both are spent. For a moment after a try ends FLY
+is dimmed and takes no tap, so a swing press already on its way cannot spend
+the next try unseen; and the press that begins a try is not taken as a grab.
 
 The day keeps its own best per swing (`TODAY` on the in-run line, `BEST
 TODAY` on the result); a daily run still banks its orbs and still counts
