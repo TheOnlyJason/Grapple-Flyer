@@ -61,7 +61,9 @@ type Rect = { x: number; y: number; w: number; h: number };
 type Circle = { x: number; y: number; r: number };
 
 export interface HudData {
-  state: "menu" | "playing" | "paused" | "crashing" | "gameover";
+  state: "menu" | "intro" | "playing" | "paused" | "crashing" | "gameover";
+  /** The intro between the tap and the run: seconds into it, and its length. */
+  intro: { t: number; total: number };
   score: number;
   distance: number;
   /** The best in view (see bestDaily / bestConserve for which one). */
@@ -519,6 +521,7 @@ export class Hud {
     }
 
     if (d.state === "menu") return this.drawAttractScreen(ctx, cam, d, "menu");
+    if (d.state === "intro") return this.drawIntro(ctx, cam, d);
     if (d.state === "gameover") return this.drawAttractScreen(ctx, cam, d, "gameover");
     if (d.state === "crashing") return;
 
@@ -1078,6 +1081,42 @@ export class Hud {
     else if (d.page === "settings") this.drawSettingsPage(ctx, cam, d);
     else if (d.page === "daily") this.drawDailyPage(ctx, cam, d, now);
     else this.drawHomePage(ctx, cam, d, mode === "gameover", breathe, now);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+  }
+
+  /**
+   * The intro between the tap and the run: READY (and how to play, in a
+   * line), then GO — quiet, wide-tracked type over the sky, above the
+   * character, nothing else on screen.
+   */
+  private drawIntro(ctx: CanvasRenderingContext2D, cam: Camera, d: HudData) {
+    const { w, h } = cam;
+    const { t, total } = d.intro;
+    const readyEnd = total * 0.65;
+    const cx = w / 2;
+    const cy = h * 0.27;
+    const wash = ctx.createRadialGradient(cx, cy, 10, cx, cy, Math.max(w * 0.3, 200));
+    const fadeIn = clamp(t / 0.15, 0, 1);
+    const fadeOut = clamp((total - t) / 0.2, 0, 1);
+    wash.addColorStop(0, hexA("#0a0d24", 0.3 * fadeIn * fadeOut));
+    wash.addColorStop(1, hexA("#0a0d24", 0));
+    ctx.fillStyle = wash;
+    ctx.fillRect(0, 0, w, h * 0.6);
+    ctx.textBaseline = "middle";
+    const size = Math.round(clamp(w * 0.06, 32, 56));
+    if (t < readyEnd) {
+      const a = clamp(t / 0.15, 0, 1) * clamp((readyEnd - t) / 0.1, 0, 1);
+      ctx.globalAlpha = a;
+      this.spaced(ctx, "READY", cx, cy, size, "300", PALETTE.text, 0.4, "center", 0.3);
+      this.spaced(ctx, "HOLD TO SWING  ·  LET GO TO FLY", cx, cy + size * 0.75 + 8, 11, "700", hexA(PALETTE.anchorPerfect, 0.95), 0.3, "center", 0.35);
+    } else {
+      const u = clamp((t - readyEnd) / (total - readyEnd), 0, 1);
+      ctx.globalAlpha = clamp(u / 0.2, 0, 1) * (1 - u * u);
+      const goSize = Math.round(size * (1.25 - 0.25 * u));
+      this.spaced(ctx, "GO", cx, cy, goSize, "300", PALETTE.anchorPerfect, 0.4, "center", 0.3);
+    }
+    ctx.globalAlpha = 1;
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
   }

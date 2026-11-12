@@ -47,6 +47,7 @@ if (!CASE) {
     small: run("world", { SIZE: "568x320" }),
     ipad: run("world", { SIZE: "1366x1024", BOT: "0.6", RESTART: "1" }),
     again: run("world", { SIZE: "1280x720", BOT: "0.5", AFTER_GAMEOVER: "1" }),
+    intro: run("world", { SIZE: "844x390", BOT: "0.7", GALE_INTRO: "1" }),
   };
   const ref = cases.eager;
   for (const [name, c] of Object.entries(cases)) {
@@ -77,6 +78,8 @@ if (!CASE) {
   for (const [label, ok, detail] of tamper.checks) check(ok, label, detail);
   const views = run("views", { FAKE_DATE: "2026-11-11T23:59:00" });
   for (const [label, ok, detail] of views.checks) check(ok, label, detail);
+  const intro = run("intro", { SIZE: "852x393", GALE_INTRO: "1", FAKE_DATE: "2026-11-11T10:00:00" });
+  for (const [label, ok, detail] of intro.checks) check(ok, label, detail);
   const guards = run("guards", { SIZE: "852x393", FAKE_DATE: "2026-11-11T10:00:00" });
   for (const [label, ok, detail] of guards.checks) check(ok, label, detail);
 
@@ -200,6 +203,9 @@ globalThis.localStorage = {
   },
 };
 await import(path.join(assetsDir, bundle));
+// The READY / GO intro before a run is off here (it changes nothing in the run
+// itself); GALE_INTRO=1 keeps it. scripts/daily-probe.mjs checks it.
+if (globalThis.window.GALE_CONFIG?.intro && process.env.GALE_INTRO !== "1") globalThis.window.GALE_CONFIG.intro.seconds = 0;
 const game = globalThis.window.GALE;
 if (!game) throw new Error("game instance not exposed on window.GALE");
 const player = game.player;
@@ -256,6 +262,101 @@ if (CASE === "tamper") {
     ["tampered save: buying with too few orbs fails", S.buy("trail:lilac", 120) === false && S.data.orbs === 30],
     ["tampered save: an unknown item cannot be bought", S.buy("trail:nope", 0) === false],
   ];
+  console.log(JSON.stringify({ checks }));
+  process.exit(0);
+}
+
+if (CASE === "intro") {
+  // READY, GO: the moment between the tap and the run takes no input, so a
+  // first tap-and-let-go is not a grab let go of at once.
+  const checks = [];
+  const ok = (label, cond, detail = "") => checks.push([label, !!cond, detail]);
+  const S = game.storage;
+  const secs = globalThis.window.GALE_CONFIG.intro.seconds;
+  const press = (x, y) => dispatch("pointerdown", { clientX: x, clientY: y, pointerId: 1 });
+  const lift = (x, y) => dispatch("pointerup", { clientX: x, clientY: y, pointerId: 1 });
+  const [mx, my] = [VW / 2, VH * 0.45];
+  const untilPlaying = () => {
+    let n = 0;
+    while (game.state === "intro" && n < 1000) {
+      frame();
+      n++;
+    }
+    return n;
+  };
+  ok("the intro lasts about a second", secs >= 0.8 && secs <= 1.6, `${secs} s`);
+
+  // 1. The first tap, released at once: the intro, no grab, then the run.
+  press(mx, my);
+  frame(3);
+  lift(mx, my);
+  frame(1);
+  ok("a tap on the home screen starts the intro, not the run", game.state === "intro" && player.state === "glide");
+  ok("the intro draws READY over the sky (no menu, no run HUD)", game.buildHudData().state === "intro");
+  // Mashing during the intro does nothing.
+  for (let i = 0; i < 4; i++) {
+    tapAt(mx, my);
+    frame(6);
+  }
+  ok("taps during the intro are not taken", game.state === "intro" && player.state === "glide");
+  const n1 = untilPlaying();
+  ok("then the run begins by itself", game.state === "playing" && player.state === "glide", `after ${(n1 / 120).toFixed(2)} s more`);
+  // The next press grabs as usual.
+  for (let i = 0; i < 240 && !player.findGrabTarget(world.anchors, game.camera); i++) frame();
+  press(mx, my);
+  let grabbed = false;
+  for (let i = 0; i < 30; i++) {
+    frame();
+    if (player.state === "swing") grabbed = true;
+  }
+  lift(mx, my);
+  ok("the first press of the run grabs as usual", grabbed);
+  game.endRun({});
+  frame(150);
+
+  // 2. A finger kept down from the tap through the intro grabs only once pressed again.
+  press(mx, my);
+  frame(1);
+  const n2 = untilPlaying();
+  let latched = false;
+  for (let i = 0; i < 60; i++) {
+    frame();
+    if (player.state === "swing") latched = true;
+  }
+  ok("a finger held through the intro is not a grab", game.state === "playing" && !latched, `intro ${(n2 / 120).toFixed(2)} s`);
+  lift(mx, my);
+  frame(2);
+  for (let i = 0; i < 240 && !player.findGrabTarget(world.anchors, game.camera); i++) frame();
+  press(mx, my);
+  grabbed = false;
+  for (let i = 0; i < 30; i++) {
+    frame();
+    if (player.state === "swing") grabbed = true;
+  }
+  lift(mx, my);
+  ok("...lifted and pressed again, it grabs", grabbed);
+  game.endRun({});
+  frame(150);
+  tapHome();
+
+  // 3. A daily try: the day's world at once, the intro over its starting line.
+  openPage("daily");
+  flyDaily();
+  ok("FLY counts the try and plays the intro over the day's world", game.state === "intro" && game.runDaily === "2026-11-11" && S.dailyTries("2026-11-11") === 1 && game.fade > 0.5);
+  const x0 = player.x;
+  const y0 = player.y;
+  frame(40);
+  ok("on the daily starting line the character waits (the start is the same for everyone)", game.state === "intro" && player.x === x0 && player.y === y0);
+  untilPlaying();
+  ok("then the daily run begins from it", game.state === "playing" && game.runDaily === "2026-11-11" && player.x === x0);
+
+  // 4. RESTART from the pause screen plays the intro too.
+  game.togglePause();
+  frame(2);
+  tapAt(...centre(game.hud.pauseMenuButtons(game.camera).restart));
+  ok("RESTART RUN in a daily try: the next try's intro", game.state === "intro" && S.dailyTries("2026-11-11") === 2);
+  untilPlaying();
+  ok("...then that try", game.state === "playing" && game.runDaily === "2026-11-11");
   console.log(JSON.stringify({ checks }));
   process.exit(0);
 }
@@ -758,6 +859,7 @@ if (process.env.CONSERVE) {
 }
 if (process.env.NORMAL) flyTap();
 else flyDaily();
+for (let i = 0; i < 1000 && game.state === "intro"; i++) frame();
 if (game.state !== "playing") throw new Error("the run did not start: " + game.state);
 if (!process.env.NORMAL && !game.runDaily) throw new Error("not a daily run");
 let note = "";

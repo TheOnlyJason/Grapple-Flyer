@@ -30,7 +30,7 @@ import {
 } from "../characters/registry";
 import { TRAILS, trailDef, trailItem, type TrailId } from "../characters/trails";
 
-type GameState = "menu" | "playing" | "paused" | "crashing" | "gameover";
+type GameState = "menu" | "intro" | "playing" | "paused" | "crashing" | "gameover";
 
 /** A pull toward (x, y) applied to collectibles by World.update. */
 interface MagnetField {
@@ -119,6 +119,12 @@ export class Game {
   private fade = 0;
   // Seconds the home screen's tap-anywhere-flies waits after HOME.
   private homeGuard = 0;
+  // The intro (READY, GO) between the tap and the run: how far into it, the
+  // run it leads to (the tutorial or not; a daily run waits at the start of
+  // its world, an ordinary one goes on gliding from the menu).
+  private introT = 0;
+  private introTutorial = false;
+  private introFromGlide = false;
   // The pace (smoothed speed) the camera's speed pull follows.
   private paceSpeed = 0;
 
@@ -237,11 +243,36 @@ export class Game {
     this.overRecord = false;
     this.runConserve = this.storage.data.conserveMomentum;
     this.runDaily = day;
-    if (day) {
-      this.startDailyRun(day);
+    this.introTutorial = withTutorial;
+    const fromGlide = !day && (this.state === "menu" || this.state === "gameover");
+    // A daily run cuts to the start of the day's world at once; the intro
+    // then plays over its starting line.
+    if (day) this.prepareDailyWorld(day);
+    if (CONFIG.intro.seconds > 0) {
+      this.state = "intro";
+      this.introT = 0;
+      this.introFromGlide = fromGlide;
+      this.timeInState = 0;
+      this.sound.resume();
       return;
     }
-    if (this.state === "menu" || this.state === "gameover") {
+    this.launch(fromGlide);
+  }
+
+  /** The run itself begins (straight after the tap, or at the intro's GO). */
+  private launch(fromGlide: boolean) {
+    const withTutorial = this.introTutorial;
+    const held = CONFIG.intro.seconds > 0 && this.input.holding;
+    if (this.runDaily) {
+      this.state = "playing";
+      this.timeInState = 0;
+      // The press that began on FLY (or RESTART) is not a grab: the day's
+      // first anchor would be latched under the fade, for as long as the tap.
+      this.dashLatch = true;
+      this.sound.resume();
+      return;
+    }
+    if (fromGlide) {
       // Sync to the exact preview pose, then continue in place — no world reset.
       const glideTime = this.time - this.attractGlideStartTime;
       this.player.animateMenuGlide(0, glideTime, this.attractGlideX);
@@ -266,6 +297,8 @@ export class Game {
       this.beginTutorial(withTutorial);
       this.state = "playing";
       this.timeInState = 0;
+      // A finger kept down through the intro grabs only once lifted and pressed again.
+      if (held) this.dashLatch = true;
       this.sound.resume();
       return;
     }
@@ -285,7 +318,7 @@ export class Game {
    * what comes later, and the screen size only changes how far ahead it is
    * built, never what is built.
    */
-  private startDailyRun(day: string) {
+  private prepareDailyWorld(day: string) {
     this.stopTutorial();
     this.seedAndReset(dailySeed(day));
     // A rock-free launch corridor, as for any run — generated well past it
@@ -293,12 +326,6 @@ export class Game {
     this.world.ensure(this.startX + 1600);
     this.world.removeHazardsNear(this.player.x + 180, this.player.y, 320);
     this.fade = 1;
-    this.state = "playing";
-    this.timeInState = 0;
-    // The press that began on FLY (or RESTART) is not a grab: the day's
-    // first anchor would be latched under the fade, for as long as the tap.
-    this.dashLatch = true;
-    this.sound.resume();
   }
 
   private beginTutorial(on: boolean) {
@@ -952,7 +979,7 @@ export class Game {
       return;
     }
 
-    if (this.state === "crashing") return;
+    if (this.state === "crashing" || this.state === "intro") return;
 
     if (this.state === "paused") {
       if (this.input.pointerJustDown && this.hitMuteButton()) {
@@ -1052,6 +1079,21 @@ export class Game {
 
     this.time += dt;
     this.updateSpeedPull(dt);
+
+    if (this.state === "intro") {
+      // READY, GO. An ordinary run goes on gliding as on the menu; a daily
+      // run waits on the start of its world (it starts there for everyone).
+      if (this.introFromGlide) {
+        const glideTime = this.time - this.attractGlideStartTime;
+        this.player.animateMenuGlide(dt, glideTime, this.attractGlideX);
+        this.world.holdRamp(this.player.x);
+        this.camera.follow(this.player.x, this.player.y, 280, dt);
+        this.world.update(dt, this.time);
+      }
+      this.introT += dt;
+      if (this.introT >= CONFIG.intro.seconds) this.launch(this.introFromGlide);
+      return;
+    }
 
     if (this.state === "menu" || this.state === "gameover") {
       const glideTime = this.time - this.attractGlideStartTime;
@@ -1503,12 +1545,13 @@ export class Game {
     for (const a of this.world.anchors) a.draw(ctx, this.time);
     if (
       this.state === "menu" ||
+      this.state === "intro" ||
       this.state === "playing" ||
       this.state === "paused" ||
       this.state === "crashing" ||
       this.state === "gameover"
     ) {
-      this.player.draw(ctx, this.time, this.isAttractScreen());
+      this.player.draw(ctx, this.time, this.isAttractScreen() || (this.state === "intro" && this.introFromGlide));
       // Worn power-ups. The magnet's rings blink over its last 1.5 s.
       if (this.magnetTime > 1.5 || (this.magnetTime > 0 && Math.floor(this.magnetTime * 8) % 2 === 0)) {
         drawMagnetField(ctx, this.player.x, this.player.y, this.time);
@@ -1614,6 +1657,7 @@ export class Game {
       bestDay: daily === null || daily === today.key ? "TODAY" : dailyLabel(daily),
       dailyFlag: !this.newDailyBest ? "" : runDay === "TODAY" ? "BEST TODAY" : `BEST OF ${runDay}`,
       page: this.page,
+      intro: { t: this.introT, total: CONFIG.intro.seconds },
       extras: this.extrasShown,
       // The result on a page is the daily try just flown (the home screen's is state "gameover").
       result: this.state === "gameover" && this.overRecord,

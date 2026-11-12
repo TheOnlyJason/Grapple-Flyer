@@ -102,6 +102,12 @@ export const CONFIG = {
   },
 
   // Orbs are the currency: collected in a run, banked into the save when it ends.
+  // The moment between the tap that starts a run and the run: READY, GO.
+  // Nothing is taken in it, so a first tap-and-let-go is not a wasted grab.
+  intro: {
+    seconds: 1.15, // READY for about two thirds of it, then GO
+  },
+
   // The daily run: one world a day, the same for everyone.
   daily: {
     tries: 2, // daily runs a player may begin per day (both swings together)

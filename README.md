@@ -134,6 +134,21 @@ an ordinary run (5–7 for a player not chasing them), so the first unlock comes
 within an evening and the last is a long-term goal. Every character is free;
 the shop's item list is where a priced character would go.
 
+### Starting a run: READY, GO
+
+Watching new players, the first press was often a quick tap and let go —
+which, a run being a grab from the first frame, grabbed the first anchor and
+let go of it at once. So a tap no longer starts the run itself: the home
+screen gives way to a short intro (`CONFIG.intro.seconds`, 1.15 s) — READY
+with HOLD TO SWING · LET GO TO FLY under it, then GO — while the character
+glides on, and nothing pressed in it counts. A finger still down when it
+ends grabs only once lifted and pressed again. A daily try (FLY, or RESTART
+on its pause screen) cuts to the start of the day's world first and the intro
+plays over that starting line, so the day still starts the same for everyone.
+The run after GO is exactly the run a tap started before; the headless probes
+turn the intro off (`GALE_INTRO=1` keeps it) and `scripts/daily-probe.mjs`
+checks it.
+
 ### The loop
 
 1. **Glide** forward, losing altitude slowly. Scan for the next anchor (it lights

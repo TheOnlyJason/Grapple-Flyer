@@ -119,6 +119,9 @@ globalThis.setTimeout = globalThis.setTimeout || ((fn) => fn());
 let fakeNow = 1762_000_000_000;
 Date.now = () => (fakeNow += 1);
 await import(path.join(assetsDir, bundle));
+// The READY / GO intro before a run is off here (it changes nothing in the run
+// itself); GALE_INTRO=1 keeps it. scripts/daily-probe.mjs checks it.
+if (globalThis.window.GALE_CONFIG?.intro && process.env.GALE_INTRO !== "1") globalThis.window.GALE_CONFIG.intro.seconds = 0;
 
 const game = globalThis.window.GALE;
 if (!game) throw new Error("game instance not exposed on window.GALE");

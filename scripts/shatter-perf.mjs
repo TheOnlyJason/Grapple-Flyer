@@ -39,6 +39,9 @@ globalThis.localStorage = { // A returning player: the first-flight tutorial is 
   store: { "gale.save.v1": JSON.stringify({ tutorialDone: true }) }, getItem(k) { return this.store[k] ?? null; }, setItem(k, v) { this.store[k] = String(v); } };
 
 await import(path.join(assetsDir, bundle));
+// The READY / GO intro before a run is off here (it changes nothing in the run
+// itself); GALE_INTRO=1 keeps it. scripts/daily-probe.mjs checks it.
+if (globalThis.window.GALE_CONFIG?.intro && process.env.GALE_INTRO !== "1") globalThis.window.GALE_CONFIG.intro.seconds = 0;
 const game = globalThis.window.GALE;
 let t = 0;
 const tick = (n, dtMs = 1000 / 120) => { for (let i = 0; i < n; i++) { t += dtMs; const cb = rafCb; rafCb = null; cb(t); } };
