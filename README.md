@@ -155,9 +155,9 @@ The spawner reads one difficulty number (`World.difficulty`). In 1.2 it rose in
 a straight line and was at its hardest by 650 m, so every stretch after that
 was the same. Now it rises with distance and levels off without stopping —
 `base = d / (d + halfPx)`, times `scale` — so the 1.2 game's hardest sky comes
-at about 2,000 m and the ceiling is half again past it (with caps on the gap,
-rock and moving-anchor chances so it stays flyable). Roughly 0.25 at 200 m,
-0.6 at 650 m, 1.0 at 2,000 m, 1.25 at 5,000 m.
+at about 4,000 m and the ceiling is half again past it (with caps on the gap,
+rock and moving-anchor chances so it stays flyable). Roughly 0.25 at 400 m,
+0.6 at 1,300 m, 1.0 at 4,000 m, 1.25 at 10,000 m.
 
 A struggling player gets an **assist**: at the start of a run the game
 averages the last three scores on that swing against its best; at

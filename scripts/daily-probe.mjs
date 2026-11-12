@@ -287,8 +287,8 @@ if (CASE === "difficulty") {
     return v;
   };
   const r2 = (v) => Math.round(v * 100) / 100;
-  ok("the curve: easy at the start, the old hardest at about 2,000 m", at(0) === 0 && Math.abs(at(2000) - 1) < 0.01, `200 m ${r2(at(200))}, 650 m ${r2(at(650))}, 2,000 m ${r2(at(2000))}`);
-  ok("...and it keeps rising, never past its ceiling", at(5000) > at(3000) && at(3000) > at(2000) && at(1e7) < D.scale, `3,000 m ${r2(at(3000))}, 5,000 m ${r2(at(5000))}, 20,000 m ${r2(at(20000))}`);
+  ok("the curve: easy at the start, 0.25 at 400 m, the old hardest at about 4,000 m", at(0) === 0 && Math.abs(at(400) - 0.25) < 0.01 && Math.abs(at(4000) - 1) < 0.01, `400 m ${r2(at(400))}, 1,300 m ${r2(at(1300))}, 4,000 m ${r2(at(4000))}`);
+  ok("...and it keeps rising, never past its ceiling", at(10000) > at(6000) && at(6000) > at(4000) && at(1e7) < D.scale, `6,000 m ${r2(at(6000))}, 10,000 m ${r2(at(10000))}, 40,000 m ${r2(at(40000))}`);
   ok("the assist eases it, fading out to nothing at the best", r2(at(500, 0.3, 2000)) === r2(at(500) * (1 - 0.3 * 0.75)) && at(2000, 0.3, 2000) === at(2000) && at(2500, 0.3, 2000) === at(2500));
   // The assist from the last runs on the swing.
   S.data.bestScore = 18000;
