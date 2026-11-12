@@ -102,6 +102,11 @@ export const CONFIG = {
   },
 
   // Orbs are the currency: collected in a run, banked into the save when it ends.
+  // The daily run: one world a day, the same for everyone.
+  daily: {
+    tries: 2, // daily runs a player may begin per day (both swings together)
+  },
+
   orbs: {
     points: 10, // score per orb (the orb itself is the reward: +1 to the bank)
     pickupRadius: 16, // added to the player radius

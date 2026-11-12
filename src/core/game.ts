@@ -23,7 +23,7 @@ import { Particles } from "../systems/particles";
 import { Objectives } from "../systems/objectives";
 import { Tutorial } from "../systems/tutorial";
 import { Background } from "../render/background";
-import { Hud, HudData } from "../render/hud";
+import { Hud, HudData, type Page } from "../render/hud";
 import {
   cycleCharacterId,
   characterName,
@@ -100,9 +100,10 @@ export class Game {
   private tutorialGaugeGiven = false;
   private tutorialSeaWarned = false;
   private timeScale = 1;
-  // The daily run: the home screen's DAILY RUN switch, and the day of the
-  // run under way (null for an ordinary run).
-  private dailyMode = false;
+  // The menus are pages: the home screen, and the shop, settings and
+  // daily-run pages opened from it (src/render/hud.ts draws them).
+  private page: Page = "home";
+  // The day of the daily run under way (null for an ordinary run).
   private runDaily: string | null = null;
   private newDailyBest = false;
   // The record a run counts toward: Conserve momentum's once the option has
@@ -111,9 +112,8 @@ export class Game {
   // The game-over screen shows the record of the run just flown (its swing,
   // its day) until the player changes what the next run would chase.
   private overRecord = false;
-  // The home screen's TRAILS picker: open, and the trail picked in it (the
-  // one worn, or a locked one being previewed on the gliding character).
-  private trailsOpen = false;
+  // The shop's trail picked: the one worn, or a locked one being previewed
+  // on the gliding character.
   private trailPick: TrailId = "own";
   // A short fade in from the sky when a daily run cuts to its own world.
   private fade = 0;
@@ -218,19 +218,25 @@ export class Game {
   }
 
   /**
-   * `tutorial`: the HOW TO PLAY button. A brand-new player's first run is
-   * the tutorial anyway, and a restart during it starts it over.
+   * `tutorial`: HOW TO PLAY on the settings page. A brand-new player's first
+   * run is the tutorial anyway, and a restart during it starts it over.
+   * `daily`: FLY on the daily page — the day's world (never the tutorial),
+   * if one of the day's tries is left; the try is counted as the run begins.
    */
-  private startRun(tutorial = false) {
+  private startRun(tutorial = false, daily = false) {
     const firstFlight = !this.storage.data.tutorialDone && this.storage.data.runs === 0;
     const withTutorial = tutorial || firstFlight || this.tutorial.active;
-    this.closeTrails();
+    let day: string | null = null;
+    if (daily && !withTutorial) {
+      day = dailyKey();
+      if (!this.storage.useDailyTry(day, CONFIG.daily.tries)) return;
+    }
+    this.leavePage();
     this.overRecord = false;
     this.runConserve = this.storage.data.conserveMomentum;
-    // With DAILY RUN on, a run (never the tutorial) flies the day's world.
-    this.runDaily = this.dailyMode && !withTutorial ? dailyKey() : null;
-    if (this.runDaily) {
-      this.startDailyRun(this.runDaily);
+    this.runDaily = day;
+    if (day) {
+      this.startDailyRun(day);
       return;
     }
     if (this.state === "menu" || this.state === "gameover") {
@@ -500,28 +506,35 @@ export class Game {
     return dx * dx + dy * dy <= b.r * b.r;
   }
 
-  private hitCharacterCycle(dir: -1 | 1): boolean {
-    const b = this.hud.characterCycleButton(this.camera, dir);
-    const p = this.input.pointer;
-    const dx = p.x - b.x;
-    const dy = p.y - b.y;
-    if (dx * dx + dy * dy <= b.r * b.r) return true;
-    // The name between the chevrons is part of the picker: its left half
-    // goes back, its right half forward (a tap on it is not a "fly").
-    const other = this.hud.characterCycleButton(this.camera, dir === 1 ? -1 : 1);
-    const mid = (b.x + other.x) / 2;
-    const inRow = Math.abs(dy) <= b.r && p.x > Math.min(b.x, other.x) && p.x < Math.max(b.x, other.x);
-    return inRow && (dir === 1 ? p.x >= mid : p.x < mid);
-  }
-
   private hitRect(r: { x: number; y: number; w: number; h: number }): boolean {
     const p = this.input.pointer;
     return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
   }
 
-  /** Abandon the current run (nothing is recorded) and start a fresh one in place. */
+  /** Daily tries left today. */
+  private get dailyTriesLeft(): number {
+    return Math.max(0, CONFIG.daily.tries - this.storage.dailyTries(dailyToday().key));
+  }
+
+  /** Restarting a daily run begins another of the day's tries; with none left it cannot restart. */
+  private get canRestart(): boolean {
+    return this.runDaily === null || this.tutorial.active || CONFIG.daily.tries - this.storage.dailyTries(dailyKey()) > 0;
+  }
+
+  /**
+   * RESTART RUN. An ordinary run is abandoned (nothing is recorded) and a
+   * fresh one starts in place. A daily try is never thrown away: it ends
+   * here, recorded like any other end, and the day's next try begins.
+   */
   private restartRun() {
     if (this.state !== "playing" && this.state !== "paused") return;
+    if (!this.canRestart) return;
+    if (this.runDaily !== null && !this.tutorial.active) {
+      this.sound.setMusicPaused(false);
+      this.endRun({ burst: false, quiet: true });
+      this.startRun(false, true);
+      return;
+    }
     this.clearSmash();
     this.magnetTime = 0;
     this.barrier = false;
@@ -543,6 +556,41 @@ export class Game {
     this.startRun();
   }
 
+  /**
+   * HOME on the pause screen: the run ends here and the home screen opens.
+   * It is recorded like any other run (its score, its orbs; a daily try has
+   * been counted since it began) — except the tutorial's, which is simply
+   * left, so the first flight is still ahead.
+   */
+  private quitToHome() {
+    if (this.state !== "paused" && this.state !== "playing") return;
+    this.sound.setMusicPaused(false);
+    if (this.tutorial.active) {
+      this.clearSmash();
+      this.stopTutorial();
+      this.magnetTime = 0;
+      this.barrier = false;
+      this.sound.setWind(0);
+      this.state = "gameover";
+      this.timeInState = 0;
+      this.player.trail.length = 0;
+      this.attractGlideX = this.player.x;
+      this.attractGlideStartTime = this.time;
+      this.player.animateMenuGlide(0, 0, this.attractGlideX);
+    } else {
+      this.endRun({ burst: false, quiet: true });
+    }
+    this.goHome();
+  }
+
+  /** The plain home screen: no page open, and no run's result on it. */
+  private goHome() {
+    this.leavePage();
+    this.page = "home";
+    if (this.state === "gameover") this.state = "menu";
+    this.overRecord = false;
+  }
+
   /** The mute button (or M): sound off or on, remembered in the save. */
   private toggleMute() {
     const muted = this.sound.enabled;
@@ -551,7 +599,7 @@ export class Game {
   }
 
   private hitMuteButton(): boolean {
-    return this.hud.hitsMute(this.camera, this.isAttractScreen(), this.input.pointer.x, this.input.pointer.y);
+    return this.hud.hitsMute(this.camera, this.input.pointer.x, this.input.pointer.y);
   }
 
   /** The pause-menu swing option (remembered in the save). */
@@ -561,34 +609,42 @@ export class Game {
     this.player.setConserveMomentum(next);
     // Switched on mid-run: the run counts toward Conserve momentum's best.
     if (next && (this.state === "playing" || this.state === "paused")) this.runConserve = true;
+    // Switched on the settings page: the best in view is the next run's.
+    if (this.isAttractScreen()) this.overRecord = false;
   }
 
-  /** DAILY RUN and TRAILS show once the first flight is behind the player. */
+  /** The daily run and the shop show once the first flight is behind the player. */
   private get extrasShown(): boolean {
     return this.storage.data.tutorialDone || this.storage.data.runs > 0;
-  }
-
-  private toggleDaily() {
-    this.dailyMode = !this.dailyMode;
-    this.overRecord = false;
-    this.sound.collect();
   }
 
   private trailOwned(id: TrailId): boolean {
     return id === "own" || this.storage.owns(trailItem(id));
   }
 
-  private openTrails() {
-    this.trailsOpen = true;
+  /** Open a page from the home screen (a run's result on it has been seen: it does not follow onto the page). */
+  private openPage(page: Page) {
+    this.leavePage();
+    if (this.state === "gameover") this.state = "menu";
+    this.overRecord = false;
+    this.page = page;
     this.trailPick = this.storage.data.trail;
+    this.sound.collect();
   }
 
-  /** Close the picker; a locked trail on preview comes off. */
-  private closeTrails() {
-    if (!this.trailsOpen) return;
-    this.trailsOpen = false;
+  /**
+   * Back to the home screen. A locked trail on preview in the shop comes
+   * off, and the last run's result has been seen: home is the plain menu.
+   */
+  private leavePage() {
+    if (this.page === "home") return;
+    this.page = "home";
     this.trailPick = this.storage.data.trail;
     this.player.trailId = this.storage.data.trail;
+    if (this.state === "gameover") {
+      this.state = "menu";
+      this.overRecord = false;
+    }
   }
 
   /** A swatch tapped: an owned trail is worn at once; a locked one is previewed. */
@@ -610,16 +666,35 @@ export class Game {
     this.hud.flash = 0.6;
   }
 
-  private handleTrailsInput() {
-    const keys = this.input.tapped;
-    if (keys.has("Escape") || keys.has("Enter") || keys.has("Space")) {
-      this.closeTrails();
-      return;
+  private hitCircle(c: { x: number; y: number; r: number }): boolean {
+    const p = this.input.pointer;
+    const r = Math.max(c.r, 22);
+    const dx = p.x - c.x;
+    const dy = p.y - c.y;
+    return dx * dx + dy * dy <= r * r;
+  }
+
+  /** Every page: Esc, or its title in the top-left corner, goes back to the home screen. */
+  private pageBack(): boolean {
+    if (this.input.tapped.has("Escape") || (this.input.pointerJustDown && this.hitRect(this.hud.backButton(this.camera)))) {
+      this.leavePage();
+      return true;
     }
+    return false;
+  }
+
+  /** The shop: the character, and the trails (wear an owned one, preview and unlock a locked one). */
+  private handleShopInput() {
+    if (this.pageBack()) return;
+    const keys = this.input.tapped;
     if (keys.has("ArrowLeft") || keys.has("ArrowRight")) {
       const i = TRAILS.findIndex((t) => t.id === this.trailPick);
       const dir = keys.has("ArrowRight") ? 1 : -1;
       this.pickTrail(TRAILS[(i + dir + TRAILS.length) % TRAILS.length].id);
+      return;
+    }
+    if (keys.has("KeyC")) {
+      this.cycleCharacter(1);
       return;
     }
     if (keys.has("KeyU")) {
@@ -627,12 +702,14 @@ export class Game {
       return;
     }
     if (!this.input.pointerJustDown) return;
-    if (this.hitMuteButton()) {
-      this.toggleMute();
+    const panel = this.hud.shopPanel(this.camera);
+    const p = this.input.pointer;
+    // The character's name between its chevrons: the left half goes back, the right half on.
+    if (Math.abs(p.y - panel.charY) <= 22 && Math.abs(p.x - panel.cx) <= panel.charHalf + 22) {
+      this.cycleCharacter(p.x < panel.cx ? -1 : 1);
+      this.player.trailId = this.trailPick;
       return;
     }
-    const panel = this.hud.trailsPanel(this.camera);
-    const p = this.input.pointer;
     for (let i = 0; i < panel.swatches.length; i++) {
       const b = panel.swatches[i];
       // The swatch and the price under it.
@@ -641,14 +718,28 @@ export class Game {
         return;
       }
     }
-    if (this.hitRect(panel.action)) {
-      if (!this.trailOwned(this.trailPick)) this.buyTrail();
-      return;
+    if (this.hitRect(panel.action) && !this.trailOwned(this.trailPick)) this.buyTrail();
+    // A tap anywhere else on the page does nothing (and never flies).
+  }
+
+  /** Settings: sound, the swing option, and the tutorial again. */
+  private handleSettingsInput() {
+    if (this.pageBack()) return;
+    if (!this.input.pointerJustDown) return;
+    const rows = this.hud.settingsRows(this.camera);
+    if (this.hitRect(rows.sound)) this.toggleMute();
+    else if (this.hitRect(rows.momentum)) {
+      this.toggleConserveMomentum();
+      this.sound.collect();
+    } else if (this.hitRect(rows.howTo)) this.startRun(true);
+  }
+
+  /** The daily page: FLY begins one of the day's tries. */
+  private handleDailyInput() {
+    if (this.pageBack()) return;
+    if (this.input.tapped.has("Enter") || (this.input.pointerJustDown && this.hitRect(this.hud.dailyPanel(this.camera).fly))) {
+      if (this.dailyTriesLeft > 0) this.startRun(false, true);
     }
-    // A near miss between the controls does nothing; DONE, or a tap
-    // anywhere off the panel, closes the picker. Neither ever flies.
-    if (this.hitRect(panel.body)) return;
-    this.closeTrails();
   }
 
   private hitPauseButton(): boolean {
@@ -669,7 +760,7 @@ export class Game {
     this.player.smashGlow = false;
   }
 
-  private endRun(opts: { crashSound?: boolean; burst?: boolean } = {}) {
+  private endRun(opts: { crashSound?: boolean; burst?: boolean; quiet?: boolean } = {}) {
     if (
       this.state !== "playing" &&
       this.state !== "paused" &&
@@ -693,11 +784,14 @@ export class Game {
     this.newBest = record.best;
     this.newDailyBest = record.dailyBest;
     this.overRecord = true;
+    // A daily try ends on the daily page (its result, and the tries left);
+    // any other run on the home screen.
+    this.page = this.runDaily ? "daily" : "home";
     this.magnetTime = 0;
     this.barrier = false;
     this.sound.setWind(0);
     if (opts.crashSound) this.sound.crash();
-    this.camera.addShake(16);
+    if (!opts.quiet) this.camera.addShake(16);
     if (opts.burst !== false) {
       this.particles.emit(this.player.x, this.player.y, {
         count: 30,
@@ -721,8 +815,13 @@ export class Game {
   }
 
   private handleAttractInput() {
-    if (this.trailsOpen) {
-      this.handleTrailsInput();
+    if (this.page === "shop") return this.handleShopInput();
+    if (this.page === "settings") return this.handleSettingsInput();
+    if (this.page === "daily") return this.handleDailyInput();
+    // The home screen: its page buttons, and a tap anywhere else flies.
+    // After a run it carries the result, with HOME (or Esc) to clear it.
+    if (this.state === "gameover" && (this.input.tapped.has("Escape") || (this.input.pointerJustDown && this.hitRect(this.hud.backButton(this.camera))))) {
+      this.goHome();
       return;
     }
     if (
@@ -737,28 +836,17 @@ export class Game {
       return;
     }
     if (this.input.pointerJustDown) {
-      if (this.hitMuteButton()) {
-        this.toggleMute();
+      const nav = this.hud.navButtons(this.camera, this.extrasShown);
+      if (this.hitCircle(nav.settings)) {
+        this.openPage("settings");
         return;
       }
-      if (this.hitRect(this.hud.howToPlayButton(this.camera))) {
-        this.startRun(true);
+      if (nav.shop && this.hitCircle(nav.shop)) {
+        this.openPage("shop");
         return;
       }
-      if (this.extrasShown && this.hitRect(this.hud.dailyButton(this.camera))) {
-        this.toggleDaily();
-        return;
-      }
-      if (this.extrasShown && this.hitRect(this.hud.trailsButton(this.camera).hit)) {
-        this.openTrails();
-        return;
-      }
-      if (this.hitCharacterCycle(-1)) {
-        this.cycleCharacter(-1);
-        return;
-      }
-      if (this.hitCharacterCycle(1)) {
-        this.cycleCharacter(1);
+      if (nav.daily && this.hitCircle(nav.daily)) {
+        this.openPage("daily");
         return;
       }
       if (this.hitPlayButton() || this.input.pressed) {
@@ -868,6 +956,10 @@ export class Game {
         const b = this.hud.pauseMenuButtons(this.camera);
         if (this.hitRect(b.restart)) {
           this.restartRun();
+          return;
+        }
+        if (this.hitRect(b.home)) {
+          this.quitToHome();
           return;
         }
         if (this.hitRect(b.momentum)) {
@@ -1489,14 +1581,20 @@ export class Game {
     const inRun = !this.isAttractScreen();
     const ofRun = inRun || (this.state === "gameover" && this.overRecord);
     const today = dailyToday();
-    const daily = ofRun ? this.runDaily : this.dailyMode ? today.key : null;
+    const daily = ofRun ? this.runDaily : this.page === "daily" ? today.key : null;
     const swing: Swing = (ofRun ? this.runConserve : this.storage.data.conserveMomentum) ? "conserve" : "classic";
     // A run that began before midnight belongs to its own day, by name.
     const runDay = this.runDaily === null || this.runDaily === today.key ? "TODAY" : dailyLabel(this.runDaily);
-    // The TRAILS button's dot (home and game-over screens only).
+    // The shop button's dot: something locked is affordable (menus only).
     let canUnlock = false;
     if (!inRun) {
       for (const t of TRAILS) if (!this.trailOwned(t.id) && t.price <= this.storage.data.orbs) canUnlock = true;
+    }
+    // On the pause screen of a daily try, RESTART RUN says what it costs.
+    let restartLabel = "RESTART RUN";
+    if (this.state === "paused" && this.runDaily !== null && !this.tutorial.active) {
+      const used = this.storage.dailyTries(dailyKey());
+      restartLabel = used < CONFIG.daily.tries ? `RESTART · TRY ${used + 1}/${CONFIG.daily.tries}` : "NO TRIES LEFT";
     }
     return {
       state: this.state,
@@ -1508,15 +1606,25 @@ export class Game {
       bestConserve: swing === "conserve",
       bestDay: daily === null || daily === today.key ? "TODAY" : dailyLabel(daily),
       dailyFlag: !this.newDailyBest ? "" : runDay === "TODAY" ? "BEST TODAY" : `BEST OF ${runDay}`,
+      page: this.page,
       extras: this.extrasShown,
-      daily: { on: this.dailyMode, label: today.label, day: today.day },
+      // The result on a page is the daily try just flown (the home screen's is state "gameover").
+      result: this.state === "gameover" && this.overRecord,
+      daily: {
+        label: today.label,
+        day: today.day,
+        tries: CONFIG.daily.tries,
+        triesLeft: this.dailyTriesLeft,
+        nextIn: today.nextIn,
+      },
+      restartLabel,
+      canRestart: this.canRestart,
       trails: {
-        open: this.trailsOpen,
         pick: this.trailPick,
         worn: this.storage.data.trail,
         pickOwned: this.trailOwned(this.trailPick),
         canUnlock,
-        owned: this.trailsOpen ? TRAILS.map((t) => this.trailOwned(t.id)) : NO_TRAILS,
+        owned: this.page === "shop" ? TRAILS.map((t) => this.trailOwned(t.id)) : NO_TRAILS,
       },
       wind: this.wind / CONFIG.wind.max,
       dashReady: this.wind >= CONFIG.wind.dashCost,

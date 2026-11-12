@@ -31,30 +31,44 @@ fly from the keyboard (starting a run and the pause-screen buttons take a click)
 | **Tether & swing** | tap **and hold** | hold `Space` / `↑` / `W` |
 | **Slingshot launch** | release | release the hold key |
 | **Wind Dash** (gauge full) | tap the **DASH** button | `Shift` / `D` |
-| Mute / unmute | tap the **speaker** button (top right: by the pause button in a run) | `M` |
-| Start / restart | tap anywhere on the menu (TAP TO FLY) | — |
-| Change character | the **‹ ›** either side of its name: Paper Plane, Monkey, Monkey King, Rainbow Cat | `C` / `←` `→` |
-| Daily run on / off | tap **DAILY RUN** (top left, under HOW TO PLAY) | — |
-| Trails (spend orbs) | tap **TRAILS** (top right, under the sound) | in the picker: `←` `→` pick, `U` unlock, `Esc` done |
+| Mute / unmute | in a run: the **speaker** button by the pause button. On the menus: **SETTINGS ▸ SOUND** | `M` |
+| Start / restart | tap anywhere on the home screen (TAP TO FLY) | — |
+| Open a page | **DAILY**, **SHOP**, **SETTINGS**: the small buttons top right on the home screen | — |
+| Back to the home screen | **HOME**, top left on every page and on a game-over screen; **HOME** on the pause screen ends the run there | `Esc` on a page or game-over screen |
+| Change character | **SHOP**: the **‹ ›** either side of its name (Paper Plane, Monkey, Monkey King, Rainbow Cat) | `C` (also `←` `→` on the home screen) |
+| Trails (spend orbs) | **SHOP**: tap a swatch, then **UNLOCK** | in the shop: `←` `→` pick, `U` unlock |
+| Daily run | **DAILY** ▸ **FLY** (two tries a day) | `Enter` on the daily page |
 
-### The home screen
+### The menus: a home screen and three pages
 
 In the manner of Alto's Adventure: the live sky is the picture, with the
-plane gliding through it, and the type sits quietly on top — a light,
-wide-tracked GALE, small spaced capitals, no play button (a tap anywhere
-flies), the character's name between thin chevrons (a tap on either half
-of the name works too), HOW TO PLAY and the sound in the top corners, and
-the best run and orbs as plain words in the bottom ones, where a resting
-thumb's tap simply flies. The game-over screen is the same page with the
-run's points, distance, perfects, goals and orbs in the middle, on a soft
-dark wash so a pale day sky cannot swallow them (`Hud.drawAttractScreen`).
+character gliding through it, and the type sits quietly on top
+(`Hud.drawAttractScreen` and the page drawers under it).
 
-Once the first flight is behind the player two more controls appear in the
-top corners: **DAILY RUN** under HOW TO PLAY and **TRAILS** under the sound.
-The best in the bottom-left corner is the record the next run would chase:
-the swing in force, and today's if DAILY RUN is on. On a game-over screen it
-is the record of the run just flown (so NEW BEST always sits beside the
-record it is about) until DAILY RUN is switched there.
+- **Home** is nearly empty: a light, wide-tracked GALE, TAP TO FLY (no play
+  button: a tap anywhere flies), the best run and the orbs as plain words in
+  the bottom corners, where a resting thumb's tap simply flies, and three
+  small round buttons in the top-right corner — **DAILY**, **SHOP**,
+  **SETTINGS**. A brand-new player sees only SETTINGS until the first flight
+  is done. After a run the home screen carries the run's points, distance,
+  perfects, goals and orbs in the middle (on a soft dark wash so a pale day
+  sky cannot swallow them), TAP TO FLY AGAIN, and **HOME** in the top-left
+  corner to clear it.
+- **Shop**: the character (its name between thin chevrons; the one gliding
+  on the left is the preview), the trails, and the orbs to spend.
+- **Settings**: SOUND, CONSERVE MOMENTUM (the same switch as on the pause
+  screen) and HOW TO PLAY (the tutorial run again).
+- **Daily run**: the date, today's best, the tries left, and FLY.
+
+Every page has **HOME** in its top-left corner (Esc on a keyboard), its
+column sits right of centre so the gliding character stays in view, and a tap
+that misses its controls does nothing — only the home screen flies on a tap.
+The pause screen has HOME too: it ends the run there (recorded like any
+other, except the tutorial, which is simply left) and opens the home screen.
+
+The best in the home screen's corner is the record the next run would chase
+(the swing in force). After a run it is the record of the run just flown, so
+NEW BEST always sits beside the record it is about.
 
 ### Bests per swing
 
@@ -69,16 +83,25 @@ or `BEST · MOMENTUM`.
 
 ### The daily run
 
-**DAILY RUN** is a switch. While it is on (the button turns gold and the
-title's subtitle reads `DAILY RUN · NOV 11`), a tap flies the day's world: the
-same anchors, rocks, orbs, power-ups and objectives for every player, built
-from the date (`core/daily.ts`: the seed is the player's local calendar date).
-It keeps its own best for the day, per swing (`TODAY` in the corner, `BEST
-TODAY` on the game-over screen), any number of tries; a daily run still banks
-its orbs and still counts toward the all-time best. A run still in the air at
-midnight belongs to the day it began (`BEST OF NOV 11`), and the save keeps
-the last week of days, so a clock that steps back a day (a changed time zone)
-finds that day's best again rather than wiping the later one.
+One world per calendar day — the same anchors, rocks, orbs, power-ups and
+objectives for every player, built from the date (`core/daily.ts`: the seed
+is the player's local calendar date) — and **two tries a day**
+(`CONFIG.daily.tries`), both swings together. The daily page shows the date,
+today's best for the swing in force, the tries left as two pips, and **FLY**,
+the only thing that begins a try: a stray tap can never spend one. A try is
+counted and saved the moment it begins, so closing the app does not give it
+back; RESTART RUN on the pause screen of a daily try ends that try (recorded,
+like any other end: a try is never thrown away) and begins the next (the
+button says `RESTART · TRY 2/2`), and is off when none is left. A try
+ends back on the daily page with its result, the tries left, and FLY again or
+`A NEW SKY IN 6H 38M` once both are spent.
+
+The day keeps its own best per swing (`TODAY` on the in-run line, `BEST
+TODAY` on the result); a daily run still banks its orbs and still counts
+toward the all-time best. A run still in the air at midnight belongs to the
+day it began (`BEST OF NOV 11`), and the save keeps the last week of days, so
+a clock that steps back a day (a changed time zone) finds that day's best and
+tries again rather than wiping the later one.
 
 A daily run starts from the very start of its world (`Game.startDailyRun`)
 rather than from wherever the home screen's glide happens to be, with a short
@@ -88,19 +111,19 @@ way, so nothing the player does can shift what comes later, and the screen
 size only changes how far ahead the world is built, never what is built
 (`scripts/daily-probe.mjs` flies it at four screen sizes, with both swings,
 idle and by bots, after Restart Run and after a game over, and compares every
-object). The tutorial never runs in the daily world: HOW TO PLAY flies an
-ordinary run.
+object). The tutorial never runs in the daily world, and the daily page is not
+on the home screen until the first flight is done.
 
 ### Trails (something to spend orbs on)
 
-Orbs are banked at the end of every run, good or bad, and **TRAILS** is where
-they go: six coloured ribbons (`characters/trails.ts`) from 60 to 800 orbs.
+Orbs are banked at the end of every run, good or bad, and the **shop** is
+where they go: six coloured ribbons (`characters/trails.ts`) from 60 to 800 orbs.
 Any character can wear any trail owned; **Signature** — each character's own
-trail — is always there. In the picker a tap on a swatch wears an owned trail
-at once, or previews a locked one on the gliding character with its price and
-an **UNLOCK** button (lit when the bank covers it). DONE, or a tap off the
-panel, closes it; a locked trail on preview comes off. A gold dot on the
-TRAILS button says something is affordable. Prices are set against the orb take of
+trail — is always there. On the shop page a tap on a swatch wears an owned
+trail at once, or previews a locked one on the gliding character with its
+price and an **UNLOCK** button (lit when the bank covers it); leaving the
+page takes a locked trail on preview off. A gold dot on the home screen's
+SHOP button says something is affordable. Prices are set against the orb take of
 an ordinary run (5–7 for a player not chasing them), so the first unlock comes
 within an evening and the last is a long-term goal. Every character is free;
 the shop's item list is where a priced character would go.
@@ -224,8 +247,9 @@ vector, so timing the release governs the launch's shape and power.
 ### Option: Conserve momentum
 
 The pause screen has **RESTART RUN** (abandons the run, unrecorded, and
-starts a fresh one in place) and one switch, **CONSERVE MOMENTUM** (off by
-default, and remembered in the save). Off is the swing above, unchanged from
+starts a fresh one in place), **HOME** (ends the run there and opens the home
+screen) and one switch, **CONSERVE MOMENTUM** (off by default, remembered in
+the save, and also on the settings page). Off is the swing above, unchanged from
 1.2. On swaps
 in a **pendulum solved in polar coordinates** around the anchor: rope length,
 angle from straight below and angular velocity, integrated with velocity
@@ -295,7 +319,7 @@ node scripts/tether-probe.mjs    # both swings: 1.2 rope by default, the Conserv
 node scripts/tutorial-probe.mjs  # a new player's first flight: card order, slow motion, safety net, SKIP, HOW TO PLAY
 node scripts/powerups-probe.mjs  # power-ups, orbs, barrier, objectives, restarts
 node scripts/equiv-probe.mjs     # the default swing plays exactly like the 1.2 release, frame for frame (builds 1.2 from its commit to compare)
-node scripts/daily-probe.mjs     # the daily world is the same for everyone; bests per swing and per day; the trail shop; old and tampered saves
+node scripts/daily-probe.mjs     # the daily world is the same for everyone; two tries a day; bests per swing and per day; the pages and their HOME buttons; the shop; old and tampered saves
 node scripts/smash-probe.mjs decay|ahead|bot   # smash-speed decay, meteor-ahead outcomes, play-bot stats
 node scripts/swing-strip.mjs     # contact sheets of the pendulum: a swing, a loop, a moving anchor → screenshots/
 node scripts/shatter-strip.mjs   # contact sheet of a meteor smash → screenshots/

@@ -156,6 +156,9 @@ function tick(n = 1) {
 const down = (x = VW / 2, y = VH * 0.45) => dispatch("pointerdown", { clientX: x, clientY: y, pointerId: 1 });
 const up = (x = VW / 2, y = VH * 0.45) => dispatch("pointerup", { clientX: x, clientY: y, pointerId: 1 });
 const tapAt = (r) => { down(r.x + r.w / 2, r.y + r.h / 2); tick(1); up(r.x + r.w / 2, r.y + r.h / 2); tick(1); };
+// HOW TO PLAY lives on the settings page: SETTINGS on the home screen, then its row.
+const openSettings = () => { const b = game.hud.navButtons(game.camera, true).settings; down(b.x, b.y); tick(1); up(b.x, b.y); tick(2); };
+const howToPlay = () => { openSettings(); tapAt(game.hud.settingsRows(game.camera).howTo); };
 const key = (code) => { dispatch("keydown", { code }); tick(1); dispatch("keyup", { code }); };
 const hud = () => game.buildHudData();
 
@@ -267,7 +270,7 @@ check("the dash lesson's dash smashes its rock", !!run1.lessonRock && run1.lesso
   player.y = game.world.seaLevel - 4; player.vy = 500;
   for (let i = 0; i < 900 && game.state !== "gameover"; i++) tick(1);
   tick(30);
-  tapAt(game.hud.howToPlayButton(game.camera));
+  howToPlay();
   check("HOW TO PLAY starts the tutorial again", game.state === "playing" && tut.active);
   for (let i = 0; i < 20; i++) tick(1);
   player.y = game.world.seaLevel - 4; player.vy = 600; player.state = "glide"; player.anchor = null;
@@ -301,7 +304,7 @@ check("the dash lesson's dash smashes its rock", !!run1.lessonRock && run1.lesso
   player.y = game.world.seaLevel - 4; player.vy = 500;
   for (let i = 0; i < 900 && game.state !== "gameover"; i++) tick(1);
   tick(30);
-  tapAt(game.hud.howToPlayButton(game.camera));
+  howToPlay();
   // Jump the tutorial to its dash lesson.
   tut.step = "dash";
   let prompted = false;
@@ -325,7 +328,7 @@ check("the dash lesson's dash smashes its rock", !!run1.lessonRock && run1.lesso
   player.y = game.world.seaLevel - 4; player.vy = 500;
   for (let i = 0; i < 900 && game.state !== "gameover"; i++) tick(1);
   tick(30);
-  tapAt(game.hud.howToPlayButton(game.camera));
+  howToPlay();
   tut.step = "dash";
   let prompted = false;
   for (let i = 0; i < 900 && !prompted; i++) { tick(1); prompted = tut.want === "dash"; }
@@ -357,7 +360,8 @@ check("the dash lesson's dash smashes its rock", !!run1.lessonRock && run1.lesso
   player.y = game.world.seaLevel - 4; player.vy = 500;
   for (let i = 0; i < 900 && game.state !== "gameover"; i++) tick(1);
   tick(30);
-  const hb = game.hud.howToPlayButton(game.camera);
+  openSettings();
+  const hb = game.hud.settingsRows(game.camera).howTo;
   down(hb.x + hb.w / 2, hb.y + hb.h / 2); // and never lift it
   let grabbed = false;
   for (let i = 0; i < 60 * 12 && !grabbed; i++) { tick(1); grabbed = player.state === "swing"; }
@@ -373,7 +377,7 @@ check("the dash lesson's dash smashes its rock", !!run1.lessonRock && run1.lesso
   player.y = game.world.seaLevel - 4; player.vy = 500;
   for (let i = 0; i < 900 && game.state !== "gameover"; i++) tick(1);
   tick(30);
-  tapAt(game.hud.howToPlayButton(game.camera));
+  howToPlay();
   for (let i = 0; i < 5; i++) tick(1);
   game.world.anchors.length = 0;
   // In slow motion a frame can run no physics step, so the card still

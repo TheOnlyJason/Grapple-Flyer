@@ -5,8 +5,9 @@
 // the run was started (from the home screen, after a game over, or by
 // Restart Run). Each case runs in a child process (the game is a module
 // singleton) and reports what the world generated while the run was live;
-// the parent compares them. Also checks per-swing and per-day bests, the
-// trail shop, and save migration. Same canvas mocks as smoke.mjs.
+// the parent compares them. Also checks per-swing and per-day bests, the two
+// tries a day, the pages (home, shop, settings, daily) and their HOME
+// buttons, the shop, and save migration. Same canvas mocks as smoke.mjs.
 import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
@@ -177,7 +178,7 @@ const initialSave =
           owned: ["trail:coral", "trail:nope", 7, "trail:coral"],
           bestScore: -5,
           conserveBestScore: "lots",
-          daily: { date: 5, "not-a-day": { classic: { score: 9 } }, "2026-11-10": { classic: { score: "x", distance: 40 } }, "2026-11-09": null },
+          daily: { date: 5, "not-a-day": { classic: { score: 9 } }, "2026-11-10": { classic: { score: "x", distance: 40 }, tries: 1.7 }, "2026-11-09": null, "2026-11-08": { tries: "many" } },
           orbs: 30,
         }
       : CASE === "views"
@@ -214,6 +215,20 @@ const tapAt = (x, y) => {
 };
 const centre = (r) => [r.x + r.w / 2, r.y + r.h / 2];
 const flyTap = () => tapAt(VW / 2, VH * 0.45);
+// The menus: a page button on the home screen, HOME on a page, FLY on the daily page.
+const openPage = (name) => {
+  const b = game.hud.navButtons(game.camera, true)[name];
+  tapAt(b.x, b.y);
+  frame(3);
+};
+const tapHome = () => {
+  tapAt(...centre(game.hud.backButton(game.camera)));
+  frame(3);
+};
+const flyDaily = () => {
+  if (game.page !== "daily") openPage("daily");
+  tapAt(...centre(game.hud.dailyPanel(game.camera).fly));
+};
 frame(60);
 
 if (CASE === "tamper") {
@@ -224,7 +239,11 @@ if (CASE === "tamper") {
     ["tampered save: bad records read as none", S.data.bestScore === 0 && S.data.conserveBestScore === 0],
     [
       "tampered save: only real days are kept, their junk read as none",
-      JSON.stringify(S.data.daily) === JSON.stringify({ "2026-11-10": { classic: { score: 0, distance: 40 }, conserve: { score: 0, distance: 0 } } }),
+      JSON.stringify(S.data.daily) ===
+        JSON.stringify({
+          "2026-11-08": { classic: { score: 0, distance: 0 }, conserve: { score: 0, distance: 0 }, tries: 0 },
+          "2026-11-10": { classic: { score: 0, distance: 40 }, conserve: { score: 0, distance: 0 }, tries: 1 },
+        }),
       JSON.stringify(S.data.daily),
     ],
     ["tampered save: buying with too few orbs fails", S.buy("trail:lilac", 120) === false && S.data.orbs === 30],
@@ -293,60 +312,160 @@ if (CASE === "views") {
   S.setConserveMomentum(false);
   player.setConserveMomentum(false);
 
-  // 2. DAILY RUN on, then HOW TO PLAY: the tutorial run is an ordinary one.
-  tapAt(...centre(game.hud.dailyButton(game.camera)));
+  // 2. The pages. After a run the home screen carries its result; HOME clears it.
+  d = hud();
+  ok("after a run: the result is on the home screen", d.state === "gameover" && d.page === "home");
+  openPage("daily");
+  d = hud();
+  ok("opening a page from there leaves the result behind (the daily page shows the day, not that run)", game.page === "daily" && game.state === "menu" && !d.result && d.bestDaily && d.best === 0);
+  tapHome();
+  flyTap();
+  frame(5);
+  endWith(120, 60);
+  tapHome();
+  d = hud();
+  ok("HOME on a game-over screen: the plain home screen, and no run started", game.state === "menu" && d.page === "home" && !d.result);
+  openPage("settings");
+  ok("SETTINGS on the home screen opens the settings page", game.page === "settings" && game.state === "menu");
+  const rows = () => game.hud.settingsRows(game.camera);
+  tapAt(...centre(rows().sound));
+  ok("its SOUND row mutes (and saves it)", game.sound.enabled === false && S.data.muted === true && game.page === "settings");
+  tapAt(...centre(rows().sound));
+  ok("...and unmutes", game.sound.enabled === true && S.data.muted === false);
+  tapAt(...centre(rows().momentum));
+  ok("its CONSERVE MOMENTUM row switches the swing", S.data.conserveMomentum === true && player.conserveMomentum === true && game.page === "settings");
+  tapAt(VW * 0.2, VH * 0.8);
+  ok("a tap on empty space on a page does nothing", game.page === "settings" && game.state === "menu");
+  dispatch("keydown", { code: "Escape" });
+  frame(1);
+  dispatch("keyup", { code: "Escape" });
+  frame(2);
+  d = hud();
+  ok("Esc goes back to the home screen, whose best is now Conserve's", game.page === "home" && d.bestConserve && d.best === 3000);
+  openPage("settings");
+  tapAt(...centre(rows().momentum));
+  tapAt(...centre(rows().howTo));
+  frame(10);
+  ok("its HOW TO PLAY row flies the tutorial, an ordinary run", game.state === "playing" && game.runDaily === null && game.tutorial.active && S.data.conserveMomentum === false);
+  game.togglePause();
+  frame(2);
+  const runsBefore = S.data.runs;
+  tapAt(...centre(game.hud.pauseMenuButtons(game.camera).home));
+  frame(5);
+  ok("HOME on the pause screen during the tutorial: home, nothing recorded", game.state === "menu" && game.page === "home" && S.data.runs === runsBefore && !game.tutorial.active);
+  flyTap();
+  frame(10);
+  game.togglePause();
+  frame(2);
+  game.distance = 3000;
+  game.bonus = 7000;
+  tapAt(...centre(game.hud.pauseMenuButtons(game.camera).home));
   frame(5);
   d = hud();
-  ok("DAILY RUN switched on at a game over: the corner turns to today's best", d.bestDaily && d.bestDay === "TODAY" && d.best === 0 && d.daily.on);
-  tapAt(...centre(game.hud.howToPlayButton(game.camera)));
-  frame(10);
-  ok("HOW TO PLAY with DAILY RUN on flies an ordinary run, with the tutorial", game.state === "playing" && game.runDaily === null && game.tutorial.active);
-  game.skipTutorial();
-  endWith(10000, 3000);
-  d = hud();
   ok(
-    "...whose game over shows the classic record it set, not today's",
-    d.newBest && !d.bestDaily && d.best === 10000 && d.bestDistance === 3000 && Object.keys(S.data.daily).length === 0,
-    JSON.stringify({ newBest: d.newBest, bestDaily: d.bestDaily, best: d.best })
+    "HOME on the pause screen of a run: the run ends there, recorded, and home is plain",
+    game.state === "menu" && game.page === "home" && S.data.runs === runsBefore + 1 && S.best("classic").score === 10000 && !d.result && !d.bestDaily && d.best === 10000,
+    JSON.stringify({ state: game.state, runs: S.data.runs - runsBefore, best: S.best("classic").score })
   );
 
-  // 3. A daily run begun at 23:59 and ended after midnight belongs to the day it began.
+  // 3. The daily page: two tries a day, each begun only by FLY.
+  openPage("daily");
+  d = hud();
+  ok("DAILY on the home screen opens the daily page: today's best, two tries", game.page === "daily" && game.state === "menu" && d.bestDaily && d.best === 0 && d.daily.triesLeft === 2 && d.daily.tries === 2);
+  tapAt(VW * 0.2, VH * 0.8);
+  ok("a stray tap on the daily page spends nothing", game.state === "menu" && S.dailyTries("2026-11-11") === 0);
   S.setConserveMomentum(true);
   player.setConserveMomentum(true);
   wide();
-  flyTap();
+  flyDaily();
   frame(1);
   ok("every daily attempt starts with the plain camera, Conserve or not", game.state === "playing" && game.runDaily === "2026-11-11" && cam.pull < 0.02, `pull ${cam.pull}`);
-  game.endRun({});
-  frame(140);
+  let saved = JSON.parse(globalThis.localStorage.store["gale.save.v1"]);
+  ok("FLY counts the try as the run begins, and saves it", S.dailyTries("2026-11-11") === 1 && saved.daily["2026-11-11"].tries === 1);
+  game.togglePause();
+  frame(2);
+  d = hud();
+  ok("its pause screen says what RESTART RUN costs", d.restartLabel === "RESTART · TRY 2/2" && d.canRestart);
+  game.distance = 40;
+  game.bonus = 0;
+  tapAt(...centre(game.hud.pauseMenuButtons(game.camera).home));
+  frame(5);
+  ok("HOME from a daily try: its score so far is the day's, and the try stays spent", game.state === "menu" && game.page === "home" && S.dailyBest("2026-11-11", "conserve").score === 40 && S.dailyTries("2026-11-11") === 1);
   S.setConserveMomentum(false);
   player.setConserveMomentum(false);
-  S.data.daily = {};
-  flyTap();
+  openPage("daily");
+  d = hud();
+  ok("the daily page then shows one try left", d.daily.triesLeft === 1 && d.bestDaily && d.best === 0);
+  flyDaily();
   frame(10);
-  ok("the next tap flies the daily run", game.state === "playing" && game.runDaily === "2026-11-11", String(game.runDaily));
+  ok("FLY begins the last try", game.state === "playing" && game.runDaily === "2026-11-11" && S.dailyTries("2026-11-11") === 2, String(game.runDaily));
   d = hud();
   ok("in the run, before any best: the line says DAILY RUN", d.bestDaily && d.best === 0 && d.bestDay === "TODAY");
+  game.togglePause();
+  frame(2);
+  d = hud();
+  tapAt(...centre(game.hud.pauseMenuButtons(game.camera).restart));
+  frame(2);
+  ok("with no tries left RESTART RUN is off: the run goes on", d.restartLabel === "NO TRIES LEFT" && !d.canRestart && game.state === "paused" && S.dailyTries("2026-11-11") === 2);
+  game.togglePause();
+  // A daily run begun before midnight and ended after it belongs to the day it began.
   globalThis.setFakeDate("2026-11-12T00:01:00");
   frame(150);
   endWith(600, 500);
   d = hud();
   ok(
-    "ended after midnight: recorded for the day it began, and named by its date",
-    S.dailyBest("2026-11-11", "classic").score === 600 && S.dailyBest("2026-11-12", "classic").score === 0 && d.dailyFlag === "BEST OF NOV 11" && d.bestDaily && d.bestDay === "NOV 11" && d.best === 600 && d.daily.label === "NOV 12",
-    JSON.stringify({ flag: d.dailyFlag, bestDay: d.bestDay, best: d.best, label: d.daily.label })
+    "ended after midnight: recorded for the day it began, named by its date, on the daily page",
+    game.page === "daily" && d.result && S.dailyBest("2026-11-11", "classic").score === 600 && S.dailyBest("2026-11-12", "classic").score === 0 && d.dailyFlag === "BEST OF NOV 11" && d.bestDaily && d.bestDay === "NOV 11" && d.best === 600 && d.daily.label === "NOV 12",
+    JSON.stringify({ page: game.page, flag: d.dailyFlag, bestDay: d.bestDay, best: d.best, label: d.daily.label })
   );
-  flyTap();
+  ok("the new day brings two new tries", d.daily.triesLeft === 2);
+  flyDaily();
   frame(10);
   d = hud();
   ok("the next daily run is the new day's, with nothing flown yet", game.runDaily === "2026-11-12" && d.bestDaily && d.bestDay === "TODAY" && d.best === 0);
   endWith(700, 650);
   d = hud();
-  ok("its game over: BEST TODAY beside today's record", d.dailyFlag === "BEST TODAY" && d.bestDay === "TODAY" && d.best === 700 && d.bestDistance === 650);
-  tapAt(...centre(game.hud.dailyButton(game.camera)));
-  frame(5);
+  ok("its end: BEST TODAY beside today's record, one try left, on the daily page", game.page === "daily" && d.result && d.dailyFlag === "BEST TODAY" && d.bestDay === "TODAY" && d.best === 700 && d.bestDistance === 650 && d.daily.triesLeft === 1);
+  tapAt(VW * 0.2, VH * 0.8);
+  ok("a stray tap on the result spends nothing", game.state === "gameover" && S.dailyTries("2026-11-12") === 1);
+  flyDaily();
+  frame(10);
+  endWith(300, 280);
   d = hud();
-  ok("DAILY RUN switched off there: the corner turns to the all-time best", !d.daily.on && !d.bestDaily && d.best === 10000);
+  ok("a lower last try keeps the day's best, and no tries are left", d.dailyFlag === "" && d.best === 700 && d.daily.triesLeft === 0 && S.dailyTries("2026-11-12") === 2);
+  flyDaily();
+  frame(10);
+  game.startRun(false, true);
+  frame(2);
+  ok("with both tries spent FLY does nothing", game.state === "gameover" && game.page === "daily" && S.dailyTries("2026-11-12") === 2);
+  // RESTART RUN in a daily try (a try left): the try so far is recorded, and the next begins.
+  globalThis.setFakeDate("2026-11-13T10:00:00");
+  frame(150);
+  d = hud();
+  ok("another day: two tries again, on the page left open", game.page === "daily" && d.daily.triesLeft === 2 && d.daily.label === "NOV 13");
+  flyDaily();
+  frame(10);
+  game.distance = 800;
+  game.bonus = 100;
+  const runsThen = S.data.runs;
+  game.togglePause();
+  frame(2);
+  tapAt(...centre(game.hud.pauseMenuButtons(game.camera).restart));
+  frame(3);
+  ok(
+    "RESTART RUN in a daily try: that try is recorded and the next one begins",
+    game.state === "playing" && game.runDaily === "2026-11-13" && S.dailyTries("2026-11-13") === 2 && S.dailyBest("2026-11-13", "classic").score === 900 && S.data.runs === runsThen + 1 && Math.floor(game.distance) < 50,
+    JSON.stringify({ state: game.state, tries: S.dailyTries("2026-11-13"), best: S.dailyBest("2026-11-13", "classic").score })
+  );
+  endWith(100, 90);
+  d = hud();
+  ok("...and its own end keeps the better try as the day's best", d.best === 900 && d.dailyFlag === "" && d.daily.triesLeft === 0);
+  tapHome();
+  d = hud();
+  ok("HOME from the daily page: the plain home screen and the all-time best", game.state === "menu" && game.page === "home" && !d.bestDaily && d.best === 10000);
+  flyTap();
+  frame(5);
+  ok("an ordinary run can always be flown", game.state === "playing" && game.runDaily === null);
   console.log(JSON.stringify({ checks }));
   process.exit(0);
 }
@@ -397,12 +516,9 @@ if (CASE === "records") {
   );
 
   // In the game: the run's swing decides its record, including a mid-run switch.
-  tapAt(...centre(game.hud.dailyButton(game.camera)));
+  flyDaily();
   frame(10);
-  ok("DAILY RUN switches on from its button", game.dailyMode === true);
-  flyTap();
-  frame(10);
-  ok("a tap then flies the daily run", game.state === "playing" && typeof game.runDaily === "string", `runDaily ${game.runDaily}`);
+  ok("FLY on the daily page flies the daily run", game.state === "playing" && typeof game.runDaily === "string", `runDaily ${game.runDaily}`);
   ok("the daily run is not a classic best's run before the switch", game.runConserve === false);
   game.togglePause();
   game.toggleConserveMomentum();
@@ -416,13 +532,13 @@ if (CASE === "records") {
   ok("its end leaves the classic best alone", S.best("classic").score === classicBefore, `conserve best ${S.best("conserve").score}`);
   ok("and records the day's Conserve best", S.dailyBest(game.runDaily, "conserve").score > 0, `${S.dailyBest(game.runDaily, "conserve").score}`);
   frame(200);
+  tapHome();
 
-  // The shop.
-  const P = () => game.hud.trailsPanel(game.camera);
+  // The shop page.
+  const P = () => game.hud.shopPanel(game.camera);
   S.data.orbs = 100;
-  tapAt(...centre(game.hud.trailsButton(game.camera).hit));
-  frame(10);
-  ok("TRAILS opens the picker", game.trailsOpen === true);
+  openPage("shop");
+  ok("SHOP on the home screen opens the shop page", game.page === "shop" && game.state === "menu");
   const sw = (i) => P().swatches[i];
   tapAt(sw(2).x, sw(2).y); // Lilac, 120: not affordable with 100
   frame(5);
@@ -430,14 +546,22 @@ if (CASE === "records") {
   tapAt(...centre(P().action));
   frame(5);
   ok("UNLOCK without the orbs buys nothing", S.data.orbs === 100 && !S.owns("trail:lilac"));
-  ok("...and the tap did not close the picker", game.trailsOpen === true);
   tapAt(sw(6).x, sw(6).y + P().r + 15); // the "800" under Aurora
   frame(5);
-  ok("a tap on the price under a swatch picks that trail", game.trailsOpen === true && game.trailPick === "aurora");
-  tapAt(P().cx, (P().rowY + P().nameY) / 2 + 12); // between the swatches and the name: a near miss
+  ok("a tap on the price under a swatch picks that trail", game.page === "shop" && game.trailPick === "aurora");
+  tapAt(P().cx, (P().rowY + P().nameY) / 2 + 12); // between the swatches and the name
+  tapAt(VW * 0.2, VH * 0.8); // and out in the open sky
   frame(5);
-  ok("a near miss inside the panel neither closes it nor drops the preview", game.trailsOpen === true && player.trailId === "aurora");
+  ok("a tap that misses every control does nothing: still the shop, the preview stays", game.page === "shop" && game.state === "menu" && player.trailId === "aurora");
   ok("UNLOCK's touch target is 44 pt tall", P().action.h >= 44);
+  const c0 = S.data.character;
+  tapAt(P().cx + 30, P().charY);
+  const c1 = S.data.character;
+  tapAt(P().cx - 30, P().charY);
+  ok("the character's name cycles the character: right half on, left half back", c1 !== c0 && S.data.character === c0 && game.page === "shop", `${c0} -> ${c1} -> ${S.data.character}`);
+  tapAt(P().cx + P().charHalf, P().charY);
+  ok("...and so do its chevrons, the preview keeping the trail picked", S.data.character === c1 && player.characterId === c1 && player.trailId === "aurora");
+  tapAt(P().cx - P().charHalf, P().charY);
   tapAt(sw(1).x, sw(1).y); // Coral, 60
   frame(5);
   tapAt(P().cx, P().action.y + 1); // the top edge of UNLOCK's target
@@ -445,10 +569,9 @@ if (CASE === "records") {
   ok("UNLOCK with the orbs buys it and wears it", S.owns("trail:coral") && S.data.orbs === 40 && S.data.trail === "coral" && player.trailId === "coral");
   tapAt(sw(2).x, sw(2).y);
   frame(5);
-  tapAt(VW / 2, VH * 0.2); // not on the panel: closes
-  frame(5);
-  ok("closing takes a previewed locked trail off", game.trailsOpen === false && player.trailId === "coral");
-  ok("closing the picker did not start a run", game.state === "gameover" || game.state === "menu", game.state);
+  tapHome();
+  ok("HOME takes a previewed locked trail off", game.page === "home" && player.trailId === "coral");
+  ok("leaving the shop did not start a run", game.state === "menu", game.state);
   flyTap();
   frame(5);
   ok("the run wears the trail", game.state === "playing" && player.trailId === "coral");
@@ -499,12 +622,11 @@ if (process.env.AFTER_GAMEOVER) {
   game.endRun({});
   frame(200);
 }
-if (!process.env.NORMAL) tapAt(...centre(game.hud.dailyButton(game.camera)));
-frame(5);
 if (process.env.CONSERVE) {
   game.storage.setConserveMomentum(true);
 }
-flyTap();
+if (process.env.NORMAL) flyTap();
+else flyDaily();
 if (game.state !== "playing") throw new Error("the run did not start: " + game.state);
 if (!process.env.NORMAL && !game.runDaily) throw new Error("not a daily run");
 let note = "";
@@ -515,6 +637,7 @@ if (process.env.RESTART) {
   frame(2);
   tapAt(...centre(game.hud.pauseMenuButtons(game.camera).restart));
   if (game.state !== "playing") throw new Error("restart did not start a run: " + game.state);
+  if (game.storage.dailyTries(game.runDaily) !== 2) throw new Error("Restart Run in a daily run did not take the second try");
   note += "after Restart Run, ";
 }
 seen.clear();

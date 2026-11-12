@@ -33,9 +33,11 @@ export interface Today {
   key: string;
   label: string;
   day: number;
+  /** Time until the next day's world, "5H 12M" (or "12M" in the last hour). */
+  nextIn: string;
 }
 
-let today: Today = { key: "", label: "", day: 1 };
+let today: Today = { key: "", label: "", day: 1, nextIn: "" };
 let todayAt = -Infinity;
 
 /**
@@ -48,8 +50,14 @@ export function dailyToday(): Today {
   const now = performance.now();
   if (now - todayAt >= 1000 || now < todayAt) {
     todayAt = now;
-    const key = dailyKey();
-    if (key !== today.key) today = { key, label: dailyLabel(key), day: dailyDay(key) };
+    const date = new Date();
+    const key = dailyKey(date);
+    if (key !== today.key) today = { key, label: dailyLabel(key), day: dailyDay(key), nextIn: "" };
+    // Minutes to local midnight, rounded up (the string changes once a minute).
+    const midnight = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1);
+    const mins = Math.max(1, Math.ceil((midnight.getTime() - date.getTime()) / 60000));
+    const nextIn = mins >= 60 ? `${Math.floor(mins / 60)}H ${mins % 60}M` : `${mins}M`;
+    if (nextIn !== today.nextIn) today = { ...today, nextIn };
   }
   return today;
 }

@@ -54,6 +54,12 @@ function fontFor(weight: string, size: number): string {
   return font;
 }
 
+/** The menus: the home screen, and the pages opened from it. */
+export type Page = "home" | "shop" | "settings" | "daily";
+
+type Rect = { x: number; y: number; w: number; h: number };
+type Circle = { x: number; y: number; r: number };
+
 export interface HudData {
   state: "menu" | "playing" | "paused" | "crashing" | "gameover";
   score: number;
@@ -69,13 +75,19 @@ export interface HudData {
   bestDay: string;
   /** The daily run just flown beat its day's best: the words for it ("BEST TODAY"), else "". */
   dailyFlag: string;
-  /** DAILY RUN and TRAILS are on the home screen (after the first flight). */
+  /** The menu page in view (menu and game-over states). */
+  page: Page;
+  /** The shop and the daily run can be opened from the home screen (after the first flight). */
   extras: boolean;
-  /** The DAILY RUN switch, and today's date for it. */
-  daily: { on: boolean; label: string; day: number };
-  /** The TRAILS picker: open, the trail picked and the one worn, and what is owned (per TRAILS entry, while open). */
+  /** A page shows the result of the run just flown (the daily page, after a daily try). */
+  result: boolean;
+  /** The daily run: today's date, the tries a day allows and those left, and the time to the next day's world. */
+  daily: { label: string; day: number; tries: number; triesLeft: number; nextIn: string };
+  /** The pause screen's RESTART RUN: its words (a daily try says what it costs) and whether it can be used. */
+  restartLabel: string;
+  canRestart: boolean;
+  /** The shop's trails: the one picked and the one worn, and what is owned (per TRAILS entry, on the shop page). */
   trails: {
-    open: boolean;
     pick: TrailId;
     worn: TrailId;
     pickOwned: boolean;
@@ -142,10 +154,7 @@ export class Hud {
   // Attract-screen edge gradients — fixed colours, rebuilt only on resize.
   private spacedCache = new Map<string, { widths: number[]; track: number; total: number }>();
   // Drawn widths of the corner labels, so their touch targets cover them.
-  private howLabelW = 120;
-  private soundLabelW = 70;
-  private dailyLabelW = 96;
-  private trailsLabelW = 64;
+  private homeLabelW = 48;
   private attractTop: CanvasGradient | null = null;
   private attractBottom: CanvasGradient | null = null;
   private attractGradH = 0;
@@ -210,37 +219,27 @@ export class Hud {
   }
 
   /**
-   * The mute button: on the menu and game-over screens top right (where the
-   * pause button sits in a run — the bottom corners are where the thumbs
-   * rest); during a run (and paused) just left of the pause button. There is
-   * no keyboard on a phone, so M alone is not enough.
+   * The mute button in a run (and on its pause screen): just left of the
+   * pause button. There is no keyboard on a phone, so M alone is not enough.
+   * (On the menus, sound is a row of the settings page.)
    */
-  muteButton(cam: Camera, attract: boolean): { x: number; y: number; r: number } {
-    const ins = cam.insets;
-    if (attract) {
-      const r = 20;
-      return { x: cam.w - ins.right - 24 - r, y: ins.top + 20 + r, r };
-    }
+  muteButton(cam: Camera): Circle {
     const p = this.pauseButton(cam);
     const r = Math.round(p.r * 0.85);
     return { x: p.x - p.r - 12 - r, y: p.y, r };
   }
 
-  /**
-   * Whether (x, y) hits the mute button: at least a 44 pt target, and on the
-   * menu screens the label beside the circle counts too.
-   */
-  hitsMute(cam: Camera, attract: boolean, x: number, y: number): boolean {
-    const b = this.muteButton(cam, attract);
+  /** Whether (x, y) hits the mute button: at least a 44 pt target. */
+  hitsMute(cam: Camera, x: number, y: number): boolean {
+    const b = this.muteButton(cam);
     const r = Math.max(b.r, 22);
     const dx = x - b.x;
     const dy = y - b.y;
-    if (dx * dx + dy * dy <= r * r) return true;
-    return attract && Math.abs(dy) <= 22 && x <= b.x && x >= b.x - b.r - 10 - this.soundLabelW - 8;
+    return dx * dx + dy * dy <= r * r;
   }
 
-  private drawMuteButton(ctx: CanvasRenderingContext2D, cam: Camera, d: HudData, attract: boolean) {
-    const b = this.muteButton(cam, attract);
+  private drawMuteButton(ctx: CanvasRenderingContext2D, cam: Camera, d: HudData) {
+    const b = this.muteButton(cam);
     ctx.fillStyle = hexA(PALETTE.text, 0.14);
     ctx.beginPath();
     ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
@@ -288,88 +287,135 @@ export class Hud {
   }
 
   /**
-   * HOW TO PLAY on the menu and game-over screens: top left, mirroring the
-   * sound button (a "?" in a circle and its label; the whole strip, sized
-   * from the drawn label, is the touch target). Kept out of the bottom
-   * corners, where a resting thumb taps to fly again.
+   * The home screen's page buttons: a row of quiet circles in the top-right
+   * corner, each with its name under it — SETTINGS, and once the first
+   * flight is behind the player (`extras`) SHOP and DAILY. Up there no
+   * resting thumb taps them by accident; a tap anywhere else flies.
    */
-  howToPlayButton(cam: Camera): { x: number; y: number; w: number; h: number } {
-    const h = 44;
-    return { x: cam.insets.left + 22, y: cam.insets.top + 18, w: 50 + this.howLabelW + 10, h };
-  }
-
-  /** DAILY RUN, under HOW TO PLAY (a switch: on, runs fly the day's world). */
-  dailyButton(cam: Camera): { x: number; y: number; w: number; h: number } {
-    const how = this.howToPlayButton(cam);
-    return { x: how.x, y: how.y + how.h + 8, w: 50 + this.dailyLabelW + 10, h: 44 };
-  }
-
-  /** TRAILS, under the sound button: the circle, and the strip (with its label) that takes the tap. */
-  trailsButton(cam: Camera): { x: number; y: number; r: number; hit: { x: number; y: number; w: number; h: number } } {
-    const m = this.muteButton(cam, true);
-    const r = m.r;
-    const y = m.y + 52;
-    const left = m.x - r - 10 - this.trailsLabelW - 8;
-    return { x: m.x, y, r, hit: { x: left, y: y - 22, w: m.x + 22 - left, h: 44 } };
+  navButtons(cam: Camera, extras: boolean): { settings: Circle; shop: Circle | null; daily: Circle | null } {
+    const ins = cam.insets;
+    const r = 20;
+    const pitch = 64;
+    const y = ins.top + 20 + r;
+    const x = cam.w - ins.right - 44;
+    return {
+      settings: { x, y, r },
+      shop: extras ? { x: x - pitch, y, r } : null,
+      daily: extras ? { x: x - 2 * pitch, y, r } : null,
+    };
   }
 
   /**
-   * The TRAILS picker, right of centre so the gliding character on the left
-   * shows the trail picked: a header, the swatches, the picked trail's name,
-   * its UNLOCK button (or WEARING), and DONE where TAP TO FLY sits.
+   * HOME, top left on every page and on a game-over screen: back to the plain
+   * home screen (a chevron in a circle and its label; the strip, sized from
+   * the drawn label, is the touch target).
    */
-  trailsPanel(cam: Camera): {
+  backButton(cam: Camera): Rect {
+    return { x: cam.insets.left + 22, y: cam.insets.top + 18, w: 50 + this.homeLabelW + 10, h: 44 };
+  }
+
+  /** Where a page's column sits: right of centre, so the gliding character on the left stays in view. */
+  private pageCx(cam: Camera, half: number): number {
+    return Math.min(cam.w * 0.64, cam.w - cam.insets.right - 16 - half);
+  }
+
+  /**
+   * The shop: the character (its name between chevrons; the gliding one on
+   * the left is the preview) and the trails (the swatches with their prices,
+   * the picked trail's name, and its UNLOCK button or WEARING).
+   */
+  shopPanel(cam: Camera): {
     cx: number;
     pitch: number;
     r: number;
-    headerY: number;
+    charLabelY: number;
+    charY: number;
+    /** Half the distance between the character's chevrons. */
+    charHalf: number;
+    trailLabelY: number;
     rowY: number;
     nameY: number;
-    doneY: number;
     swatches: { x: number; y: number }[];
     /** UNLOCK's touch target (44 pt tall; the pill drawn in it is slimmer). */
-    action: { x: number; y: number; w: number; h: number };
-    /** The panel from its header to under UNLOCK: a tap in it that misses a control is not a "close". */
-    body: { x: number; y: number; w: number; h: number };
+    action: Rect;
   } {
     const n = TRAILS.length;
     const pitch = clamp(cam.w * 0.075, 44, 56);
     const half = (pitch * n) / 2;
     const ins = cam.insets;
-    const cx = Math.min(cam.w * 0.62, cam.w - ins.right - 16 - half);
-    const doneY = this.playButton(cam).y;
-    const actionY = doneY - 50;
-    const nameY = actionY - 38;
-    const rowY = nameY - 52;
+    const cx = this.pageCx(cam, half);
+    // The column stretches a little on taller screens, and on a tall one
+    // (an iPad) sits in the middle of the space under the header.
+    const base = ins.top + 76;
+    const avail = cam.h - ins.bottom - 16 - base;
+    const k = clamp(avail / 214, 1, 1.4);
+    const top = base + Math.max(0, (avail - 214 * k) / 2);
+    const rowY = top + 96 * k;
+    const nameY = rowY + 50;
+    const actionY = nameY + 34 * k;
     const swatches = [];
     for (let i = 0; i < n; i++) swatches.push({ x: cx - half + pitch * (i + 0.5), y: rowY });
     return {
       cx,
       pitch,
       r: 16,
-      headerY: rowY - 40,
+      charLabelY: top,
+      charY: top + 26 * k,
+      charHalf: clamp(cam.w * 0.12, 96, 124),
+      trailLabelY: top + 62 * k,
       rowY,
       nameY,
-      doneY,
       swatches,
       action: { x: cx - 100, y: actionY - 22, w: 200, h: 44 },
-      body: { x: cx - half - 12, y: rowY - 40 - 14, w: half * 2 + 24, h: actionY + 22 + 4 - (rowY - 40 - 14) },
     };
   }
 
-  /** The pause screen's two buttons (also their hit-test rectangles). */
-  pauseMenuButtons(cam: Camera): {
-    restart: { x: number; y: number; w: number; h: number };
-    momentum: { x: number; y: number; w: number; h: number };
-  } {
-    const w = clamp(cam.w * 0.3, 220, 300);
+  /** The settings page's rows: sound, the swing option, and the tutorial again. */
+  settingsRows(cam: Camera): { cx: number; sound: Rect; momentum: Rect; howTo: Rect; noteY: number } {
+    const ins = cam.insets;
+    const w = clamp(cam.w * 0.44, 280, 380);
+    const h = 46;
+    const gap = 12;
+    const cx = this.pageCx(cam, w / 2);
+    const x = cx - w / 2;
+    const total = 3 * h + 2 * gap;
+    // Centred in the space under the page's header, with room for the note.
+    const top = Math.max(ins.top + 76, (ins.top + 62 + cam.h - ins.bottom - 28 - total) / 2);
+    return {
+      cx,
+      sound: { x, y: top, w, h },
+      momentum: { x, y: top + h + gap, w, h },
+      howTo: { x, y: top + 2 * (h + gap), w, h },
+      noteY: top + total + 18,
+    };
+  }
+
+  /** The daily page: FLY (one of the day's tries) at the foot of its column. */
+  dailyPanel(cam: Camera): { cx: number; top: number; triesY: number; fly: Rect } {
+    const ins = cam.insets;
+    const cx = this.pageCx(cam, 150);
+    // On a phone the column fills the space under the header; on a tall
+    // screen (an iPad) it keeps together in the middle of it.
+    const base = ins.top + 72;
+    const avail = cam.h - ins.bottom - 26 - base;
+    const blockH = Math.min(avail, 290);
+    const top = base + (avail - blockH) / 2;
+    const fly = { x: cx - 110, y: top + blockH - 44, w: 220, h: 44 };
+    return { cx, top, triesY: fly.y - 24, fly };
+  }
+
+  /** The pause screen's buttons (also their hit-test rectangles): RESTART RUN and HOME side by side, the swing option under them. */
+  pauseMenuButtons(cam: Camera): { restart: Rect; home: Rect; momentum: Rect } {
+    const w = clamp(cam.w * 0.42, 280, 360);
     const h = 44;
     const gap = 12;
     const x = cam.w / 2 - w / 2;
+    const half = (w - gap) / 2;
     // Under the "Tap ▶ or Esc to resume" line, but never off a short screen.
     const top = Math.min(cam.h * 0.42 + 84, cam.h - cam.insets.bottom - 2 * h - gap - 10);
     return {
-      restart: { x, y: top, w, h },
+      restart: { x, y: top, w: half, h },
+      home: { x: x + half + gap, y: top, w: half, h },
       momentum: { x, y: top + h + gap, w, h },
     };
   }
@@ -377,16 +423,6 @@ export class Hud {
   /** Where TAP TO FLY sits (there is no play button: a tap anywhere flies). */
   playButton(cam: Camera): { x: number; y: number; r: number } {
     return { x: cam.w / 2, y: cam.h - cam.insets.bottom - 36, r: 30 };
-  }
-
-  /** The thin chevrons either side of the character's name, above TAP TO FLY. */
-  characterCycleButton(
-    cam: Camera,
-    dir: -1 | 1
-  ): { x: number; y: number; r: number } {
-    const r = 22;
-    const cx = cam.w / 2 + dir * clamp(cam.w * 0.12, 96, 124);
-    return { x: cx, y: cam.h - cam.insets.bottom - 82, r };
   }
 
   /**
@@ -538,7 +574,7 @@ export class Hud {
 
     // --- Pause / resume and mute (top-right corner, above overlay) ---
     this.drawPauseButton(ctx, cam, paused);
-    this.drawMuteButton(ctx, cam, d, false);
+    this.drawMuteButton(ctx, cam, d);
 
     // --- Wind gauge / dash button (bottom-right) ---
     this.drawDashButton(ctx, cam, d);
@@ -864,7 +900,10 @@ export class Hud {
     // that keeps your momentum (remembered between sessions).
     const b = this.pauseMenuButtons(cam);
     const baseline = ctx.textBaseline;
-    this.pauseButtonBox(ctx, b.restart, "RESTART RUN", PALETTE.text);
+    ctx.globalAlpha = d.canRestart ? 1 : 0.45;
+    this.pauseButtonBox(ctx, b.restart, d.restartLabel, PALETTE.text);
+    ctx.globalAlpha = 1;
+    this.pauseButtonBox(ctx, b.home, "HOME", PALETTE.text);
     const on = d.conserveMomentum;
     this.pauseButtonBox(ctx, b.momentum, on ? "CONSERVE MOMENTUM: ON" : "CONSERVE MOMENTUM: OFF", on ? PALETTE.collectible : PALETTE.text);
     ctx.textBaseline = baseline;
@@ -973,10 +1012,12 @@ export class Hud {
   }
 
   /**
-   * The menu and game-over screens, in the manner of Alto's Adventure: the
-   * live sky is the picture and the type sits quietly on it — a light,
-   * wide-tracked title, small spaced capitals, no play button (a tap
-   * anywhere flies), and the few controls tucked into the corners.
+   * The menus, in the manner of Alto's Adventure: the live sky is the
+   * picture and the type sits quietly on it. The home screen is a light,
+   * wide-tracked title, TAP TO FLY (no play button: a tap anywhere flies)
+   * and a row of small page buttons; the shop, the settings and the daily
+   * run each have a page of their own, with HOME in its top-left corner and
+   * its column right of centre, beside the gliding character.
    */
   private drawAttractScreen(
     ctx: CanvasRenderingContext2D,
@@ -985,7 +1026,6 @@ export class Hud {
     mode: "menu" | "gameover"
   ) {
     const { w, h } = cam;
-    const ins = cam.insets;
     const now = performance.now();
     const breathe = 0.5 + 0.5 * Math.sin(now / 520);
 
@@ -1007,133 +1047,209 @@ export class Hud {
     ctx.fillStyle = this.attractBottom!;
     ctx.fillRect(0, h * 0.55, w, h * 0.45);
 
+    if (d.page === "shop") this.drawShopPage(ctx, cam, d);
+    else if (d.page === "settings") this.drawSettingsPage(ctx, cam, d);
+    else if (d.page === "daily") this.drawDailyPage(ctx, cam, d, now);
+    else this.drawHomePage(ctx, cam, d, mode === "gameover", breathe, now);
+    ctx.textAlign = "center";
     ctx.textBaseline = "top";
+  }
+
+  /** The home screen; after a run it carries the run's result, and HOME to clear it. */
+  private drawHomePage(
+    ctx: CanvasRenderingContext2D,
+    cam: Camera,
+    d: HudData,
+    over: boolean,
+    breathe: number,
+    now: number
+  ) {
+    const { w, h } = cam;
+    const ins = cam.insets;
     const white = PALETTE.text;
+    ctx.textBaseline = "top";
 
     // --- Title: light and wide-tracked, upper centre.
-    const over = mode === "gameover";
     const titleSize = Math.round(clamp(w * 0.075, 40, 70) * (over ? 0.72 : 1));
     const titleInkTop = Math.max(ins.top + 14, h * (over ? 0.07 : 0.15));
     const tBox = this.ink(ctx, "GALE", titleSize, "300");
     const titleY = titleInkTop - tBox.top;
     this.spaced(ctx, "GALE", w / 2, titleY, titleSize, "300", white, 0.32, "center", 0.22);
-    const titleBottom = titleY + tBox.bottom;
-    const subY = titleBottom + (over ? 8 : 12);
-    const subtitle = d.daily.on ? `DAILY RUN · ${d.daily.label}` : "SKY · SAILING";
-    // (The TRAILS picker's header takes its place on short screens.)
-    if (!d.trails.open) this.spaced(ctx, subtitle, w / 2, subY, over ? 10 : 12, "700", hexA(PALETTE.anchorPerfect, 0.9), 0.5, "center", 0.25);
+    const subY = titleY + tBox.bottom + (over ? 8 : 12);
+    this.spaced(ctx, "SKY · SAILING", w / 2, subY, over ? 10 : 12, "700", hexA(PALETTE.anchorPerfect, 0.9), 0.5, "center", 0.25);
 
-    // --- The run just flown (game over only): a big light score, one line of
-    // the rest, on a soft dark wash so a pale day sky cannot swallow it.
-    if (over && !d.trails.open) {
-      let y = subY + 10 + Math.max(16, h * 0.05);
-      const stackTop = y;
-      const scoreSize = Math.round(clamp(w * 0.07, 40, 64));
-      const flag = d.newBest ? "NEW BEST" : d.dailyFlag;
-      const stackH = (flag ? 20 : 0) + scoreSize + 8 + 22 + 16;
-      const wash = ctx.createRadialGradient(w / 2, stackTop + stackH / 2, 10, w / 2, stackTop + stackH / 2, Math.max(w * 0.34, 190));
-      wash.addColorStop(0, hexA("#0a0d24", 0.34));
-      wash.addColorStop(1, hexA("#0a0d24", 0));
-      ctx.fillStyle = wash;
-      ctx.fillRect(0, stackTop - 60, w, stackH + 120);
-      if (flag) {
-        const a = 0.8 + 0.2 * Math.sin(now / 200);
-        this.spaced(ctx, flag, w / 2, y, 12, "800", hexA(PALETTE.anchorPerfect, a), 0.45, "center", 0.45);
-        y += 20;
-      }
-      const sBox = this.ink(ctx, `${Math.floor(d.score)}`, scoreSize, "300");
-      const scoreY = y - sBox.top;
-      this.spaced(ctx, `${Math.floor(d.score)}`, w / 2, scoreY, scoreSize, "300", hexA(PALETTE.anchor, 0.98), 0.06, "center", 0.35);
-      y = scoreY + sBox.bottom + 8;
-      this.spaced(ctx, "POINTS", w / 2, y, 11, "700", hexA(white, 0.9), 0.45, "center", 0.45);
-      y += 22;
-      const stats = `${Math.floor(d.distance)} M   ·   ${d.perfectCount} PERFECT   ·   ${d.objectivesDone}/${d.objectives.length} GOALS   ·   +${d.orbs} ORBS`;
-      this.spaced(ctx, stats, w / 2, y, 13, "700", white, 0.14, "center", 0.45);
-    }
+    // --- The run just flown (game over only).
+    if (over) this.drawResult(ctx, cam, d, w / 2, subY + 10 + Math.max(16, h * 0.05), now, 13);
 
-    // --- Top corners: HOW TO PLAY (left) and the sound (right) — the
-    // controls, up where no resting thumb taps them by accident.
-    {
-      const r = this.howToPlayButton(cam);
-      const cx = r.x + 20;
-      const cy = r.y + r.h / 2;
-      ctx.fillStyle = hexA(white, 0.14);
-      ctx.beginPath();
-      ctx.arc(cx, cy, 20, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = hexA(white, 0.32);
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      this.text(ctx, "?", cx, cy + 1, 18, "600", hexA(white, 0.9));
-      this.howLabelW = this.spaced(ctx, "HOW TO PLAY", cx + 30, cy + 1, 11, "700", hexA(white, 0.9), 0.28, "left", 0.3);
-    }
-    if (d.extras) {
-      // DAILY RUN: a calendar face with today's date; gold while it is on.
-      const r = this.dailyButton(cam);
-      const cx = r.x + 20;
-      const cy = r.y + r.h / 2;
-      const on = d.daily.on;
-      const gold = PALETTE.anchorPerfect;
-      ctx.fillStyle = on ? hexA(gold, 0.92) : hexA(white, 0.14);
-      ctx.beginPath();
-      ctx.arc(cx, cy, 20, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = on ? hexA(gold, 1) : hexA(white, 0.32);
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      this.text(ctx, `${d.daily.day}`, cx, cy + 1, 15, "700", on ? "#0a0d24" : hexA(white, 0.9));
-      this.dailyLabelW = this.spaced(ctx, "DAILY RUN", cx + 30, cy + 1, 11, "700", on ? hexA(gold, 1) : hexA(white, 0.9), 0.28, "left", 0.3);
-    }
-    this.drawMuteButton(ctx, cam, d, true);
-    {
-      const m = this.muteButton(cam, true);
-      const label = d.muted ? "SOUND OFF" : "SOUND";
-      ctx.textBaseline = "middle";
-      this.soundLabelW = this.spaced(ctx, COARSE_POINTER ? label : `${label} · M`, m.x - m.r - 10, m.y + 1, 11, "700", hexA(white, 0.9), 0.28, "right", 0.3);
-    }
-    if (d.extras) {
-      // TRAILS: three short streaks in the trail worn, and a gold dot while
-      // some locked trail is affordable.
-      const b = this.trailsButton(cam);
-      ctx.fillStyle = hexA(white, 0.14);
-      ctx.beginPath();
-      ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = hexA(white, 0.32);
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-      const cols = this.trailColors(d.trails.worn, d.character);
-      ctx.lineCap = "round";
-      ctx.lineWidth = 3;
-      for (let i = 0; i < 3; i++) {
-        const oy = (i - 1) * 5.5;
-        const ox = (1 - Math.abs(i - 1)) * 3;
-        ctx.strokeStyle = cols[Math.floor((i * cols.length) / 3)];
-        ctx.beginPath();
-        ctx.moveTo(b.x - 9 + ox, b.y + oy + 3);
-        ctx.lineTo(b.x + 7 + ox, b.y + oy - 3);
-        ctx.stroke();
-      }
-      ctx.lineCap = "butt";
-      if (d.trails.canUnlock && !d.trails.open) {
-        ctx.fillStyle = ORB_COLOR;
-        ctx.beginPath();
-        ctx.arc(b.x + b.r * 0.72, b.y - b.r * 0.72, 4.5, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.textBaseline = "middle";
-      this.trailsLabelW = this.spaced(ctx, "TRAILS", b.x - b.r - 10, b.y + 1, 11, "700", hexA(white, 0.9), 0.28, "right", 0.3);
-    }
+    // --- Top right: the pages. Top left, after a run: HOME.
+    this.drawNav(ctx, cam, d);
+    if (over) this.drawBackButton(ctx, cam);
 
     // --- Bottom corners: the best run (left) and the orb bank (right) —
     // plain words, so a resting thumb's tap there just flies.
+    this.drawBest(ctx, cam, d);
+    this.drawOrbBank(ctx, cam, d, cam.h - ins.bottom - 40);
+
+    // --- Bottom centre: TAP TO FLY. On the narrowest screens the game-over
+    // line steps down a size so it clears the corners.
+    const tap = this.playButton(cam);
+    const tapText = over ? "TAP TO FLY AGAIN" : "TAP TO FLY";
+    const tapSize = over && w < 640 ? 12 : 14;
+    ctx.textBaseline = "middle";
+    this.spaced(ctx, tapText, w / 2, tap.y, tapSize, "700", hexA(white, 0.62 + 0.35 * breathe), over && w < 640 ? 0.3 : 0.42, "center", 0.35);
+  }
+
+  /**
+   * A run's result: a flag if it set a best, a big light score, POINTS and
+   * one line of the rest, on a soft dark wash so a pale day sky cannot
+   * swallow it. Centred on `cx`, from `top` down.
+   */
+  private drawResult(
+    ctx: CanvasRenderingContext2D,
+    cam: Camera,
+    d: HudData,
+    cx: number,
+    top: number,
+    now: number,
+    statsSize: number
+  ) {
+    const { w } = cam;
+    const white = PALETTE.text;
     ctx.textBaseline = "top";
-    const left = ins.left + 26;
-    const baseY = h - ins.bottom - 24;
+    let y = top;
+    const scoreSize = Math.round(clamp(w * 0.07, 40, 64));
+    const flag = d.newBest ? "NEW BEST" : d.dailyFlag;
+    const stackH = (flag ? 20 : 0) + scoreSize + 8 + 22 + 16;
+    const wash = ctx.createRadialGradient(cx, top + stackH / 2, 10, cx, top + stackH / 2, Math.max(w * 0.34, 190));
+    wash.addColorStop(0, hexA("#0a0d24", 0.34));
+    wash.addColorStop(1, hexA("#0a0d24", 0));
+    ctx.fillStyle = wash;
+    ctx.fillRect(0, top - 60, w, stackH + 120);
+    if (flag) {
+      const a = 0.8 + 0.2 * Math.sin(now / 200);
+      this.spaced(ctx, flag, cx, y, 12, "800", hexA(PALETTE.anchorPerfect, a), 0.45, "center", 0.45);
+      y += 20;
+    }
+    const sBox = this.ink(ctx, `${Math.floor(d.score)}`, scoreSize, "300");
+    const scoreY = y - sBox.top;
+    this.spaced(ctx, `${Math.floor(d.score)}`, cx, scoreY, scoreSize, "300", hexA(PALETTE.anchor, 0.98), 0.06, "center", 0.35);
+    y = scoreY + sBox.bottom + 8;
+    this.spaced(ctx, "POINTS", cx, y, 11, "700", hexA(white, 0.9), 0.45, "center", 0.45);
+    y += 22;
+    const gap = statsSize >= 13 ? "   ·   " : "  ·  ";
+    const stats = `${Math.floor(d.distance)} M${gap}${d.perfectCount} PERFECT${gap}${d.objectivesDone}/${d.objectives.length} GOALS${gap}+${d.orbs} ORBS`;
+    this.spaced(ctx, stats, cx, y, statsSize, "700", white, statsSize >= 13 ? 0.14 : 0.1, "center", 0.45);
+  }
+
+  /** The thin circle every control on the menus shares. */
+  private circleButton(ctx: CanvasRenderingContext2D, x: number, y: number, r: number) {
+    ctx.fillStyle = hexA(PALETTE.text, 0.14);
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = hexA(PALETTE.text, 0.32);
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
+  /** The home screen's page buttons (see navButtons), each with its name under it. */
+  private drawNav(ctx: CanvasRenderingContext2D, cam: Camera, d: HudData) {
+    const nav = this.navButtons(cam, d.extras);
+    const white = PALETTE.text;
+    const ink = hexA(white, 0.9);
+    const label = (b: Circle, s: string) => {
+      ctx.textBaseline = "middle";
+      this.spaced(ctx, s, b.x, b.y + b.r + 12, 9, "700", hexA(white, 0.85), 0.24, "center", 0.3);
+    };
+    const dot = (b: Circle) => {
+      ctx.fillStyle = ORB_COLOR;
+      ctx.beginPath();
+      ctx.arc(b.x + b.r * 0.72, b.y - b.r * 0.72, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+    };
+
+    // SETTINGS: a gear.
+    {
+      const b = nav.settings;
+      this.circleButton(ctx, b.x, b.y, b.r);
+      ctx.strokeStyle = ink;
+      ctx.lineCap = "round";
+      ctx.lineWidth = 3.2;
+      for (let i = 0; i < 8; i++) {
+        const a = (i * Math.PI) / 4 + Math.PI / 8;
+        ctx.beginPath();
+        ctx.moveTo(b.x + Math.cos(a) * 7.5, b.y + Math.sin(a) * 7.5);
+        ctx.lineTo(b.x + Math.cos(a) * 10, b.y + Math.sin(a) * 10);
+        ctx.stroke();
+      }
+      ctx.lineCap = "butt";
+      ctx.lineWidth = 2.6;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, 6.2, 0, Math.PI * 2);
+      ctx.stroke();
+      label(b, "SETTINGS");
+    }
+    // SHOP: a bag; a gold dot while something locked is affordable.
+    if (nav.shop) {
+      const b = nav.shop;
+      this.circleButton(ctx, b.x, b.y, b.r);
+      ctx.fillStyle = ink;
+      this.roundRect(ctx, b.x - 8, b.y - 3.5, 16, 12.5, 3);
+      ctx.fill();
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y - 3.5, 4.2, Math.PI, 0);
+      ctx.stroke();
+      if (d.trails.canUnlock) dot(b);
+      label(b, "SHOP");
+    }
+    // DAILY: a calendar face with today's date; a gold dot while a try is left.
+    if (nav.daily) {
+      const b = nav.daily;
+      this.circleButton(ctx, b.x, b.y, b.r);
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      this.text(ctx, `${d.daily.day}`, b.x, b.y + 1, 15, "700", ink);
+      if (d.daily.triesLeft > 0) dot(b);
+      label(b, "DAILY");
+    }
+  }
+
+  /** HOME, top left: a chevron in a circle and its label (see backButton). */
+  private drawBackButton(ctx: CanvasRenderingContext2D, cam: Camera) {
+    const r = this.backButton(cam);
+    const cx = r.x + 20;
+    const cy = r.y + r.h / 2;
+    const white = PALETTE.text;
+    this.circleButton(ctx, cx, cy, 20);
+    ctx.strokeStyle = hexA(white, 0.9);
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.moveTo(cx + 3, cy - 7);
+    ctx.lineTo(cx - 4, cy);
+    ctx.lineTo(cx + 3, cy + 7);
+    ctx.stroke();
+    ctx.lineCap = "butt";
+    ctx.lineJoin = "miter";
+    ctx.textBaseline = "middle";
+    this.homeLabelW = this.spaced(ctx, "HOME", cx + 30, cy + 1, 11, "700", hexA(white, 0.9), 0.28, "left", 0.3);
+  }
+
+  /** A page's name, level with HOME and centred on the page's column. */
+  private drawPageHeader(ctx: CanvasRenderingContext2D, cam: Camera, title: string, cx: number) {
+    ctx.textBaseline = "middle";
+    this.spaced(ctx, title, cx, cam.insets.top + 41, 22, "300", PALETTE.text, 0.32, "center", 0.25);
+  }
+
+  /** The best in view (see HudData.bestDaily / bestConserve), bottom left. */
+  private drawBest(ctx: CanvasRenderingContext2D, cam: Camera, d: HudData) {
+    const white = PALETTE.text;
+    const left = cam.insets.left + 26;
+    const baseY = cam.h - cam.insets.bottom - 24;
+    ctx.textBaseline = "top";
     const bestLabel = `${d.bestDaily ? d.bestDay : "BEST"}${d.bestConserve ? " · MOMENTUM" : ""}`;
     if (d.bestDistance > 0) {
       const best = `${Math.floor(d.bestDistance)}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
@@ -1146,49 +1262,28 @@ export class Hud {
     } else {
       this.spaced(ctx, "FIRST FLIGHT", left, baseY - 14, 11, "700", hexA(white, 0.75), 0.4, "left", 0.3);
     }
-    {
-      const ox = w - ins.right - 34;
-      const oy = baseY - 16;
-      drawOrbIcon(ctx, ox, oy, 9);
-      ctx.textBaseline = "middle";
-      this.spaced(ctx, `${d.orbBank}`.replace(/\B(?=(\d{3})+(?!\d))/g, ","), ox - 18, oy + 1, 19, "600", ORB_COLOR, 0.04, "right", 0.3);
-      ctx.textBaseline = "top";
-      this.spaced(ctx, "ORBS", ox + 9, oy + 14, 10, "700", hexA(white, 0.75), 0.4, "right", 0.3);
-    }
-
-    if (d.trails.open) {
-      this.drawTrailsPanel(ctx, cam, d, breathe);
-      ctx.textAlign = "center";
-      ctx.textBaseline = "top";
-      return;
-    }
-
-    // --- Bottom centre: the character, then TAP TO FLY. On the narrowest
-    // screens the game-over line steps down a size so it clears the corners.
-    const lb = this.characterCycleButton(cam, -1);
-    const rb = this.characterCycleButton(cam, 1);
-    ctx.textBaseline = "middle";
-    this.spaced(ctx, d.characterName.toUpperCase(), w / 2, lb.y, 14, "700", hexA(white, 0.95), 0.3, "center", 0.3);
-    ctx.strokeStyle = hexA(white, 0.8);
-    ctx.lineWidth = 2;
-    ctx.lineCap = "round";
-    for (const [b, dir] of [[lb, -1], [rb, 1]] as const) {
-      ctx.beginPath();
-      ctx.moveTo(b.x - dir * 4, b.y - 8);
-      ctx.lineTo(b.x + dir * 4, b.y);
-      ctx.lineTo(b.x - dir * 4, b.y + 8);
-      ctx.stroke();
-    }
-    ctx.lineCap = "butt";
-    const tap = this.playButton(cam);
-    const tapText = over ? "TAP TO FLY AGAIN" : "TAP TO FLY";
-    const tapSize = over && w < 640 ? 12 : 14;
-    this.spaced(ctx, tapText, w / 2, tap.y, tapSize, "700", hexA(white, 0.62 + 0.35 * breathe), over && w < 640 ? 0.3 : 0.42, "center", 0.35);
-    ctx.textAlign = "center";
-    ctx.textBaseline = "top";
   }
 
-  /** A trail's colours for its swatch and icon; "own" shows the character's own trail. */
+  /** The orb bank against the right edge, its icon centred on `oy`. */
+  private drawOrbBank(ctx: CanvasRenderingContext2D, cam: Camera, d: HudData, oy: number) {
+    const ox = cam.w - cam.insets.right - 34;
+    drawOrbIcon(ctx, ox, oy, 9);
+    ctx.textBaseline = "middle";
+    this.spaced(ctx, `${d.orbBank}`.replace(/\B(?=(\d{3})+(?!\d))/g, ","), ox - 18, oy + 1, 19, "600", ORB_COLOR, 0.04, "right", 0.3);
+    ctx.textBaseline = "top";
+    this.spaced(ctx, "ORBS", ox + 9, oy + 14, 10, "700", hexA(PALETTE.text, 0.75), 0.4, "right", 0.3);
+  }
+
+  /** A soft dark wash behind a page's column, as under the game-over score. */
+  private pageWash(ctx: CanvasRenderingContext2D, cam: Camera, cx: number, cy: number, radius: number) {
+    const wash = ctx.createRadialGradient(cx, cy, 10, cx, cy, radius);
+    wash.addColorStop(0, hexA("#0a0d24", 0.36));
+    wash.addColorStop(1, hexA("#0a0d24", 0));
+    ctx.fillStyle = wash;
+    ctx.fillRect(0, 0, cam.w, cam.h);
+  }
+
+  /** A trail's colours for its swatch; "own" shows the character's own trail. */
   private trailColors(id: TrailId, character: CharacterId): readonly string[] {
     if (id !== "own") return TRAILS.find((t) => t.id === id)!.colors;
     if (character === "nyan") return NYAN_RAINBOW;
@@ -1196,21 +1291,35 @@ export class Hud {
     return OWN_WHITE;
   }
 
-  private drawTrailsPanel(ctx: CanvasRenderingContext2D, cam: Camera, d: HudData, breathe: number) {
-    const P = this.trailsPanel(cam);
+  /** The shop page (see shopPanel): the character, the trails, and the orbs to spend. */
+  private drawShopPage(ctx: CanvasRenderingContext2D, cam: Camera, d: HudData) {
+    const P = this.shopPanel(cam);
     const white = PALETTE.text;
     const gold = PALETTE.anchorPerfect;
-    // A soft dark wash under it, as under the game-over score.
-    const midY = (P.headerY + P.doneY) / 2;
-    const wash = ctx.createRadialGradient(P.cx, midY, 10, P.cx, midY, Math.max(P.pitch * 4.6, 220));
-    wash.addColorStop(0, hexA("#0a0d24", 0.36));
-    wash.addColorStop(1, hexA("#0a0d24", 0));
-    ctx.fillStyle = wash;
-    ctx.fillRect(P.cx - P.pitch * 5, P.headerY - 60, P.pitch * 10, P.doneY - P.headerY + 120);
+    this.pageWash(ctx, cam, P.cx, (P.charLabelY + P.action.y + P.action.h) / 2, Math.max(P.pitch * 4.8, 230));
+    this.drawBackButton(ctx, cam);
+    this.drawPageHeader(ctx, cam, "SHOP", P.cx);
+    this.drawOrbBank(ctx, cam, d, cam.insets.top + 36);
 
+    // --- The character: its name between thin chevrons.
     ctx.textBaseline = "middle";
-    this.spaced(ctx, "TRAILS", P.cx, P.headerY, 12, "800", hexA(gold, 0.95), 0.45, "center", 0.4);
+    this.spaced(ctx, "CHARACTER", P.cx, P.charLabelY, 10, "800", hexA(gold, 0.95), 0.45, "center", 0.4);
+    this.spaced(ctx, d.characterName.toUpperCase(), P.cx, P.charY, 14, "700", hexA(white, 0.95), 0.3, "center", 0.3);
+    ctx.strokeStyle = hexA(white, 0.8);
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    for (const dir of [-1, 1]) {
+      const x = P.cx + dir * P.charHalf;
+      ctx.beginPath();
+      ctx.moveTo(x - dir * 4, P.charY - 8);
+      ctx.lineTo(x + dir * 4, P.charY);
+      ctx.lineTo(x - dir * 4, P.charY + 8);
+      ctx.stroke();
+    }
+    ctx.lineCap = "butt";
 
+    // --- The trails: swatches (a locked one dimmed, with its price under it).
+    this.spaced(ctx, "TRAIL", P.cx, P.trailLabelY, 10, "800", hexA(gold, 0.95), 0.45, "center", 0.4);
     for (let i = 0; i < TRAILS.length; i++) {
       const t = TRAILS[i];
       const s = P.swatches[i];
@@ -1242,11 +1351,13 @@ export class Hud {
       }
       if (!owned) {
         ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
         this.text(ctx, `${t.price}`, s.x, s.y + P.r + 12, 10, "700", hexA(ORB_COLOR, 0.95));
       }
     }
 
     const pick = TRAILS.find((t) => t.id === d.trails.pick) ?? TRAILS[0];
+    ctx.textBaseline = "middle";
     this.spaced(ctx, pick.name.toUpperCase(), P.cx, P.nameY, 14, "700", hexA(white, 0.95), 0.3, "center", 0.3);
 
     const a = P.action;
@@ -1254,38 +1365,133 @@ export class Hud {
     if (d.trails.pickOwned) {
       this.spaced(ctx, pick.id === "own" ? "EACH CHARACTER'S OWN" : "WEARING", P.cx, ay, 11, "700", hexA(white, 0.7), 0.35, "center", 0.3);
     } else if (d.orbBank >= pick.price) {
-      ctx.fillStyle = hexA(gold, 0.95);
-      this.roundRect(ctx, a.x, a.y + 4, a.w, a.h - 8, (a.h - 8) / 2);
-      ctx.fill();
-      const label = "UNLOCK";
       const price = `${pick.price}`;
-      const lw = this.spacedRun(ctx, label, 12, "800", 0.3).total;
+      const lw = this.spacedRun(ctx, "UNLOCK", 12, "800", 0.3).total;
       this.setFont(ctx, "700", 13);
       const pw = ctx.measureText(price).width;
-      const total = lw + 14 + 14 + pw;
-      let x = P.cx - total / 2;
-      this.spaced(ctx, label, x, ay + 1, 12, "800", "#0a0d24", 0.3, "left");
+      let x = P.cx - (lw + 14 + 14 + pw) / 2;
+      this.goldPill(ctx, a);
+      this.spaced(ctx, "UNLOCK", x, ay + 1, 12, "800", INK, 0.3, "left");
       x += lw + 14;
       // The orb glyph in the button's ink (a gold orb would vanish on gold).
-      ctx.strokeStyle = "#0a0d24";
+      ctx.strokeStyle = INK;
       ctx.lineWidth = 1.8;
       ctx.beginPath();
       ctx.arc(x + 6, ay, 5.5, 0, Math.PI * 2);
       ctx.stroke();
-      ctx.fillStyle = "#0a0d24";
+      ctx.fillStyle = INK;
       ctx.beginPath();
       ctx.arc(x + 6, ay, 2.2, 0, Math.PI * 2);
       ctx.fill();
       x += 14;
       ctx.textAlign = "left";
-      this.text(ctx, price, x, ay + 1, 13, "700", "#0a0d24");
+      this.text(ctx, price, x, ay + 1, 13, "700", INK);
     } else {
       const need = pick.price - d.orbBank;
-      const line = `${pick.price} ORBS  ·  ${need} MORE TO GO`;
-      this.spaced(ctx, line, P.cx, ay, 11, "700", hexA(white, 0.75), 0.25, "center", 0.3);
+      this.spaced(ctx, `${pick.price} ORBS  ·  ${need} MORE TO GO`, P.cx, ay, 11, "700", hexA(white, 0.75), 0.25, "center", 0.3);
+    }
+  }
+
+  /** A gold pill in a touch target (the pill is a little slimmer than the target). */
+  private goldPill(ctx: CanvasRenderingContext2D, a: Rect) {
+    ctx.fillStyle = hexA(PALETTE.anchorPerfect, 0.95);
+    this.roundRect(ctx, a.x, a.y + 4, a.w, a.h - 8, (a.h - 8) / 2);
+    ctx.fill();
+  }
+
+  /** The settings page (see settingsRows): each row a name and what it is set to. */
+  private drawSettingsPage(ctx: CanvasRenderingContext2D, cam: Camera, d: HudData) {
+    const R = this.settingsRows(cam);
+    const white = PALETTE.text;
+    this.pageWash(ctx, cam, R.cx, (R.sound.y + R.noteY) / 2, Math.max(R.sound.w * 0.85, 240));
+    this.drawBackButton(ctx, cam);
+    this.drawPageHeader(ctx, cam, "SETTINGS", R.cx);
+    const row = (r: Rect, name: string, value: string, on: boolean) => {
+      ctx.fillStyle = hexA(white, 0.12);
+      this.roundRect(ctx, r.x, r.y, r.w, r.h, 12);
+      ctx.fill();
+      ctx.strokeStyle = hexA(white, 0.45);
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.textBaseline = "middle";
+      const cy = r.y + r.h / 2 + 1;
+      this.spaced(ctx, name, r.x + 18, cy, 12, "800", hexA(white, 0.95), 0.2, "left");
+      this.spaced(ctx, value, r.x + r.w - 18, cy, 12, "800", on ? PALETTE.collectible : hexA(white, 0.6), 0.2, "right");
+    };
+    row(R.sound, COARSE_POINTER ? "SOUND" : "SOUND · M", d.muted ? "OFF" : "ON", !d.muted);
+    row(R.momentum, "CONSERVE MOMENTUM", d.conserveMomentum ? "ON" : "OFF", d.conserveMomentum);
+    row(R.howTo, "HOW TO PLAY", "›", false);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    this.text(ctx, "Conserve momentum keeps your speed through a swing.", R.cx, R.noteY, 11, "600", hexA(white, 0.7));
+    this.text(ctx, "It keeps a best of its own.", R.cx, R.noteY + 15, 11, "600", hexA(white, 0.7));
+  }
+
+  /**
+   * The daily page (see dailyPanel): the day, its best (or, after a try, that
+   * try's result), the tries left, and FLY — the only way to begin a try, so
+   * none is ever spent by a stray tap.
+   */
+  private drawDailyPage(ctx: CanvasRenderingContext2D, cam: Camera, d: HudData, now: number) {
+    const P = this.dailyPanel(cam);
+    const white = PALETTE.text;
+    const gold = PALETTE.anchorPerfect;
+    const left = d.daily.triesLeft;
+    this.pageWash(ctx, cam, P.cx, (P.top + P.fly.y + P.fly.h) / 2, Math.max(cam.w * 0.3, 230));
+    this.drawBackButton(ctx, cam);
+    this.drawPageHeader(ctx, cam, "DAILY RUN", P.cx);
+
+    if (d.result) {
+      this.drawResult(ctx, cam, d, P.cx, P.top, now, cam.w < 700 ? 10 : 12);
+    } else {
+      // The day, what it is, and the day's best so far.
+      ctx.textBaseline = "top";
+      const dateSize = Math.round(clamp(cam.w * 0.05, 30, 42));
+      const box = this.ink(ctx, d.daily.label, dateSize, "300");
+      const dateY = P.top - box.top;
+      this.spaced(ctx, d.daily.label, P.cx, dateY, dateSize, "300", white, 0.2, "center", 0.3);
+      let y = dateY + box.bottom + 10;
+      this.spaced(ctx, "THE SAME SKY FOR EVERYONE", P.cx, y, 10, "700", hexA(gold, 0.9), 0.4, "center", 0.3);
+      y += 28;
+      const label = `TODAY'S BEST${d.bestConserve ? " · MOMENTUM" : ""}`;
+      this.spaced(ctx, label, P.cx, y, 10, "700", hexA(white, 0.75), 0.4, "center", 0.3);
+      y += 15;
+      const best = d.bestDistance > 0 ? `${`${Math.floor(d.bestDistance)}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",")} m` : "NOT FLOWN YET";
+      this.spaced(ctx, best, P.cx, y, d.bestDistance > 0 ? 22 : 13, d.bestDistance > 0 ? "300" : "700", white, d.bestDistance > 0 ? 0.04 : 0.3, "center", 0.3);
     }
 
-    this.spaced(ctx, "DONE", P.cx, P.doneY, 13, "700", hexA(white, 0.62 + 0.35 * breathe), 0.42, "center", 0.35);
+    // --- The tries: a pip each (gold while unused), and the count in words.
+    ctx.textBaseline = "middle";
+    const words = left === 0 ? "NO TRIES LEFT TODAY" : left === 1 ? "1 TRY LEFT" : `${left} TRIES LEFT`;
+    const tw = this.spacedRun(ctx, words, 11, "700", 0.3).total;
+    const pipsW = d.daily.tries * 16;
+    let x = P.cx - (pipsW + 8 + tw) / 2;
+    for (let i = 0; i < d.daily.tries; i++) {
+      ctx.beginPath();
+      ctx.arc(x + 6, P.triesY, 5, 0, Math.PI * 2);
+      if (i < left) {
+        ctx.fillStyle = hexA(gold, 0.95);
+        ctx.fill();
+      } else {
+        ctx.strokeStyle = hexA(white, 0.5);
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+      x += 16;
+    }
+    this.spaced(ctx, words, x + 8, P.triesY + 1, 11, "700", hexA(white, 0.9), 0.3, "left", 0.3);
+
+    // --- FLY, or when the day's tries are spent, when the next sky comes.
+    const a = P.fly;
+    const ay = a.y + a.h / 2;
+    if (left > 0) {
+      this.goldPill(ctx, a);
+      // Which try this would be, so the count is in the button itself.
+      const fly = `FLY · TRY ${d.daily.tries - left + 1} OF ${d.daily.tries}`;
+      this.spaced(ctx, fly, P.cx, ay + 1, 13, "800", INK, 0.34, "center");
+    } else {
+      this.spaced(ctx, `A NEW SKY IN ${d.daily.nextIn}`, P.cx, ay, 12, "700", hexA(gold, 0.95), 0.34, "center", 0.3);
+    }
   }
 
   /**
@@ -1367,5 +1573,7 @@ export class Hud {
   }
 }
 
+/** The dark ink on a gold button. */
+const INK = "#0a0d24";
 const OWN_WHITE: readonly string[] = ["#ffffff"];
 const OWN_GOLD: readonly string[] = ["#ffd45a"];

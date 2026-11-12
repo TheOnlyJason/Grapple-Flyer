@@ -12,10 +12,12 @@ export interface Best {
 /** Which record a run counts toward: the classic rope, or Conserve momentum. */
 export type Swing = "classic" | "conserve";
 
-/** A day's daily-run bests, one per swing. */
+/** A day of the daily run: its bests, one per swing, and the tries begun. */
 interface DayBests {
   classic: Best;
   conserve: Best;
+  /** Daily runs begun that day (both swings together; see CONFIG.daily.tries). */
+  tries: number;
 }
 
 /**
@@ -88,7 +90,9 @@ function cleanDaily(v: unknown): Record<string, DayBests> {
     .slice(-DAILY_KEEP);
   for (const k of days) {
     const d = src[k];
-    if (d && typeof d === "object") out[k] = { classic: cleanBest(d.classic), conserve: cleanBest(d.conserve) };
+    if (d && typeof d === "object") {
+      out[k] = { classic: cleanBest(d.classic), conserve: cleanBest(d.conserve), tries: Math.floor(cleanCount(d.tries)) };
+    }
   }
   return out;
 }
@@ -220,23 +224,44 @@ export class Storage {
     }
     let dailyBest = false;
     if (daily) {
-      const days = this.data.daily;
-      let day = days[daily];
-      if (!day) {
-        day = days[daily] = { classic: { score: 0, distance: 0 }, conserve: { score: 0, distance: 0 } };
-        // Keep the newest few days (and always the one just flown).
-        const old = Object.keys(days)
-          .filter((k) => k !== daily)
-          .sort();
-        for (let i = 0; i <= old.length - DAILY_KEEP; i++) delete days[old[i]];
-      }
-      const rec = day[swing];
+      const rec = this.day(daily)[swing];
       dailyBest = score > rec.score;
       rec.score = Math.max(rec.score, score);
       rec.distance = Math.max(rec.distance, distance);
     }
     this.save();
     return { best, dailyBest };
+  }
+
+  /** A day's entry, made if it is not there yet (the newest few days are kept, and always this one). */
+  private day(date: string): DayBests {
+    const days = this.data.daily;
+    let day = days[date];
+    if (!day) {
+      day = days[date] = { classic: { score: 0, distance: 0 }, conserve: { score: 0, distance: 0 }, tries: 0 };
+      const old = Object.keys(days)
+        .filter((k) => k !== date)
+        .sort();
+      for (let i = 0; i <= old.length - DAILY_KEEP; i++) delete days[old[i]];
+    }
+    return day;
+  }
+
+  /** Daily runs begun on a day. */
+  dailyTries(date: string): number {
+    return this.data.daily[date]?.tries ?? 0;
+  }
+
+  /**
+   * Begin a daily run: counts a try for the day and saves at once (so a
+   * closed app cannot take it back). False, and nothing counted, when the
+   * day's tries are used up.
+   */
+  useDailyTry(date: string, limit: number): boolean {
+    if (this.dailyTries(date) >= limit) return false;
+    this.day(date).tries += 1;
+    this.save();
+    return true;
   }
 
   owns(item: string): boolean {

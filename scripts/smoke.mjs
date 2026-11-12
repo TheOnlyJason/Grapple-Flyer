@@ -152,8 +152,9 @@ function tick(n, dtMs = 16.6) {
 // 1) Menu frames.
 tick(20);
 assert(game.state === "menu", `expected menu state, got ${game.state}`);
-// 1b) The mute button (a phone has no M key): on the menu it mutes without
-//     starting a run, and the save keeps it.
+// 1b) The pages: SETTINGS mutes (a phone has no M key) and the save keeps it;
+//     the SHOP's character name cycles the character; HOME goes back; and
+//     none of it starts a run.
 {
   const tapCircle = (b) => {
     dispatch("pointerdown", { clientX: b.x, clientY: b.y, pointerId: 1 });
@@ -161,19 +162,29 @@ assert(game.state === "menu", `expected menu state, got ${game.state}`);
     dispatch("pointerup", { clientX: b.x, clientY: b.y, pointerId: 1 });
     tick(1);
   };
-  tapCircle(game.hud.muteButton(game.camera, true));
+  const mid = (r) => ({ x: r.x + r.w / 2, y: r.y + r.h / 2 });
+  const nav = () => game.hud.navButtons(game.camera, true);
+  tapCircle(nav().settings);
+  assert(game.state === "menu" && game.page === "settings", `SETTINGS did not open its page (state ${game.state}, page ${game.page})`);
+  tapCircle(mid(game.hud.settingsRows(game.camera).sound));
   const saved = JSON.parse(globalThis.localStorage.store["gale.save.v1"] || "{}");
-  assert(game.state === "menu" && game.sound.enabled === false && saved.muted === true, "the menu's mute button did not mute (or started a run)");
-  tapCircle(game.hud.muteButton(game.camera, true));
-  assert(game.state === "menu" && game.sound.enabled === true && game.storage.data.muted === false, "the menu's mute button did not unmute");
-  // The character's name is part of the picker: its right half goes forward,
-  // its left half back, and neither starts a run.
+  assert(game.state === "menu" && game.sound.enabled === false && saved.muted === true, "the settings page's SOUND row did not mute (or started a run)");
+  tapCircle(mid(game.hud.settingsRows(game.camera).sound));
+  assert(game.state === "menu" && game.sound.enabled === true && game.storage.data.muted === false, "the settings page's SOUND row did not unmute");
+  tapCircle(mid(game.hud.backButton(game.camera)));
+  assert(game.state === "menu" && game.page === "home", `HOME did not go back to the home screen (page ${game.page})`);
+  // The character's name is the picker: its right half goes forward, its
+  // left half back, and neither starts a run.
+  tapCircle(nav().shop);
+  assert(game.page === "shop", `SHOP did not open its page (page ${game.page})`);
   const c0 = game.storage.data.character;
-  const r = game.hud.characterCycleButton(game.camera, 1);
-  tapCircle({ x: game.camera.w / 2 + 20, y: r.y });
+  const P = game.hud.shopPanel(game.camera);
+  tapCircle({ x: P.cx + 20, y: P.charY });
   const c1 = game.storage.data.character;
-  tapCircle({ x: game.camera.w / 2 - 20, y: r.y });
+  tapCircle({ x: P.cx - 20, y: P.charY });
   assert(game.state === "menu" && c1 !== c0 && game.storage.data.character === c0, `tapping the name did not cycle the character (${c0} -> ${c1} -> ${game.storage.data.character}, state ${game.state})`);
+  tapCircle(mid(game.hud.backButton(game.camera)));
+  assert(game.state === "menu" && game.page === "home", "HOME did not leave the shop");
 }
 // 2) Start the run + hold to swing (pointerdown).
 dispatch("pointerdown", { clientX: 400, clientY: 300, pointerId: 1 });
@@ -200,7 +211,7 @@ for (let c = 0; c < 6; c++) {
 // 4b) Mid-run the mute button sits by the pause button: a tap there mutes
 //     and is not a grab; paused, it mutes without resuming.
 if (game.state === "playing") {
-  const b = game.hud.muteButton(game.camera, false);
+  const b = game.hud.muteButton(game.camera);
   dispatch("pointerdown", { clientX: b.x, clientY: b.y, pointerId: 1 });
   let grabbed = false;
   for (let i = 0; i < 40; i++) { tick(1); if (game.player.state === "swing") grabbed = true; }
@@ -276,7 +287,8 @@ while ((game.state === "playing" || game.state === "crashing") && waited < 6000)
   tick(10);
   waited += 10;
 }
-assert(game.state === "gameover", `run did not reach game over within ${waited} frames (state=${game.state})`);
+// (An Esc pressed once the run was over is the game-over screen's HOME: the plain menu.)
+assert(game.state === "gameover" || game.state === "menu", `run did not reach game over within ${waited} frames (state=${game.state})`);
 dispatch("pointerdown", { clientX: 400, clientY: 300, pointerId: 1 });
 tick(5);
 dispatch("pointerup", { clientX: 400, clientY: 300, pointerId: 1 });
