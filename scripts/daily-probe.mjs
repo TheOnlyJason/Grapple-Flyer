@@ -273,7 +273,7 @@ if (CASE === "tamper") {
 }
 
 if (CASE === "zones") {
-  // Every 10,000 m: rain (rocks drift), snow (anchors crumble), storm (lightning).
+  // Every CONFIG.zones.lengthM: rain (rocks drift), snow (anchors crumble), storm (lightning).
   const checks = [];
   const ok = (label, cond, detail = "") => checks.push([label, !!cond, detail]);
   const Z = globalThis.window.GALE_CONFIG.zones;
@@ -282,7 +282,8 @@ if (CASE === "zones") {
   flyDaily();
   for (let i = 0; i < 300 && game.state === "intro"; i++) frame();
   const x0 = game.startX;
-  world.ensure(x0 + 40000 / 0.05);
+  const L = Z.lengthM;
+  world.ensure(x0 + (4 * L) / 0.05);
   const km = (x) => (x - x0) * 0.05;
   const drift = world.hazards.filter((h) => h.drifting).map((h) => km(h.x));
   const crumble = world.anchors.filter((a) => a.crumble).map((a) => km(a.x));
@@ -299,10 +300,10 @@ if (CASE === "zones") {
   // (Counted clear of the zone edges: a segment begun just before one can reach just past it.)
   const inZ = (list, a, b) => list.filter((m) => m >= a + 50 && m < b - 50).length;
   const BoltClass = world.lightning[0]?.constructor;
-  ok("the first 10 km has no twists (the sky as it always was)", inZ(drift, 0, 10000) + inZ(crumble, 0, 10000) + inZ(bolts, 0, 10000) === 0);
-  ok("10-20 km: rain, rocks drift", inZ(drift, 10000, 20000) > 5 && inZ(crumble, 10000, 20000) === 0 && inZ(bolts, 10000, 20000) === 0, `${inZ(drift, 10000, 20000)} drifting rocks`);
-  ok("20-30 km: snow, anchors crumble", inZ(crumble, 20000, 30000) > 5 && inZ(drift, 20000, 30000) === 0, `${inZ(crumble, 20000, 30000)} crumbling anchors`);
-  ok("30-40 km: storm, lightning", inZ(bolts, 30000, 40000) > 5 && inZ(crumble, 30000, 40000) === 0, `${inZ(bolts, 30000, 40000)} strikes`);
+  ok(`the first ${L} m has no twists (the sky as it always was)`, inZ(drift, 0, L) + inZ(crumble, 0, L) + inZ(bolts, 0, L) === 0);
+  ok(`zone 2 (${L} m on): rain, rocks drift`, inZ(drift, L, 2 * L) > 5 && inZ(crumble, L, 2 * L) === 0 && inZ(bolts, L, 2 * L) === 0, `${inZ(drift, L, 2 * L)} drifting rocks`);
+  ok(`zone 3 (${2 * L} m on): snow, anchors crumble`, inZ(crumble, 2 * L, 3 * L) > 5 && inZ(drift, 2 * L, 3 * L) === 0, `${inZ(crumble, 2 * L, 3 * L)} crumbling anchors`);
+  ok(`zone 4 (${3 * L} m on): storm, lightning`, inZ(bolts, 3 * L, 4 * L) > 5 && inZ(crumble, 3 * L, 4 * L) === 0, `${inZ(bolts, 3 * L, 4 * L)} strikes`);
   game.endRun({});
   frame(150);
   tapHome();
@@ -318,9 +319,9 @@ if (CASE === "zones") {
     world.anchors.length = 0;
     if (keep) world.anchors.push(...keep);
   };
-  game.startX = player.x - 20500 / 0.05;
+  game.startX = player.x - (2 * L + 500) / 0.05;
   frame(2);
-  ok("past 10 km a new zone's banner shows", game.buildHudData().zoneBanner && game.buildHudData().zoneBanner.name === "SNOW", JSON.stringify(game.buildHudData().zoneBanner));
+  ok("past a zone's start its banner shows", game.buildHudData().zoneBanner && game.buildHudData().zoneBanner.name === "SNOW", JSON.stringify(game.buildHudData().zoneBanner));
   const a = new Anchor(player.x + 120, player.y - 160, "normal");
   a.crumble = true;
   quiet([a]);
@@ -341,7 +342,7 @@ if (CASE === "zones") {
   ok("...and cannot be grabbed again", player.findGrabTarget([a], game.camera) === null);
 
   // Lightning: in its column when it strikes ends the run; a barrier takes it.
-  game.startX = player.x - 30500 / 0.05;
+  game.startX = player.x - (3 * L + 500) / 0.05;
   quiet([]);
   player.state = "glide";
   player.anchor = null;

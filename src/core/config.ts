@@ -124,7 +124,7 @@ export const CONFIG = {
   // Zones: every lengthM of a run the scenery and weather change and the sky
   // gains a twist (see systems/zones.ts). Zone 1 is the sky as it always was.
   zones: {
-    lengthM: 10000,
+    lengthM: 5000,
     blendM: 300, // the weather eases in over this much of a zone's start
     // Rain: rocks drift up and down.
     drift: { chance: 0.6, amp: [40, 110], speed: [0.5, 1.1] },
