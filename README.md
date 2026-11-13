@@ -35,7 +35,7 @@ fly from the keyboard (starting a run and the pause-screen buttons take a click)
 | Start / restart | tap anywhere on the home screen (TAP TO FLY) | — |
 | Open a page | **DAILY**, **SHOP**, **SETTINGS**: the small buttons top right on the home screen | — |
 | Back to the home screen | **HOME**, top left on every page and on a game-over screen; **HOME** on the pause screen ends the run there | `Esc` on a page or game-over screen |
-| Change character | **SHOP**: the **‹ ›** either side of its name (Paper Plane, Monkey, Monkey King, Rainbow Cat) | `C` (also `←` `→` on the home screen) |
+| Change character | **SHOP**: the **‹ ›** either side of its name (Paper Plane, Monkey, Snow Monkey, Golden Monkey, Night Monkey, Monkey King, Rainbow Cat) | `C` (also `←` `→` on the home screen) |
 | Trails (spend orbs) | **SHOP**: tap a swatch, then **UNLOCK** | in the shop: `←` `→` pick, `U` unlock |
 | Daily run | **DAILY** ▸ **FLY** (two tries a day) | `Enter` on the daily page |
 
@@ -134,6 +134,11 @@ an ordinary run (5–7 for a player not chasing them), so the first unlock comes
 within an evening and the last is a long-term goal. Every character is free;
 the shop's item list is where a priced character would go.
 
+The Snow, Golden and Night Monkeys are the plain Monkey with a coat of their
+own (`monkeyCoat` in `render/drawMonkey.ts`): grey-white with a pink face and
+a red scarf streaming behind, golden-orange with a pale blue face, and charcoal
+with big eyes ringed in pale fur. They leap and swing exactly as the Monkey does.
+
 ### Starting a run: READY, GO
 
 Watching new players, the first press was often a quick tap and let go —
@@ -193,14 +198,10 @@ sound, made in code like everything else (`Sound.setZone`): a soft rain hiss,
 a hollow wind for the snow, rain and a low rumble for the storm, and thunder
 on each strike; silent while paused or muted.
 
-The scenery follows the zone too (`Background.setZone`): in the rain water
-pours off the islands' undersides and birds fly low; in the snow the islands
-and their trees wear snow caps and slow white snow owls glide by; in the storm
-the islands are bare rock with a glowing violet crystal or two and only bats
-fly, day or night. Butterflies stay in Dusk Peaks. A near foreground rises
-into the bottom edge of the screen and whips past (mossy spires trickling
-water, snow-laden pine tops, dead branching trees), soft and dark so it reads
-as scenery and never as something to dodge.
+The wildlife follows the zone too (`Background.setZone`): birds fly low in
+the rain, slow white snow owls glide through the snow, and in the storm only
+bats fly, day or night. Butterflies stay in Dusk Peaks. The islands keep the
+same look in every zone.
 
 Behind the mountains each zone has a sky effect (`Background.drawZoneSky`):
 a rainbow as the rain begins (gone after its first 2 km), an aurora over the
@@ -210,8 +211,13 @@ picture only; the strikes that matter are the marked columns).
 After the storm the last three go round again (rain at 20,000 m), each pass a
 quarter stronger. Twists come from the world's seeded generator and only in
 segments past the first zone, so the first 5,000 m are object for object
-what they were, and the daily run's zones are the same for everyone. The
-weather is drawing only, eased in over a zone's first 300 m.
+what they were, and the daily run's zones are the same for everyone.
+
+Zones change gradually (`zoneLook` in `systems/zones.ts`): the old zone's
+sky, weather, wildlife and sound cross-fade into the new one's over 1,400 m
+centred on each boundary (`CONFIG.zones.blendM`), so the new sky is half there
+when its banner shows. That is drawing only; each twist still starts exactly
+at its boundary.
 
 ### Chasing the best
 

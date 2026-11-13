@@ -257,6 +257,36 @@ function drawMonkeyCrown(ctx: CanvasRenderingContext2D, r: number) {
   ctx.fill();
 }
 
+/**
+ * A plain monkey's coat: its fur, the darker fur of its far limbs and tail,
+ * its face, and one small thing of its own (pale rings round big night eyes,
+ * a scarf streaming behind).
+ */
+export interface MonkeyCoat {
+  fur: string;
+  furDark: string;
+  face: string;
+  /** Pale rings round larger eyes. */
+  eyeRings?: string;
+  /** A scarf at the neck, its two ends streaming behind. */
+  scarf?: string;
+}
+
+const COATS: Record<string, MonkeyCoat> = {
+  baseMonkey: { fur: "#8B5E34", furDark: "#5C3A1E", face: "#C9956A" },
+  // A grey-white macaque with a pink face and a red scarf, for the cold.
+  snowMonkey: { fur: "#C4BDB4", furDark: "#8F877E", face: "#E8A0A0", scarf: "#D8342F" },
+  // Golden-orange fur and a pale blue face.
+  goldenMonkey: { fur: "#E08A2C", furDark: "#A8581A", face: "#A9CBE8" },
+  // Charcoal fur, and big eyes ringed in pale fur, for flying in the dark.
+  nightMonkey: { fur: "#625F70", furDark: "#3A3947", face: "#B9B1A2", eyeRings: "#F2EEE4" },
+};
+
+/** The coat for a character id (the plain brown one for anything else). */
+export function monkeyCoat(id: string): MonkeyCoat {
+  return COATS[id] ?? COATS.baseMonkey;
+}
+
 // The head both monkeys share: fur, two ears, the lighter face, the eyes.
 function drawMonkeyHead(
   ctx: CanvasRenderingContext2D,
@@ -264,7 +294,8 @@ function drawMonkeyHead(
   hx: number,
   hy: number,
   furA: string,
-  face: string
+  face: string,
+  eyeRings?: string
 ) {
   ctx.fillStyle = furA;
   ctx.beginPath();
@@ -282,11 +313,29 @@ function drawMonkeyHead(
   ctx.ellipse(hx + r * 0.2, hy + r * 0.06, r * 0.3, r * 0.36, 0.15, 0, TAU);
   ctx.fill();
 
+  if (eyeRings) {
+    ctx.fillStyle = hexA(eyeRings, 0.95);
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.arc(hx + r * 0.14 + side * r * 0.16, hy - r * 0.02, r * 0.14, 0, TAU);
+      ctx.fill();
+    }
+  }
+  const eyeR = eyeRings ? r * 0.095 : r * 0.07;
   ctx.fillStyle = hexA("#1a1220", 0.85);
   for (const side of [-1, 1]) {
     ctx.beginPath();
-    ctx.arc(hx + r * 0.14 + side * r * 0.16, hy - r * 0.02, r * 0.07, 0, TAU);
+    ctx.arc(hx + r * 0.14 + side * r * 0.16, hy - r * 0.02, eyeR, 0, TAU);
     ctx.fill();
+  }
+  if (eyeRings) {
+    // A glint in each big eye.
+    ctx.fillStyle = hexA("#ffffff", 0.9);
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.arc(hx + r * 0.165 + side * r * 0.16, hy - r * 0.05, r * 0.03, 0, TAU);
+      ctx.fill();
+    }
   }
 }
 
@@ -374,12 +423,11 @@ export function drawMonkey(
 export function drawPlainMonkey(
   ctx: CanvasRenderingContext2D,
   time: number,
-  pose: MonkeyPose
+  pose: MonkeyPose,
+  coat: MonkeyCoat = COATS.baseMonkey
 ) {
   const r = CONFIG.player.radius;
-  const fur = "#8B5E34";
-  const furDark = "#5C3A1E";
-  const face = "#C9956A";
+  const { fur, furDark, face } = coat;
   const furA = hexA(fur, 0.98);
   const furDarkA = hexA(furDark, 0.94);
   const ripple = Math.sin(time * 9);
@@ -455,7 +503,24 @@ export function drawPlainMonkey(
 
   // Near leg, head, near arm.
   drawLimb(ctx, -r * 0.42, r * 0.4, nearLeg, r * 0.95, r * 0.27, furA);
-  drawMonkeyHead(ctx, r, r * 0.62, -r * 0.5, furA, face);
+  if (coat.scarf) {
+    // A scarf: its two ends stream back over the shoulders from under the
+    // head, rippling (straighter in a dash).
+    const sw = ripple * r * (dash ? 0.05 : 0.16);
+    ctx.strokeStyle = hexA(coat.scarf, 0.97);
+    ctx.lineCap = "round";
+    ctx.lineWidth = r * 0.24;
+    ctx.beginPath();
+    ctx.moveTo(r * 0.3, -r * 0.18);
+    ctx.quadraticCurveTo(-r * 0.25, -r * 0.5 + sw, -r * 0.95, -r * 0.42 - sw);
+    ctx.stroke();
+    ctx.lineWidth = r * 0.18;
+    ctx.beginPath();
+    ctx.moveTo(r * 0.3, -r * 0.1);
+    ctx.quadraticCurveTo(-r * 0.15, -r * 0.24 - sw, -r * 0.75, -r * 0.14 + sw * 0.7);
+    ctx.stroke();
+  }
+  drawMonkeyHead(ctx, r, r * 0.62, -r * 0.5, furA, face, coat.eyeRings);
   drawLimb(ctx, near.x, near.y, nearArm, nearArmLen, r * 0.27, furA);
 }
 

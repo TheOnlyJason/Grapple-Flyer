@@ -1050,7 +1050,9 @@ if (process.env.RESTART) {
 seen.clear();
 objects.length = 0;
 const startX = game.startX;
-const objectives = game.objectives.list.map((o) => o.text ?? JSON.stringify(o));
+// Which missions there are (not how far along: a daily intro holds the
+// plane still, so a distance mission's progress depends on the moment).
+const objectives = game.objectives.list.map((o) => o.text ?? JSON.stringify({ kind: o.kind, label: o.label, target: o.target }));
 scan();
 let liveGenX = world.genX;
 if (process.env.EAGER) {

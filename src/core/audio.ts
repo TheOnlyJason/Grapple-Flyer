@@ -331,22 +331,23 @@ export class Sound {
   }
 
   /**
-   * The zone's ambience: `zone` its id (or null for none) and `k` 0..1 how
-   * far it has eased in. Called every frame; levels glide, so it is cheap.
+   * The zones' ambience: how much of each zone's look is on screen (0..1,
+   * from lookWeight, so one bed cross-fades into the next), or all zero for
+   * none. Called every frame; levels glide, so it is cheap.
    */
-  setZone(zone: string | null, k: number) {
+  setZone(rain: number, snow: number, storm: number) {
     if (!this.ctx || !this.master) return;
     if (!this.zoneBeds) {
-      if (!zone) return;
+      if (rain + snow + storm <= 0) return;
       this.initZoneBeds();
       if (!this.zoneBeds) return;
     }
     const t = this.ctx.currentTime;
-    const on = this.enabled ? Math.max(0, Math.min(1, k)) : 0;
+    const on = this.enabled ? 1 : 0;
     const B = this.zoneBeds;
-    B.rain.gain.setTargetAtTime(zone === "rain" ? 0.05 * on : zone === "storm" ? 0.075 * on : 0, t, 0.6);
-    B.wind.gain.setTargetAtTime(zone === "snow" ? 0.09 * on : 0, t, 0.8);
-    B.rumble.gain.setTargetAtTime(zone === "storm" ? 0.12 * on : 0, t, 0.8);
+    B.rain.gain.setTargetAtTime((0.05 * rain + 0.075 * storm) * on, t, 0.6);
+    B.wind.gain.setTargetAtTime(0.09 * snow * on, t, 0.8);
+    B.rumble.gain.setTargetAtTime(0.12 * storm * on, t, 0.8);
   }
 
   /** A strike: a sharp crack, then a long low roll. */

@@ -1,4 +1,11 @@
-export type CharacterId = "plane" | "baseMonkey" | "monkey" | "nyan";
+export type CharacterId =
+  | "plane"
+  | "baseMonkey"
+  | "snowMonkey"
+  | "goldenMonkey"
+  | "nightMonkey"
+  | "monkey"
+  | "nyan";
 
 export interface CharacterDef {
   id: CharacterId;
@@ -9,6 +16,10 @@ export const CHARACTERS: CharacterDef[] = [
   { id: "plane", name: "Paper Plane" },
   // The plain monkey: no crown, no cloud — it leaps and swings on its own.
   { id: "baseMonkey", name: "Monkey" },
+  // Built on the plain monkey: the same leap and swing, each its own coat.
+  { id: "snowMonkey", name: "Snow Monkey" },
+  { id: "goldenMonkey", name: "Golden Monkey" },
+  { id: "nightMonkey", name: "Night Monkey" },
   // The crowned monkey on its golden cloud. The internal id stays "monkey"
   // for save-data compatibility (it was the only monkey until 1.3).
   { id: "monkey", name: "Monkey King" },
@@ -29,4 +40,9 @@ export function cycleCharacterId(current: CharacterId, dir: 1 | -1): CharacterId
 
 export function characterName(id: CharacterId): string {
   return CHARACTERS.find((c) => c.id === id)?.name ?? id;
+}
+
+/** The monkeys built on the plain one (no crown, no cloud: they leap and swing on their own). */
+export function isPlainMonkey(id: CharacterId): boolean {
+  return id === "baseMonkey" || id === "snowMonkey" || id === "goldenMonkey" || id === "nightMonkey";
 }

@@ -228,16 +228,19 @@ const ZONE_STRENGTH = 0.7;
 let lastKey = "";
 
 /**
- * The palette for a moment of the day cycle, and the zone the run is in
- * (`zone` its id, `k` 0..1 how far its sky has eased in). Quantized, so the
- * palette (and theme.version) changes only a few times a second.
+ * The palette for a moment of the day cycle, and the zone look on screen:
+ * `from` zone's sky cross-fading into `to`'s, `k` 0..1 (no zone is "dusk"
+ * or null, the plain time of day). Quantized, so the palette (and
+ * theme.version) changes only a few times a second.
  */
-export function updateTheme(phaseSeconds: number, zone: string | null = null, k = 0) {
+export function updateTheme(phaseSeconds: number, from: string | null = null, to: string | null = null, k = 0) {
   const phase = phaseSeconds / CYCLE_SECONDS;
   const bucket = Math.floor((((phase % 1) + 1) % 1) * PHASE_STEPS);
-  const zm = zone ? ZONE_MOODS[zone] : undefined;
-  const kq = zm ? Math.round(Math.min(1, Math.max(0, k)) * 32) / 32 : 0;
-  const key = `${bucket}|${zm ? zone : ""}|${kq}`;
+  const fm = from ? ZONE_MOODS[from] : undefined;
+  const tm = to ? ZONE_MOODS[to] : undefined;
+  // 64 steps over the cross-fade, so even a slow one changes smoothly.
+  const kq = Math.round(Math.min(1, Math.max(0, k)) * 64) / 64;
+  const key = `${bucket}|${fm ? from : ""}|${tm ? to : ""}|${fm && tm && from === to ? 1 : kq}`;
   if (key === lastKey) return;
   lastKey = key;
   theme.version++;
@@ -251,7 +254,9 @@ export function updateTheme(phaseSeconds: number, zone: string | null = null, k 
   const b = MOODS[(i + 1) % n];
   for (const key2 of ATMOS_KEYS) {
     const base = mixColor(a[key2], b[key2], t);
-    theme[key2] = zm && kq > 0 ? mixColor(base, zm[key2], kq * ZONE_STRENGTH) : base;
+    const cf = fm ? mixColor(base, fm[key2], ZONE_STRENGTH) : base;
+    const ct = tm ? mixColor(base, tm[key2], ZONE_STRENGTH) : base;
+    theme[key2] = !fm && !tm ? base : kq <= 0 ? cf : kq >= 1 ? ct : mixColor(cf, ct, kq);
   }
   theme.night = a.night + (b.night - a.night) * t;
 }

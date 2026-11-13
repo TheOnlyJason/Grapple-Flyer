@@ -22,7 +22,7 @@ import { World } from "../systems/world";
 import { Particles } from "../systems/particles";
 import { Objectives } from "../systems/objectives";
 import { Tutorial } from "../systems/tutorial";
-import { zoneAt, type Zone } from "../systems/zones";
+import { lookWeight, zoneAt, zoneLook, type ZoneId, type ZoneLook } from "../systems/zones";
 import { Background } from "../render/background";
 import { Hud, HudData, type Page } from "../render/hud";
 import {
@@ -940,12 +940,14 @@ export class Game {
     this.input.beginFrame();
     // Drift the time-of-day palette. Each run starts at dawn (this.time resets).
     // The time of day, and the zone the run is in (its own sky eases in).
+    // Each zone's look cross-fades into the next one's around the seam.
     const vz = this.viewZone();
-    updateTheme(this.time, vz ? vz.def.id : null, vz ? vz.blend : 0);
-    // ...its islands, wildlife and foreground...
-    this.background.setZone(vz ? vz.def.id : null, vz ? vz.blend : 0, vz ? vz.into : 0);
+    updateTheme(this.time, vz ? vz.from : null, vz ? vz.to : null, vz ? vz.k : 0);
+    // ...its wildlife and sky effects...
+    this.background.setZone(vz);
     // ...and its sound (silent while paused).
-    this.sound.setZone(vz && this.state !== "paused" ? vz.def.id : null, vz ? vz.blend : 0);
+    const sz = this.state === "paused" ? null : vz;
+    this.sound.setZone(lookWeight(sz, "rain"), lookWeight(sz, "snow"), lookWeight(sz, "storm"));
     if (this.input.anyInteraction) this.sound.resume();
     if (this.input.tapped.has("KeyM")) this.toggleMute();
 
@@ -1672,10 +1674,10 @@ export class Game {
   }
 
   /** The zone the screen shows: the run's, or none on the menus. */
-  private viewZone(): Zone | null {
+  private viewZone(): ZoneLook | null {
     if (this.state !== "playing" && this.state !== "paused" && this.state !== "crashing") return null;
-    const z = zoneAt(this.distance);
-    return z.index > 0 ? z : null;
+    const z = zoneLook(this.distance);
+    return z.from === "dusk" && z.to === "dusk" ? null : z;
   }
 
   /**
@@ -1686,13 +1688,18 @@ export class Game {
   private drawSeaZone(ctx: CanvasRenderingContext2D, cam: Camera) {
     const z = this.viewZone();
     if (!z) return;
-    const k = z.blend;
+    this.drawSeaEffect(ctx, cam, z.from, 1 - z.k);
+    this.drawSeaEffect(ctx, cam, z.to, z.k);
+  }
+
+  private drawSeaEffect(ctx: CanvasRenderingContext2D, cam: Camera, id: ZoneId, k: number) {
+    if (id === "dusk" || k <= 0.01) return;
     const sy = (this.world.seaLevel - cam.y) * cam.zoom;
     if (sy > cam.h + 20) return;
     const { w, h } = cam;
     const t = this.time;
     ctx.save();
-    if (z.def.id === "rain") {
+    if (id === "rain") {
       ctx.strokeStyle = `rgba(225,235,255,${0.5 * k})`;
       ctx.lineWidth = 1.2;
       for (let i = 0; i < 16; i++) {
@@ -1704,7 +1711,7 @@ export class Game {
         ctx.ellipse(x, y, 4 + u * 22, (4 + u * 22) * 0.28, 0, 0, Math.PI * 2);
         ctx.stroke();
       }
-    } else if (z.def.id === "snow") {
+    } else if (id === "snow") {
       ctx.fillStyle = `rgba(255,255,255,${0.45 * k})`;
       const step = 150;
       const off = ((cam.x * cam.zoom * 0.9) % step + step) % step;
@@ -1715,7 +1722,7 @@ export class Game {
         ctx.ellipse(x, sy + 4, r, r * 0.22, 0, Math.PI, 0);
         ctx.fill();
       }
-    } else if (z.def.id === "storm") {
+    } else if (id === "storm") {
       for (let i = 0; i < 3; i++) {
         const pulse = Math.sin(t * 1.7 + i * 2.3);
         if (pulse < 0.9) continue;
@@ -1740,45 +1747,63 @@ export class Game {
   private drawWeather(ctx: CanvasRenderingContext2D, cam: Camera) {
     const z = this.viewZone();
     if (!z) return;
-    const k = z.blend;
-    const id = z.def.id;
+    const rain = lookWeight(z, "rain");
+    const snow = lookWeight(z, "snow");
+    const storm = lookWeight(z, "storm");
     const { w, h } = cam;
     const dt = this.state === "paused" ? 0 : this.frameDt;
     ctx.save();
-    ctx.fillStyle =
-      id === "rain" ? `rgba(60,82,112,${0.08 * k})` : id === "snow" ? `rgba(40,60,100,${0.06 * k})` : `rgba(12,14,34,${0.16 * k})`;
-    ctx.fillRect(0, 0, w, h);
-    if (id === "snow") {
-      ctx.fillStyle = `rgba(255,255,255,${0.85 * k})`;
-      for (const f of FLAKES) {
+    // Each zone's tint, in proportion as one gives way to the next.
+    if (rain > 0) {
+      ctx.fillStyle = `rgba(60,82,112,${0.08 * rain})`;
+      ctx.fillRect(0, 0, w, h);
+    }
+    if (snow > 0) {
+      ctx.fillStyle = `rgba(40,60,100,${0.06 * snow})`;
+      ctx.fillRect(0, 0, w, h);
+    }
+    if (storm > 0) {
+      ctx.fillStyle = `rgba(12,14,34,${0.16 * storm})`;
+      ctx.fillRect(0, 0, w, h);
+    }
+    if (snow > 0.01) {
+      ctx.fillStyle = `rgba(255,255,255,${0.85 * snow})`;
+      // The snow thickens as it comes in (and thins as it goes).
+      const nf = Math.ceil(FLAKES.length * Math.min(1, 0.25 + snow));
+      for (let i = 0; i < FLAKES.length; i++) {
+        const f = FLAKES[i];
         f.y += f.v * dt;
         f.x += Math.sin(this.time * 1.3 + f.p) * 20 * dt - this.player.vx * 0.02 * dt;
         if (f.y > 1) f.y -= 1.05;
         if (f.x < -0.02) f.x += 1.04;
+        if (i >= nf) continue;
         ctx.beginPath();
         ctx.arc(f.x * w, f.y * h, f.r, 0, Math.PI * 2);
         ctx.fill();
       }
-    } else {
-      const storm = id === "storm";
-      ctx.strokeStyle = `rgba(205,222,255,${(storm ? 0.42 : 0.32) * k})`;
+    }
+    const wet = rain + storm;
+    if (wet > 0.01) {
+      // Rain, heavier in the storm; it builds up as it comes in.
+      ctx.strokeStyle = `rgba(205,222,255,${0.32 * rain + 0.42 * storm})`;
       ctx.lineWidth = 1.2;
       ctx.beginPath();
-      const n = storm ? DROPS.length : Math.floor(DROPS.length * 0.65);
-      for (let i = 0; i < n; i++) {
+      const n = Math.floor(DROPS.length * Math.min(1, 0.25 + wet) * (0.65 + (0.35 * storm) / wet));
+      for (let i = 0; i < DROPS.length; i++) {
         const d = DROPS[i];
         d.y += d.v * dt;
         if (d.y > 1.05) d.y -= 1.1;
+        if (i >= n) continue;
         const x = d.x * w;
         const y = d.y * h;
         ctx.moveTo(x, y);
         ctx.lineTo(x - 4, y + 16);
       }
       ctx.stroke();
-      if (storm && this.stormFlash > 0) {
-        ctx.fillStyle = `rgba(235,240,255,${0.38 * this.stormFlash})`;
-        ctx.fillRect(0, 0, w, h);
-      }
+    }
+    if (this.stormFlash > 0) {
+      ctx.fillStyle = `rgba(235,240,255,${0.38 * this.stormFlash})`;
+      ctx.fillRect(0, 0, w, h);
     }
     ctx.restore();
   }

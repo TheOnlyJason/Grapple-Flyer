@@ -4,6 +4,7 @@ import { getPlayerSprite, isPlayerSpriteReady, PLAYER_SPRITE } from "../render/p
 import {
   drawMonkey,
   drawPlainMonkey,
+  monkeyCoat,
   computeLatchArmAngle,
   monkeyShoulder,
   plainLatchShoulder,
@@ -11,7 +12,7 @@ import {
   type MonkeyKind,
 } from "../render/drawMonkey";
 import { drawNyanCat, NYAN_RAINBOW } from "../render/drawNyanCat";
-import type { CharacterId } from "../characters/registry";
+import { isPlainMonkey, type CharacterId } from "../characters/registry";
 import { trailDef, type TrailId } from "../characters/trails";
 import { angleDelta, clamp, rad, TAU } from "../core/math";
 import { makeScratch, Scratch } from "../render/rcache";
@@ -697,10 +698,10 @@ export class Player {
   }
 
   draw(ctx: CanvasRenderingContext2D, time: number, menuPreview = false) {
-    if (this.characterId === "baseMonkey") this.updatePlainHang(time, menuPreview);
+    if (isPlainMonkey(this.characterId)) this.updatePlainHang(time, menuPreview);
     if (this.trailId !== "own") {
       this.drawRibbonTrail(ctx, time, trailDef(this.trailId).colors);
-    } else if (this.characterId === "plane" || this.characterId === "baseMonkey") {
+    } else if (this.characterId === "plane" || isPlainMonkey(this.characterId)) {
       this.drawMotionTrail(ctx, time);
     } else if (this.characterId === "monkey") {
       this.drawNimbusTrail(ctx, time);
@@ -1037,7 +1038,7 @@ export class Player {
 
   /** Which monkey the character is, if it is one: the crowned cloud-rider or the plain one. */
   private get monkeyKind(): MonkeyKind | null {
-    return this.characterId === "monkey" ? "king" : this.characterId === "baseMonkey" ? "plain" : null;
+    return this.characterId === "monkey" ? "king" : isPlainMonkey(this.characterId) ? "plain" : null;
   }
 
   /** World position of the hand gripping the anchor (the monkeys only). */
@@ -1159,7 +1160,7 @@ export class Player {
     ctx.restore();
     if (charged) this.drawChargeRing(ctx, 0, 0, glowR);
 
-    if (this.monkeyKind === "plain") drawPlainMonkey(ctx, time, this.buildMonkeyPose(menuPreview));
+    if (this.monkeyKind === "plain") drawPlainMonkey(ctx, time, this.buildMonkeyPose(menuPreview), monkeyCoat(this.characterId));
     else drawMonkey(ctx, time, this.buildMonkeyPose(menuPreview));
     ctx.restore();
   }

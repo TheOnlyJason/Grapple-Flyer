@@ -125,7 +125,7 @@ export const CONFIG = {
   // gains a twist (see systems/zones.ts). Zone 1 is the sky as it always was.
   zones: {
     lengthM: 5000,
-    blendM: 300, // the weather eases in over this much of a zone's start
+    blendM: 1400, // one zone's sky, weather and sound cross-fade into the next over this many metres, centred on the seam
     // Rain: rocks drift up and down.
     drift: { chance: 0.6, amp: [40, 110], speed: [0.5, 1.1] },
     // Snow: an anchor may crumble this long after it is grabbed.
