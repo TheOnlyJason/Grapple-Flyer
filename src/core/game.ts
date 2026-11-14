@@ -1784,22 +1784,33 @@ export class Game {
     }
     const wet = rain + storm;
     if (wet > 0.01) {
-      // Rain, heavier in the storm; it builds up as it comes in.
-      ctx.strokeStyle = `rgba(205,222,255,${0.32 * rain + 0.42 * storm})`;
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
+      // Rain, heavier in the storm; it builds up as it comes in. Faint, and
+      // scattered: each drop has its own length, slant, speed and shade, and
+      // starts again at a fresh random spot each time it falls off the screen.
+      const base = 0.17 * rain + 0.24 * storm;
       const n = Math.floor(DROPS.length * Math.min(1, 0.25 + wet) * (0.65 + (0.35 * storm) / wet));
+      const drift = this.player.vx * 0.00003 * dt;
       for (let i = 0; i < DROPS.length; i++) {
         const d = DROPS[i];
         d.y += d.v * dt;
-        if (d.y > 1.05) d.y -= 1.1;
-        if (i >= n) continue;
-        const x = d.x * w;
-        const y = d.y * h;
-        ctx.moveTo(x, y);
-        ctx.lineTo(x - 4, y + 16);
+        d.x -= drift;
+        if (d.y > 1.05 || d.x < -0.05) respawnDrop(d, false);
       }
-      ctx.stroke();
+      ctx.lineCap = "round";
+      for (let shade = 0; shade < 3; shade++) {
+        ctx.strokeStyle = `rgba(205,222,255,${base * (0.45 + shade * 0.4)})`;
+        ctx.lineWidth = 0.8 + shade * 0.3;
+        ctx.beginPath();
+        for (let i = 0; i < n; i++) {
+          const d = DROPS[i];
+          if (d.shade !== shade) continue;
+          const x = d.x * w;
+          const y = d.y * h;
+          ctx.moveTo(x, y);
+          ctx.lineTo(x - d.len * d.slant, y + d.len);
+        }
+        ctx.stroke();
+      }
     }
     if (this.stormFlash > 0) {
       ctx.fillStyle = `rgba(235,240,255,${0.38 * this.stormFlash})`;
@@ -2017,7 +2028,28 @@ const NO_TRAILS: readonly boolean[] = [];
 /** Seconds a new zone's banner stays up. */
 const ZONE_BANNER = 3.2;
 /** Weather particles, in screen fractions (drawing only). */
-const DROPS = Array.from({ length: 90 }, (_, i) => ({ x: ((i * 0.6180339) % 1), y: ((i * 0.381966 + 0.13) % 1.1), v: 0.9 + ((i * 0.7548) % 1) * 0.6 }));
+interface Drop {
+  x: number;
+  y: number;
+  v: number;
+  len: number;
+  slant: number;
+  shade: number;
+}
+/** A rain drop at a random spot (anywhere on screen, or just above it). Drawing only: Math.random, never the world's rng. */
+function respawnDrop(d: Drop, anywhere: boolean) {
+  d.x = Math.random() * 1.05;
+  d.y = anywhere ? Math.random() * 1.1 - 0.05 : -0.05 - Math.random() * 0.25;
+  d.v = 0.8 + Math.random() * 0.8;
+  d.len = 9 + Math.random() * 13;
+  d.slant = 0.18 + Math.random() * 0.14;
+  d.shade = Math.random() < 0.5 ? 0 : Math.random() < 0.7 ? 1 : 2;
+}
+const DROPS: Drop[] = Array.from({ length: 90 }, () => {
+  const d: Drop = { x: 0, y: 0, v: 0, len: 0, slant: 0, shade: 0 };
+  respawnDrop(d, true);
+  return d;
+});
 const FLAKES = Array.from({ length: 60 }, (_, i) => ({ x: ((i * 0.6180339) % 1), y: ((i * 0.27 + 0.05) % 1), v: 0.05 + ((i * 0.7548) % 1) * 0.06, r: 1.2 + ((i * 0.31) % 1) * 1.8, p: i * 1.7 }));
 /** Seconds after HOME before a tap on the home screen flies (a double tap on HOME stays home). */
 const HOME_GUARD = 0.4;
